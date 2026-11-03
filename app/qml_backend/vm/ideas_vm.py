@@ -223,7 +223,14 @@ class IdeasVM(QObject):
         self._regenDone.connect(self._on_regen_done)
 
     # ── v1.0.4: creator profile ──────────────────────────────────────────
-    _CREATOR_TOKENS = ("faceless", "solo", "phone", "quick_edit", "no_voice", "clips")
+    _CREATOR_TOKENS = ("faceless", "solo", "phone", "quick_edit", "no_voice", "clips",
+                       "home", "no_budget", "no_script", "family")
+    # v1.0.6: what the videos look like, how big the channel is, its voice
+    _CREATOR_TYPES = ("talking_head", "vlog", "walk", "tutorial", "cooking", "education",
+                      "faceless", "compilation", "gaming", "review", "story", "music",
+                      "podcast", "other")
+    _CREATOR_STAGES = ("new", "growing", "established")
+    _CREATOR_TONES = ("energetic", "calm", "funny", "serious", "cinematic", "warm")
     _LANGS = ("", "en", "fa")
 
     def _load_creator(self):
@@ -234,12 +241,31 @@ class IdeasVM(QObject):
             lang = int(raw.get("language", 0))
         except (TypeError, ValueError):
             lang = 0
+        def pick(key, allowed):
+            v = str(raw.get(key) or "")
+            return v if v in allowed else ""
         return {
+            "type": pick("type", self._CREATOR_TYPES),
             "niche": str(raw.get("niche") or "")[:400],
             "audience": str(raw.get("audience") or "")[:300],
+            "stage": pick("stage", self._CREATOR_STAGES),
+            "tone": pick("tone", self._CREATOR_TONES),
+            "proven": str(raw.get("proven") or "")[:400],
             "constraints": [t for t in (raw.get("constraints") or []) if t in self._CREATOR_TOKENS],
+            # v1.0.7: a format that is not on the list, and limits in own words
+            "type_custom": str(raw.get("type_custom") or "")[:120],
+            "limits_custom": str(raw.get("limits_custom") or "")[:300],
             "language": lang if 0 <= lang < len(self._LANGS) else 0,
         }
+
+    def _creator_payload(self):
+        """What a run sends to the prompt (everything but the UI language)."""
+        c = self._creator
+        return {"type": c["type"], "niche": c["niche"], "audience": c["audience"],
+                "stage": c["stage"], "tone": c["tone"], "proven": c["proven"],
+                "constraints": list(c["constraints"]),
+                "type_custom": c["type_custom"] if c["type"] == "other" else "",
+                "limits_custom": c["limits_custom"]}
 
     def _save_creator(self):
         cfg = load_app_config()
@@ -294,7 +320,175 @@ class IdeasVM(QObject):
             {"key": "quick_edit", "label": tr("Quick edits"), "icon": "speed"},
             {"key": "no_voice", "label": tr("No voiceover"), "icon": "volume_off"},
             {"key": "clips", "label": tr("Clip channel"), "icon": "scissors"},
+            {"key": "home", "label": tr("One location"), "icon": "home_work"},
+            {"key": "no_budget", "label": tr("Zero budget"), "icon": "money"},
+            {"key": "no_script", "label": tr("No reading scripts"), "icon": "message"},
+            {"key": "family", "label": tr("Family-friendly"), "icon": "favorite"},
         ]
+
+    # ── v1.0.6: format / stage / voice / what already works ──
+    @Property("QVariantList", notify=labelsChanged)
+    def channelTypeOptions(self):
+        """The format tiles: {key, label, sub, icon}."""
+        return [
+            {"key": "talking_head", "label": tr("Talking head"), "sub": tr("you, on camera"), "icon": "user"},
+            {"key": "vlog", "label": tr("Vlog"), "sub": tr("your day, as it happens"), "icon": "video"},
+            {"key": "walk", "label": tr("Walking tour"), "sub": tr("POV, the place talks"), "icon": "route"},
+            {"key": "cooking", "label": tr("Cooking"), "sub": tr("recipes, close-up"), "icon": "receipt"},
+            {"key": "tutorial", "label": tr("Tutorial"), "sub": tr("how-to, step by step"), "icon": "tune"},
+            {"key": "education", "label": tr("Lessons"), "sub": tr("teach a subject or language"), "icon": "translate"},
+            {"key": "faceless", "label": tr("Faceless"), "sub": tr("voice-over + footage"), "icon": "visibility_off"},
+            {"key": "compilation", "label": tr("Clips & edits"), "sub": tr("built from footage"), "icon": "scissors"},
+            {"key": "story", "label": tr("Story"), "sub": tr("narrative, commentary"), "icon": "story"},
+            {"key": "review", "label": tr("Reviews"), "sub": tr("products, places, unboxing"), "icon": "star"},
+            {"key": "gaming", "label": tr("Gaming"), "sub": tr("gameplay + commentary"), "icon": "target"},
+            {"key": "music", "label": tr("Music & ASMR"), "sub": tr("sound first"), "icon": "music_note"},
+            {"key": "podcast", "label": tr("Podcast"), "sub": tr("talks, interviews"), "icon": "messages"},
+            # v1.0.7: nobody should be forced into a tile that is not them
+            {"key": "other", "label": tr("Other"), "sub": tr("not listed? describe it"), "icon": "edit"},
+        ]
+
+    @Property("QVariantList", notify=labelsChanged)
+    def stageOptions(self):
+        return [
+            {"key": "new", "label": tr("New"), "sub": tr("under 1K subs"), "icon": "sparkling"},
+            {"key": "growing", "label": tr("Growing"), "sub": tr("1K – 100K"), "icon": "trending_up"},
+            {"key": "established", "label": tr("Established"), "sub": tr("100K+"), "icon": "verified"},
+        ]
+
+    @Property("QVariantList", notify=labelsChanged)
+    def toneOptions(self):
+        return [
+            {"key": "energetic", "label": tr("Energetic"), "icon": "bolt"},
+            {"key": "calm", "label": tr("Calm"), "icon": "dark_mode"},
+            {"key": "funny", "label": tr("Funny"), "icon": "sparkling"},
+            {"key": "serious", "label": tr("Serious"), "icon": "verified"},
+            {"key": "cinematic", "label": tr("Cinematic"), "icon": "movie"},
+            {"key": "warm", "label": tr("Warm"), "icon": "favorite"},
+        ]
+
+    @Property(str, notify=creatorChanged)
+    def creatorType(self):
+        return self._creator["type"]
+
+    @Property(str, notify=creatorChanged)
+    def creatorStage(self):
+        return self._creator["stage"]
+
+    @Property(str, notify=creatorChanged)
+    def creatorTone(self):
+        return self._creator["tone"]
+
+    @Slot(str)
+    def setCreatorType(self, key):
+        """Pick a format; picking the current one again clears it."""
+        self._set_pick("type", key, self._CREATOR_TYPES)
+
+    @Slot(str)
+    def setCreatorStage(self, key):
+        self._set_pick("stage", key, self._CREATOR_STAGES)
+
+    @Slot(str)
+    def setCreatorTone(self, key):
+        self._set_pick("tone", key, self._CREATOR_TONES)
+
+    def _set_pick(self, field, key, allowed):
+        key = str(key or "")
+        if key not in allowed:
+            return
+        self._creator[field] = "" if self._creator[field] == key else key
+        self._save_creator()
+
+    @Property(str, notify=creatorChanged)
+    def creatorProven(self):
+        return self._creator["proven"]
+
+    @creatorProven.setter
+    def creatorProven(self, v):
+        v = str(v or "")[:400]
+        if v != self._creator["proven"]:
+            self._creator["proven"] = v
+            self._save_creator()
+
+    @Property(str, notify=creatorChanged)
+    def creatorTypeCustom(self):
+        return self._creator["type_custom"]
+
+    @creatorTypeCustom.setter
+    def creatorTypeCustom(self, v):
+        v = str(v or "")[:120]
+        if v != self._creator["type_custom"]:
+            self._creator["type_custom"] = v
+            self._save_creator()
+
+    @Property(str, notify=creatorChanged)
+    def creatorLimitsCustom(self):
+        return self._creator["limits_custom"]
+
+    @creatorLimitsCustom.setter
+    def creatorLimitsCustom(self, v):
+        v = str(v or "")[:300]
+        if v != self._creator["limits_custom"]:
+            self._creator["limits_custom"] = v
+            self._save_creator()
+
+    @Slot()
+    def clearCreator(self):
+        lang = self._creator["language"]
+        self._creator = {"type": "", "niche": "", "audience": "", "stage": "", "tone": "",
+                         "proven": "", "constraints": [], "type_custom": "",
+                         "limits_custom": "", "language": lang}
+        self._save_creator()
+
+    @Property(int, notify=creatorChanged)
+    def creatorStrength(self):
+        """0-100: how much the AI knows. Weighted by how much each answer
+        changes a greenlight (the format most of all); limits are optional."""
+        c = self._creator
+        score = 0
+        if c["type"] == "other":
+            # "Other" only counts once it says what the format is
+            score += 30 if c["type_custom"].strip() else 10
+        else:
+            score += 30 if c["type"] else 0
+        score += 20 if c["niche"].strip() else 0
+        score += 15 if c["audience"].strip() else 0
+        score += 10 if c["stage"] else 0
+        score += 10 if c["tone"] else 0
+        score += 15 if c["proven"].strip() else 0
+        return score
+
+    @Property("QVariantList", notify=creatorChanged)
+    def creatorChips(self):
+        """The collapsed card's summary: [{label, icon, kind}] in reading
+        order. kind: "type" | "stage" | "tone" | "limit"."""
+        c = self._creator
+        out = []
+        def find(opts, key):
+            for o in opts:
+                if o["key"] == key:
+                    return o
+            return None
+        t = find(self.channelTypeOptions, c["type"])
+        if t:
+            label = t["label"]
+            if c["type"] == "other" and c["type_custom"].strip():
+                label = c["type_custom"].strip()[:40]
+            out.append({"label": label, "icon": t["icon"], "kind": "type"})
+        st = find(self.stageOptions, c["stage"])
+        if st:
+            out.append({"label": st["label"] + " · " + st["sub"], "icon": st["icon"], "kind": "stage"})
+        tn = find(self.toneOptions, c["tone"])
+        if tn:
+            out.append({"label": tn["label"], "icon": tn["icon"], "kind": "tone"})
+        for k in c["constraints"]:
+            o = find(self.constraintOptions, k)
+            if o:
+                out.append({"label": o["label"], "icon": o["icon"], "kind": "limit"})
+        if c["limits_custom"].strip():
+            out.append({"label": c["limits_custom"].strip().split("\n")[0][:40],
+                        "icon": "edit", "kind": "limit"})
+        return out
 
     @Property("QVariantList", notify=creatorChanged)
     def creatorConstraints(self):
@@ -314,13 +508,19 @@ class IdeasVM(QObject):
     @Property(bool, notify=creatorChanged)
     def hasCreator(self):
         c = self._creator
-        return bool(c["niche"].strip() or c["audience"].strip() or c["constraints"])
+        return bool(c["niche"].strip() or c["audience"].strip() or c["constraints"]
+                    or c["type"] or c["stage"] or c["tone"] or c["proven"].strip()
+                    or c["limits_custom"].strip())
 
     @Property(str, notify=creatorChanged)
     def creatorSummary(self):
         """One line for the collapsed card / the launch-bar order token."""
         c = self._creator
         parts = []
+        t = next((o for o in self.channelTypeOptions if o["key"] == c["type"]), None)
+        if t:
+            parts.append(c["type_custom"].strip()[:40]
+                         if c["type"] == "other" and c["type_custom"].strip() else t["label"])
         if c["niche"].strip():
             parts.append(c["niche"].strip().split("\n")[0][:60])
         if c["constraints"]:
@@ -1040,8 +1240,7 @@ class IdeasVM(QObject):
                    _avoid=avoid, _section=self._section_id, _title=self._section_title,
                    _csv_sources=csv_sources, _seed=seed_context, _rid=run_id, _tok=token,
                    _csv_cache=dict(self._csv_cache),
-                   _creator={"niche": self._creator["niche"], "audience": self._creator["audience"],
-                             "constraints": list(self._creator["constraints"])},
+                   _creator=self._creator_payload(),
                    _lang=self._LANGS[self._creator["language"]]):
             try:
                 client = self._make_client()
@@ -1063,15 +1262,31 @@ class IdeasVM(QObject):
                 # run here is never orphaned. A brief-only run has no keyword
                 # section to hang off, so it goes to a synthetic group_id of -1
                 # ("My ideas") rather than being dropped.
-                gid = _section if _section != -1 else -1
-                entry_title = _title or tr("My ideas")
+                #
+                # v1.0.5 fix: "My idea only" (and a chat idea with no data)
+                # ALWAYS lands in "My ideas". It used to follow whatever
+                # keyword section happened to be open on the left, so the
+                # greenlight was filed under an unrelated keyword and looked
+                # missing from Content Lab.
+                own_idea = (_mode == "brief" or (_mode == "seeded" and not _videos
+                                                  and not _csv_sources))
+                if own_idea or _section == -1:
+                    gid, entry_title = -1, tr("My ideas")
+                else:
+                    gid, entry_title = _section, (_title or tr("My ideas"))
                 entry_id = content_lab_get_or_create_entry(gid, entry_title)
-                if entry_id is not None:
+                if entry_id is None:
+                    log_crash("IdeasVM.generate: could not open Content Lab entry "
+                              f"{gid!r}; {len(ideas)} greenlight(s) not saved")
+                else:
                     if _videos:
                         content_lab_merge_entry_videos(entry_id, _videos)
                     saved = content_lab_add_ideas(entry_id, ideas)
                     if saved:
                         ideas = saved
+                    else:
+                        log_crash("IdeasVM.generate: Content Lab save returned nothing "
+                                  f"for entry {entry_id}")
                 self._genDone.emit(_rid, {"ideas": ideas, "entryId": entry_id or -1}, "")
             except RequestCancelled:
                 self._genDone.emit(_rid, None, _CANCELLED)
@@ -1395,8 +1610,7 @@ class IdeasVM(QObject):
         self._set_status(tr("Rebuilding “{t}” with the full greenlight…").format(
             t=brief or tr("Untitled idea")))
 
-        creator = {"niche": self._creator["niche"], "audience": self._creator["audience"],
-                   "constraints": list(self._creator["constraints"])}
+        creator = self._creator_payload()
         lang = self._LANGS[self._creator["language"]]
 
         def worker(_id=idea_id, _videos=videos, _brief=brief, _mode=mode,

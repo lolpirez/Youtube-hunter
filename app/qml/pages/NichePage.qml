@@ -28,6 +28,12 @@ import "../Utils.js" as U
 //     The header carries live match telemetry, putting the effect of a cut
 //     right where the cut is made.
 //   * Recipes — the presets as one row of quiet chips under the deck.
+//     v1.0.14 "Hunt first": recipes are now the FIRST layer, as goal tiles
+//     ("Pick a hunt") with their exact cuts and the number of fetched videos
+//     each would leave, live. The four tracks are the second layer
+//     ("Fine-tune"), captioned in plain words with their direction
+//     ("at most" / "at least"), and an unset track says "Any" quietly
+//     instead of in 30 px grey.
 //   * Drawer — advanced options split by BEHAVIOUR in two side-by-side zones
 //     ("Instant" vs "On next run"), so it is obvious which knob needs a re-run.
 //   * Type — one family (Hanken / IRANYekanX via FontBridge), personality from
@@ -38,15 +44,26 @@ Item {
     id: page
     // v3.44 perf: Niche.rows converted once per change, not once per card
     readonly property var _nicheRows: Niche.rows || []
+    // v1.0.9 perf: converted once per change, shared by every card
+    readonly property var _dlMap: Niche.downloads || ({})
+    readonly property var _doneIds: Niche.downloadedIds || []
+    readonly property var _savedIds: Niche.savedIds || []
+    readonly property var _ideaKeys: Ideas.selectedKeys || []
 
     // A download finished elsewhere (or was deleted on the Downloads page)
     // while this page was hidden — re-read which videos have a file on disk
     // so each card's Download/Open button is correct when shown.
-    onVisibleChanged: if (visible) Niche.refreshDownloaded()
-    // Viral Radar: the first time the page is built, open the radar panel —
-    // picks + cost only. It fetches by itself only if the user switched on
-    // "Load on open" (v1.1: the quota is theirs to spend).
-    Component.onCompleted: { Niche.refreshDownloaded(); Qt.callLater(function () { Niche.autoLoadViral() }) }
+    // v1.0.12: moved to onVisibleChanged so pre-warming the page no longer
+    // triggers downloads_list() + os.path.isfile() or autoLoadViral().
+    property bool _autoLoaded: false
+    onVisibleChanged: if (visible) {
+        Niche.refreshDownloaded()
+        if (!page._autoLoaded) {
+            page._autoLoaded = true
+            Qt.callLater(function () { Niche.autoLoadViral() })
+        }
+    }
+    Component.onCompleted: { /* see onVisibleChanged */ }
 
     // Advanced drawer expanded/collapsed. Collapsed by default so the tuner
     // reads as three tracks and a row of recipes.
@@ -430,11 +447,15 @@ Item {
             C.AppText {
                 text: trk.on ? trk.readout : I18n.tr("Any")
                 mono: trk.on
-                weight: Tokens.weightExtraBold
-                font.pixelSize: 30
+                weight: trk.on ? Tokens.weightExtraBold : Tokens.weightDemiBold
+                font.pixelSize: trk.on ? 30 : 20
                 font.letterSpacing: trk.on ? -0.6 : 0
                 color: trk.on ? Theme.text_strong : Theme.outline
+                opacity: trk.on ? 1 : 0.8
                 LayoutMirroring.enabled: false
+                // same box either way, so lighting a track never moves the rail
+                Layout.preferredHeight: 38
+                verticalAlignment: Text.AlignBottom
                 Layout.alignment: Qt.AlignBottom
                 Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durMed } }
             }
@@ -486,6 +507,182 @@ Item {
             counts: trk.counts
             index: trk.index
             onPicked: (v) => trk.picked(v)
+        }
+    }
+
+    // A layer label inside the tuner: icon · title ········ note
+    component DeckLabel: RowLayout {
+        id: dl
+        property string title: ""
+        property string icon: "tune"
+        property string note: ""
+        Layout.fillWidth: true
+        spacing: Tokens.space2
+        C.IconGlyph {
+            name: dl.icon; size: 13
+            glyphColor: Theme.tertiary
+            Layout.alignment: Qt.AlignVCenter
+        }
+        C.AppText {
+            text: dl.title
+            weight: Tokens.weightBold
+            font.pixelSize: Tokens.fontCaption
+            font.letterSpacing: I18n.rtl ? 0 : Tokens.trackingLabel
+            color: Theme.on_surface_var
+            Layout.alignment: Qt.AlignVCenter
+        }
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.alignment: Qt.AlignVCenter
+            Layout.leftMargin: Tokens.space2
+            Layout.rightMargin: dl.note !== "" ? Tokens.space2 : 0
+            height: 1
+            color: Theme.border
+        }
+        C.AppText {
+            visible: dl.note !== ""
+            text: dl.note
+            font.pixelSize: Tokens.fontMicro
+            color: Theme.outline
+            Layout.alignment: Qt.AlignVCenter
+        }
+    }
+
+    // v1.0.14: one recipe as a goal tile. Says what it hunts, the exact cuts
+    // it sets (no mystery), and how many of the fetched videos it would
+    // leave, before you click. Click again to go back to an open form.
+    component HuntTile: AbstractButton {
+        id: ht
+        property int recipe: 0
+        property string title: ""
+        property string hint: ""
+        property string glyphName: "tune"
+        property int count: -1          // -1 = no pool yet
+        readonly property bool current: Niche.activePreset === ht.recipe
+        readonly property bool dead: ht.count === 0
+        readonly property color _tone: ht.dead ? Theme.warn : Theme.primary
+        Layout.fillWidth: true
+        Layout.preferredWidth: 1
+        hoverEnabled: true
+        padding: Tokens.space3
+        leftPadding: Tokens.space3 + 2
+        rightPadding: Tokens.space3 + 2
+        implicitHeight: htCol.implicitHeight + topPadding + bottomPadding
+        HoverHandler { cursorShape: Qt.PointingHandCursor }
+        onClicked: ht.current ? Niche.clearAllFilters() : Niche.applyPreset(ht.recipe)
+        scale: ht.pressed ? Tokens.pressScale : 1.0
+        Behavior on scale { NumberAnimation { duration: Tokens.durFast; easing.type: Easing.OutCubic } }
+
+        background: Rectangle {
+            radius: Tokens.radiusLg
+            // opaque fills only (a translucent hover reads as mid-grey)
+            color: ht.current ? U.mix(Theme.surface, Theme.primary, Theme.isDark ? 0.17 : 0.08)
+                 : ht.hovered ? U.mix(Theme.surface, Theme.primary, Theme.isDark ? 0.07 : 0.035)
+                 : Theme.surface
+            border.width: 1
+            border.color: ht.current ? U.withAlpha(Theme.primary, 0.70)
+                        : ht.hovered ? U.withAlpha(Theme.primary, 0.32)
+                        : Theme.border
+            Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+            Behavior on border.color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+
+            // the chosen hunt gets a lit top edge
+            Rectangle {
+                anchors.top: parent.top
+                anchors.topMargin: 1
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: Math.max(0, parent.width - Tokens.radiusLg * 2)
+                height: 2
+                radius: 1
+                opacity: ht.current ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: Tokens.durMed; easing.type: Easing.OutCubic } }
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.0; color: U.withAlpha(Theme.primary, 0.0) }
+                    GradientStop { position: 0.5; color: Theme.primary }
+                    GradientStop { position: 1.0; color: U.withAlpha(Theme.primary, 0.0) }
+                }
+            }
+        }
+
+        contentItem: Item {
+            implicitWidth: htCol.implicitWidth
+            implicitHeight: htCol.implicitHeight
+            ColumnLayout {
+                id: htCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                spacing: 2
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Tokens.space2
+                    Rectangle {
+                        Layout.preferredWidth: 30
+                        Layout.preferredHeight: 30
+                        radius: 10
+                        color: ht.current ? Theme.primary
+                             : U.withAlpha(Theme.on_surface, Theme.isDark ? 0.06 : 0.04)
+                        border.width: ht.current ? 0 : 1
+                        border.color: Theme.border
+                        Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+                        C.IconGlyph {
+                            anchors.centerIn: parent
+                            name: ht.glyphName; size: 15
+                            fill: ht.current || ht.hovered
+                            glyphColor: ht.current ? Theme.on_primary
+                                      : ht.hovered ? Theme.primary : Theme.on_surface_var
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                    // what it would leave, right now
+                    Rectangle {
+                        visible: ht.count >= 0
+                        Layout.alignment: Qt.AlignVCenter
+                        radius: Tokens.radiusPill
+                        color: U.withAlpha(ht._tone, ht.current ? 0.16 : 0.09)
+                        border.width: 1
+                        border.color: U.withAlpha(ht._tone, ht.current ? 0.45 : 0.24)
+                        implicitWidth: htCnt.implicitWidth + Tokens.space2 * 2
+                        implicitHeight: 22
+                        C.AppText {
+                            id: htCnt
+                            anchors.centerIn: parent
+                            text: ht.dead ? I18n.tr("none") : String(ht.count)
+                            mono: !ht.dead
+                            weight: Tokens.weightBold
+                            font.pixelSize: Tokens.fontMicro
+                            color: ht._tone
+                            LayoutMirroring.enabled: false
+                        }
+                    }
+                    C.IconGlyph {
+                        visible: ht.current
+                        name: "check"; size: 14
+                        glyphColor: Theme.primary
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+                }
+                C.AppText {
+                    Layout.fillWidth: true
+                    Layout.topMargin: Tokens.space2
+                    text: ht.title
+                    weight: Tokens.weightBold
+                    font.pixelSize: Tokens.fontCaption + 1
+                    color: ht.current ? Theme.primary : Theme.text_strong
+                    elide: Text.ElideRight
+                    Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+                }
+                C.AppText {
+                    Layout.fillWidth: true
+                    text: ht.hint
+                    font.pixelSize: Tokens.fontMicro
+                    color: Theme.on_surface_var
+                    opacity: ht.dead && !ht.current ? 0.7 : 1
+                    elide: Text.ElideRight
+                }
+            }
         }
     }
 
@@ -1297,8 +1494,8 @@ Item {
                                 }
                                 C.AppText {
                                     text: Niche.hasResults
-                                          ? I18n.tr("Re-filters the fetched pool instantly · no quota")
-                                          : I18n.tr("Set the cuts first or after — every change re-filters instantly.")
+                                          ? I18n.tr("Pick a hunt or fine-tune the cuts · re-filters the fetched videos instantly, no quota")
+                                          : I18n.tr("Pick what counts as a hit · works before or after a search, every change re-filters instantly")
                                     font.pixelSize: Tokens.fontCaption
                                     color: Theme.outline
                                     Layout.fillWidth: true
@@ -1361,6 +1558,46 @@ Item {
                             }
                         }
 
+                        // ── layer 1: pick a hunt (the recipes, as goal tiles) ──
+                        DeckLabel {
+                            title: I18n.tr("Pick a hunt")
+                            icon: "auto_awesome"
+                            note: Niche.hasResults && (Niche.presetCounts || []).length > 0
+                                  ? I18n.tr("numbers = fetched videos each would leave")
+                                  : I18n.tr("one click sets every cut")
+                        }
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: page._narrow ? 2 : (page._wide ? 5 : 3)
+                            columnSpacing: Tokens.space3
+                            rowSpacing: Tokens.space3
+                            Repeater {
+                                // the last preset is "Clear filters": that is
+                                // Reset all in the header, not a hunt
+                                model: Math.min(5, (Niche.presetOptions || []).length)
+                                HuntTile {
+                                    recipe: index
+                                    title: Niche.presetOptions[index] || ""
+                                    hint: Niche.presetHints[index] || ""
+                                    glyphName: ["user", "bolt", "query_stats", "movie", "fmt_short"][index] || "tune"
+                                    count: {
+                                        const c = Niche.presetCounts || []
+                                        return index < c.length ? c[index] : -1
+                                    }
+                                }
+                            }
+                        }
+
+                        // ── layer 2: fine-tune the four cuts ──
+                        DeckLabel {
+                            Layout.topMargin: Tokens.space1
+                            title: I18n.tr("Fine-tune")
+                            icon: "tune"
+                            note: Niche.activePreset >= 0
+                                  ? I18n.tr("touching a cut turns the hunt into your own")
+                                  : ""
+                        }
+
                         // the console deck — all three cuts on ONE instrument
                         // face, with no nested cards between them
                         Rectangle {
@@ -1411,7 +1648,7 @@ Item {
                                     visible: Niche.mode === 0
                                     caption: I18n.tr("Channel size")
                                     icon: "user"
-                                    unit: I18n.tr("subscribers")
+                                    unit: I18n.tr("at most · subscribers")
                                     tip: I18n.tr("The channel's subscriber count. Small channels are where an outlier means the idea won, not the audience.")
                                     readout: page._subsCut
                                     options: page._subsOpts
@@ -1420,9 +1657,9 @@ Item {
                                     onPicked: (v) => { Niche.subsMin = ""; Niche.subsMax = v; filterTimer.restart() }
                                 }
                                 SignalTrack {
-                                    caption: I18n.tr("Reach")
+                                    caption: I18n.tr("Video views")
                                     icon: "visibility"
-                                    unit: I18n.tr("views")
+                                    unit: I18n.tr("at least · views")
                                     tip: I18n.tr("The video's own view count.")
                                     readout: page._viewsCut
                                     options: page._viewsOpts
@@ -1432,10 +1669,10 @@ Item {
                                 }
                                 SignalTrack {
                                     visible: Niche.mode === 0
-                                    caption: I18n.tr("Views ÷ subscribers")
+                                    caption: I18n.tr("Beat its subscribers")
                                     icon: "trending_up"
-                                    unit: I18n.tr("multiplier")
-                                    tip: I18n.tr("How far the video outran the channel's subscriber base.")
+                                    unit: I18n.tr("at least · views ÷ subscribers")
+                                    tip: I18n.tr("Views divided by the channel's subscribers. 10× = the video reached ten times more people than follow the channel.")
                                     readout: page._multCut
                                     options: page._multOpts
                                     counts: page._counts("mult")
@@ -1443,10 +1680,10 @@ Item {
                                     onPicked: (v) => { Niche.multMin = v; filterTimer.restart() }
                                 }
                                 SignalTrack {
-                                    caption: I18n.tr("vs own average")
+                                    caption: I18n.tr("Beat its own average")
                                     icon: "query_stats"
-                                    unit: I18n.tr("channel outlier")
-                                    tip: I18n.tr("Views against the channel's own typical video. The cleanest outlier signal: the idea won, not the audience.")
+                                    unit: I18n.tr("at least · × its usual video")
+                                    tip: I18n.tr("Views against the channel's own typical video. 5× = five times what this channel normally gets. The cleanest outlier signal: the idea won, not the audience.")
                                     readout: page._outlierCut
                                     options: page._outlierOpts
                                     counts: page._counts("outlier")
@@ -1456,110 +1693,24 @@ Item {
                             }
                         }
 
-                        // recipes (ready-made combinations) + drawer trigger
+                        // drawer trigger (the recipes are the tiles above)
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: Tokens.space3
 
-                            Flow {
+                            // v1.0.14: the recipes moved up into "Pick a hunt"
+                            C.AppText {
                                 Layout.fillWidth: true
-                                spacing: Tokens.space2
-                                Row {
-                                    height: 34
-                                    spacing: Tokens.space1 + 2
-                                    C.IconGlyph {
-                                        name: "auto_awesome"; size: 13
-                                        glyphColor: Theme.tertiary
-                                        anchors.verticalCenter: parent.verticalCenter
-                                    }
-                                    C.AppText {
-                                        text: I18n.tr("Recipes")
-                                        weight: Tokens.weightBold
-                                        font.pixelSize: Tokens.fontCaption
-                                        color: Theme.on_surface_var
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        rightPadding: Tokens.space1
-                                    }
-                                }
-                                Repeater {
-                                    model: Niche.presetOptions
-                                    AbstractButton {
-                                        id: presetBtn
-                                        // the last preset is "Clear filters" —
-                                        // that lives in the header as Reset all
-                                        visible: index < 5
-                                        // the chip the form currently IS; any
-                                        // touch on a cut un-lights it
-                                        readonly property bool current: Niche.activePreset === index
-                                        height: 34
-                                        implicitWidth: presetRow.implicitWidth + Tokens.space4 * 2
-                                        hoverEnabled: true
-                                        HoverHandler { cursorShape: Qt.PointingHandCursor }
-                                        // second click returns to the open form
-                                        onClicked: presetBtn.current ? Niche.clearAllFilters()
-                                                                     : Niche.applyPreset(index)
-                                        scale: presetBtn.pressed ? Tokens.pressScale
-                                             : presetBtn.hovered ? 1.012 : 1.0
-                                        Behavior on scale { NumberAnimation { duration: Tokens.durFast; easing.type: Easing.OutCubic } }
-                                        background: Rectangle {
-                                            radius: Tokens.radiusPill
-                                            // Opaque fills only — a translucent
-                                            // hover passes through mid-grey.
-                                            color: presetBtn.current
-                                                   ? U.mix(Theme.surface, Theme.primary, 0.14)
-                                                   : presetBtn.hovered ? U.mix(Theme.surface, Theme.primary, 0.10)
-                                                                       : Theme.surface
-                                            border.width: 1
-                                            border.color: presetBtn.current ? U.withAlpha(Theme.primary, 0.62)
-                                                         : presetBtn.hovered ? U.withAlpha(Theme.primary, 0.40)
-                                                                             : Theme.border
-                                            Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
-                                            Behavior on border.color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
-                                        }
-                                        contentItem: Item {
-                                            implicitWidth: presetRow.implicitWidth
-                                            implicitHeight: presetRow.implicitHeight
-                                            Row {
-                                                id: presetRow
-                                                anchors.centerIn: parent
-                                                spacing: Tokens.space2
-                                                C.IconGlyph {
-                                                    name: ["user", "bolt", "query_stats", "movie", "fmt_short"][index] || "tune"
-                                                    size: 14
-                                                    fill: presetBtn.hovered || presetBtn.current
-                                                    glyphColor: presetBtn.current ? Theme.primary : Theme.on_surface_var
-                                                    anchors.verticalCenter: parent.verticalCenter
-                                                }
-                                                C.AppText {
-                                                    text: modelData
-                                                    weight: presetBtn.current ? Tokens.weightBold : Tokens.weightDemiBold
-                                                    font.pixelSize: Tokens.fontCaption
-                                                    color: presetBtn.current ? Theme.primary
-                                                         : presetBtn.hovered ? Theme.text_strong : Theme.on_surface
-                                                    anchors.verticalCenter: parent.verticalCenter
-                                                }
-                                                C.IconGlyph {
-                                                    visible: presetBtn.current
-                                                    name: "check"; size: 12
-                                                    glyphColor: Theme.primary
-                                                    anchors.verticalCenter: parent.verticalCenter
-                                                }
-                                            }
-                                            C.AppTooltip {
-                                                visible: presetBtn.hovered
-                                                         && (Niche.presetHints[index] || "") !== ""
-                                                delay: 420
-                                                text: Niche.presetHints[index] || ""
-                                                preferAbove: true
-                                            }
-                                        }
-                                    }
-                                }
+                                Layout.alignment: Qt.AlignVCenter
+                                text: I18n.tr("More cuts: format, length, upload window, country, channel age, engagement")
+                                font.pixelSize: Tokens.fontCaption
+                                color: Theme.outline
+                                elide: Text.ElideRight
                             }
 
                             AbstractButton {
                                 id: advBtn
-                                Layout.alignment: Qt.AlignTop
+                                Layout.alignment: Qt.AlignVCenter
                                 hoverEnabled: true
                                 HoverHandler { cursorShape: Qt.PointingHandCursor }
                                 onClicked: page.filtersOpen = !page.filtersOpen
@@ -2545,15 +2696,30 @@ Item {
                                 interval: 900
                                 onTriggered: grid.revealed = true
                             }
+                            // v1.0.12: 16 ms (one frame) instead of 1 ms,
+                            // and gated on page.visible + Tokens.appActive so
+                            // a hidden pre-warmed page doesn't spin
                             Timer {
-                                interval: 1
+                                interval: 16
                                 repeat: true
-                                running: grid._slots < page._nicheRows.length
+                                running: page.visible && Tokens.appActive
+                                         && grid._slots < page._nicheRows.length
                                 onTriggered: {
                                     grid._slots = Math.min(page._nicheRows.length, grid._slots + 6)
                                     Qt.callLater(grid._tryReveal)
                                 }
                             }
+                            // v1.0.9 perf: the viewport's top edge in this
+                            // grid's coordinates — one mapToItem per scroll
+                            // frame for the whole grid instead of one per card.
+                            readonly property real _viewTop: {
+                                const fl = scroller.contentItem
+                                if (!fl || !fl.contentItem) return 0
+                                const vy = fl.contentY
+                                const deps = grid.y + grid.height
+                                return vy - grid.mapToItem(fl.contentItem, 0, 0).y
+                            }
+                            readonly property real _viewH: scroller.height
                             // instant hide, soft show
                             opacity: revealed ? 1 : 0
                             Behavior on opacity {
@@ -2574,8 +2740,34 @@ Item {
                                 // saved.
                                 C.ArchiveVideoCard {
                                     id: ncard
-                                    row: page._nicheRows[index] || ({})
+                                    // v1.0.9 perf: a new row only when its
+                                    // content changed (rowSig, see niche_vm) —
+                                    // see the Search Archive deck for why.
+                                    // bound only until this object completes, then set imperatively
+                                    row: ncard._src || ({})
+                                    property string _rowSig: "-"
+                                    property bool _rowLive: false
+                                    readonly property var _src: page._nicheRows[index] || null
+                                    function _takeRow() {
+                                        if (!ncard._rowLive) return
+                                        const r = ncard._src
+                                        const sig = r ? String(r.rowSig || "") : ""
+                                        if (r && sig !== "" && sig === ncard._rowSig) return
+                                        ncard._rowSig = r ? sig : "-"
+                                        ncard.row = r || ({})
+                                    }
+                                    on_SrcChanged: ncard._takeRow()
+                                    Component.onCompleted: {
+                                        const r = ncard._src
+                                        ncard._rowSig = r ? String(r.rowSig || "") : "-"
+                                        ncard.row = r || ({})      // replaces the initial binding
+                                        ncard._rowLive = true
+                                    }
                                     target: Niche
+                                    downloadsMap: page._dlMap
+                                    doneIds: page._doneIds
+                                    savedList: page._savedIds
+                                    ideaKeys: page._ideaKeys
                                     cardWidth: grid.cardW
                                     // v3.52: no hover effects while scrolling
                                     // — see ArchiveVideoCard.scrollIdle.
@@ -2592,17 +2784,9 @@ Item {
                                     // nothing. Opacity, not `visible`, keeps the
                                     // layout geometry. y/height are read so the
                                     // binding re-runs when the grid reflows.
-                                    opacity: {
-                                        const fl = scroller.contentItem
-                                        const vh = scroller.height
-                                        if (!fl || vh <= 0) return 1
-                                        const pad = ncard.height + 320
-                                        const _dep = ncard.y + grid.y + grid.height
-                                        const viewY = fl.contentY
-                                        const top = ncard.mapToItem(fl.contentItem, 0, 0).y
-                                        return (top + ncard.height > viewY - pad
-                                                && top < viewY + vh + pad) ? 1 : 0
-                                    }
+                                    opacity: (grid._viewH <= 0
+                                              || (ncard.y + ncard.height > grid._viewTop - ncard.height - 320
+                                                  && ncard.y < grid._viewTop + grid._viewH + ncard.height + 320)) ? 1 : 0
                                     Layout.preferredWidth: grid.cardW
                                     Layout.fillHeight: true
                                     Layout.alignment: Qt.AlignTop

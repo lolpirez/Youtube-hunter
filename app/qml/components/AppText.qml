@@ -20,8 +20,28 @@ Text {
     color: Theme.on_surface
     // text-aware: Persian inside the English UI renders in Vazir too (weight
     // snapped to a real Vazir face, see FontBridge.weightFor)
-    font.family: Fonts.familyFor(mono ? "mono" : "body", weight, root.text)
-    font.weight: Fonts.weightFor(weight, root.text)
+    // v1.0.9 perf: the Persian-text check runs in JS. familyFor/weightFor
+    // are Python slots, and they were called TWICE for every text change of
+    // every AppText: a page flip of 24 video cards (~20 labels each) was ~1000
+    // round-trips into Python on the GUI thread, each one waiting for the GIL
+    // while the thumbnail workers decode. Now Python is only asked when the
+    // UI language is Persian or the string really is mostly Persian (same
+    // 25 % rule and character ranges as app.ui.fonts.is_mostly_persian);
+    // everything else takes the cached Latin face.
+    readonly property bool _faUi: I18n.lang === "fa"
+    readonly property bool _faText: _faUi || root._mostlyPersian(root.text)
+    function _mostlyPersian(t) {
+        if (!t) return false
+        if (t.length > 1500) t = t.substring(0, 1500)
+        const fa = t.match(/[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]/g)
+        if (!fa) return false
+        const latin = t.match(/[A-Za-z]/g)
+        const nf = fa.length, nl = latin ? latin.length : 0
+        return nf >= 0.25 * Math.max(1, nf + nl)
+    }
+    font.family: _faText ? Fonts.familyFor(mono ? "mono" : "body", weight, root.text)
+                         : (mono ? Fonts.mono : Fonts.body)
+    font.weight: _faText ? Fonts.weightFor(weight, root.text) : weight
     font.pixelSize: Tokens.fontBody
     renderType: Text.NativeRendering
     // Every label in the app goes through here; AutoText made Qt sniff each

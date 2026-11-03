@@ -1556,7 +1556,7 @@ Item {
                             anchors.centerIn: parent
                             visible: mc.busy
                             name: "refresh"
-                            spinning: visible
+                            spinning: visible && page.visible && Tokens.appActive
                             size: 20
                             glyphColor: mc.tint
                         }

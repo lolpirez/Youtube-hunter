@@ -228,7 +228,9 @@ Item {
     }
 
     Component.onCompleted: {
-        root.anchor = root.parent
+        // v1.0.9: an anchor handed in explicitly (LazyTooltip builds the tip
+        // inside a Loader, whose parent is not the hovered control) wins.
+        if (!root.anchor) root.anchor = root.parent
         root._adopt()
         root._reposition()
         // A tip declared already-visible (the first hover can land before this

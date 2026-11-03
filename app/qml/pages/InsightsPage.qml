@@ -1172,7 +1172,7 @@ Item {
                                                     visible: modelData.st === "busy"
                                                     name: "autorenew"
                                                     size: 15
-                                                    spinning: visible
+                                                    spinning: visible && page.visible && Tokens.appActive
                                                     glyphColor: Theme.primary
                                                 }
                                                 C.IconGlyph {
@@ -3073,7 +3073,7 @@ Item {
                             Timer {
                                 interval: 1000
                                 repeat: true
-                                running: Insights.busy
+                                running: Insights.busy && page.visible
                                 onTriggered: bfBusy.secs = bfBusy.secs + 1
                             }
                             Connections {

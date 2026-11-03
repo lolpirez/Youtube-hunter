@@ -176,6 +176,14 @@ Item {
         return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds())
     }
 
+    // v16.1: batch log lines to avoid per-line layout thrashing
+    property var _lineBuf: []
+    Timer {
+        id: lineBatchTimer
+        interval: 80
+        onTriggered: root._flushLines()
+    }
+
     function appendLine(text) {
         var d = new Date()
         var ms = d.getTime()
@@ -189,14 +197,22 @@ Item {
 
         var delta = (_lastMs > 0 && ev.kind === "video") ? Math.round((ms - _lastMs) / 1000) : -1
         _lastMs = ms
-        lines.append({
+        _lineBuf.push({
             ts: _stamp(d), body: text || "", kind: ev.kind, level: ev.level,
             icon: ev.icon, text: ev.text, a: ev.a, b: ev.b, pct: ev.pct,
             vid: ev.vid, status: ev.status, statusLevel: ev.statusLevel,
             chips: ev.chips, gap: ev.gap, delta: delta
         })
+        if (!lineBatchTimer.running) lineBatchTimer.start()
+    }
+
+    function _flushLines() {
+        var buf = _lineBuf
+        _lineBuf = []
+        for (var i = 0; i < buf.length; ++i)
+            lines.append(buf[i])
         while (lines.count > root.maxLines)
-            lines.remove(0)
+            lines.remove(0, Math.min(buf.length, lines.count - root.maxLines))
         if (view.atYEnd || view.contentHeight <= view.height || root._follow)
             Qt.callLater(root._toEnd)
     }

@@ -13,11 +13,18 @@ import "../Utils.js" as U
 //
 //  How: two Loaders, double-buffered. A new idea is built into the hidden
 //  BACK pane with `asynchronous: true`, so Qt incubates it a slice per frame
-//  and the window keeps painting. The front pane stays on screen under a
-//  skeleton veil whose shimmer runs on the render thread (Animators), then
-//  the panes swap, the old one is dropped (still under the veil), and the
-//  veil lifts while the new pane plays its entrance.
+//  and the window keeps painting. When it lands the panes swap in one frame
+//  and the new pane plays its entrance; the old one is dropped behind it.
 //
+//    * the FIRST open has nothing to keep: it shows the skeleton veil (with
+//      its render-thread shimmer) until the pane lands, then lifts it at once.
+//    * a SWITCH keeps the blueprint already on screen — it is real content,
+//      and putting a skeleton over it only ever lies. The wait is carried by
+//      the selection instead: hosts read `pendingId` to light the chosen rail
+//      card, and a thin progress line runs along the top of the pane, but
+//      only when the build outlasts a beat (so fast swaps never flash it).
+//      The new pane replaces the old in one clean frame — two blueprints
+//      dissolved into each other read as a glitch, not a transition.
 //    * clicking several ideas quickly just restarts the back build: only the
 //      last pick is ever finished.
 //    * same idea, new data (a rebuilt blueprint): rebuilt the same way.
@@ -27,7 +34,8 @@ import "../Utils.js" as U
 //    idea, regenerating, scroller, motion,
 //    favorited / deleteRequested / regenerateRequested / copyRequested /
 //    prompterRequested.
-//    `busy` is true while a pane is being built (hosts may read it).
+//    `busy` is true while a pane is being built and `pendingId` is the idea
+//    being built (0 when idle) — both are there for the host's own loading UI.
 // ═══════════════════════════════════════════════════════════════════════════
 Item {
     id: stage
@@ -45,6 +53,8 @@ Item {
     signal prompterRequested(int ideaId)
 
     readonly property bool busy: _building
+    // The idea being built (0 when idle). Hosts light the matching selection.
+    readonly property int pendingId: _building ? _pendingId : 0
     // The pane on screen (null before the first build lands).
     readonly property var pane: _frontL ? _frontL.item : null
 
@@ -54,6 +64,9 @@ Item {
     readonly property var _backL: _front === 0 ? paneB : paneA
     property bool _building: false
     property bool _swapPending: false
+    property bool _hadPane: false         // this build replaces a live pane
+    property bool _switchLoading: false   // slow enough to show the top line
+    property int _pendingId: 0
     property string _frontKey: ""          // content fingerprint of the front pane
     property string _backKey: ""
     property int _frontId: 0
@@ -104,8 +117,13 @@ Item {
         if (dropTimer.running) { dropTimer.stop(); _dropOld() }
         _swapPending = false
         _building = true
+        _pendingId = _idOf(a)
         _backKey = key
-        _raiseVeil()
+        // Replacing a live pane keeps it on screen; only a first open gets
+        // the skeleton. The switch delay makes the top line wait a beat.
+        _hadPane = stage.pane !== null
+        if (_hadPane) switchDelay.restart()
+        else _raiseVeil()
         var L = _backL
         L.source = ""                       // cancels an in-flight incubation
         L.setSource(Qt.resolvedUrl("BlueprintPane.qml"), {
@@ -118,6 +136,8 @@ Item {
         if (!_building) return
         _building = false
         _swapPending = false
+        _switchLoading = false
+        switchDelay.stop()
         _backL.source = ""
     }
 
@@ -132,14 +152,20 @@ Item {
         it.copyRequested.connect(stage.copyRequested)
         it.prompterRequested.connect(stage.prompterRequested)
         _swapPending = true
-        // wait for the veil to be fully up (and for the page to be on screen)
-        if (!veilIn.running && stage.visible) _doSwap()
+        if (!stage.visible) return
+        // A first open waits for the skeleton's fade-in so a fast build does
+        // not flash it; a switch swaps the instant the new pane is ready.
+        if (!stage._hadPane && veilIn.running) return
+        _doSwap()
     }
 
     function _doSwap() {
         if (!_swapPending) return
         _swapPending = false
         _building = false
+        _switchLoading = false
+        switchDelay.stop()
+        var had = stage._hadPane
         var nb = _backL
         _front = 1 - _front                 // nb is now the front
         _frontKey = _backKey
@@ -149,33 +175,88 @@ Item {
             nb.item._lastId = -1
             nb.item._primeForIdea()
         }
-        // drop the old pane a beat later, still under the veil
+        if (had) {
+            // one clean replacement, then drop the old pane behind the new one
+            dropTimer.interval = 40
+        } else {
+            // the veil covers the hand-off: stop its spinner now and lift it
+            veil.leaving = true
+            dropTimer.interval = 30
+        }
         dropTimer.restart()
     }
 
     function _dropOld() {
         if (!_building) _backL.source = ""
-        _lowerVeil()
+        if (!stage._hadPane) _lowerVeil()
     }
 
-    // ── veil ──
+    // ── veil (first open only) ──
     function _raiseVeil() {
         veilOut.stop()
+        veil.leaving = false
         veil.visible = true
         if (!stage.motion) { veil.opacity = 1; return }
         if (veil.opacity < 0.99) veilIn.restart()
     }
     function _lowerVeil() {
+        veil.leaving = true                 // the spinner stops on this line
         if (!veil.visible) return
         veilIn.stop()
         if (!stage.motion) { veil.opacity = 0; veil.visible = false; return }
         veilOut.restart()
     }
 
+    // The top line only appears when a switch outlasts a beat, so a quick
+    // swap never flashes it.
+    Timer {
+        id: switchDelay
+        interval: 240
+        onTriggered: stage._switchLoading = stage._building && stage._hadPane
+    }
+
     Timer {
         id: dropTimer
-        interval: 40
+        interval: 30
         onTriggered: stage._dropOld()
+    }
+
+    // ── switch progress: one quiet line, nothing over live content ──
+    Item {
+        id: switchBar
+        z: 900
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: 3
+        opacity: stage._switchLoading ? 1 : 0
+        visible: opacity > 0.001
+        Behavior on opacity { NumberAnimation { duration: stage.motion ? 160 : 0 } }
+
+        Rectangle {
+            anchors.fill: parent
+            color: U.withAlpha(Theme.primary, Theme.isDark ? 0.14 : 0.10)
+        }
+        Rectangle {
+            id: switchSweep
+            width: Math.max(110, stage.width * 0.26)
+            height: parent.height
+            radius: 1.5
+            gradient: Gradient {
+                orientation: Gradient.Horizontal
+                GradientStop { position: 0.0; color: U.withAlpha(Theme.primary, 0.0) }
+                GradientStop { position: 0.5; color: Theme.primary }
+                GradientStop { position: 1.0; color: U.withAlpha(Theme.primary, 0.0) }
+            }
+            XAnimator on x {
+                running: stage._switchLoading && stage.motion
+                loops: Animation.Infinite
+                from: I18n.rtl ? stage.width : -switchSweep.width
+                to: I18n.rtl ? -switchSweep.width : stage.width
+                duration: 1100
+                easing.type: Easing.InOutSine
+            }
+        }
     }
 
     Loader {
@@ -211,6 +292,9 @@ Item {
         height: Math.max(320, Math.min(stage.height, 620))
         opacity: 0
         visible: false
+        // set the instant content lands: spinner and shimmer stop at once,
+        // only the skeleton itself dissolves
+        property bool leaving: false
 
         OpacityAnimator {
             id: veilIn
@@ -224,7 +308,7 @@ Item {
             id: veilOut
             target: veil
             to: 0
-            duration: 260
+            duration: 200
             easing.type: Easing.InOutCubic
             onFinished: veil.visible = false
         }
@@ -289,6 +373,8 @@ Item {
 
         // small "loading" read-out under the skeleton, with a spinning ring
         Row {
+            id: loadingReadout
+            visible: veil.visible && !veil.leaving
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: skel.bottom
             anchors.topMargin: Tokens.space5
@@ -314,7 +400,7 @@ Item {
                         y: -1
                     }
                     RotationAnimator on rotation {
-                        running: veil.visible
+                        running: loadingReadout.visible
                         loops: Animation.Infinite
                         from: 0; to: 360
                         duration: 800
@@ -345,7 +431,7 @@ Item {
                     GradientStop { position: 1.0; color: U.withAlpha(Theme.on_surface, 0) }
                 }
                 XAnimator on x {
-                    running: veil.visible && stage.motion
+                    running: veil.visible && !veil.leaving && stage.motion
                     loops: Animation.Infinite
                     from: I18n.rtl ? skel.width : -200
                     to: I18n.rtl ? -200 : skel.width

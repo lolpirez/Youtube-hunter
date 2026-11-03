@@ -40,6 +40,7 @@ from app.core.transcripts import (fetch_transcript, get_public_ip,
                                   reset_breaker,
                                   set_throttle_listener, set_turbo,
                                   transcript_stats)
+from app.qml_backend.desktop_notifier import announce
 from app.core.utils import local_path_from_url, parse_iso8601_duration
 from app.core.youtube_api import (
     QuotaExceededError, ScrapeCancelled, _row_from_item, resolve_channel_id)
@@ -231,6 +232,12 @@ class DashboardVM(QObject):
         self._flush_timer.setSingleShot(True)
         self._flush_timer.setInterval(240)
         self._flush_timer.timeout.connect(self._flush_results)
+        # v1.0.14: log line batching (reduce GUI-thread churn during scraping)
+        self._log_buf = []
+        self._log_flush_timer = QTimer(self)
+        self._log_flush_timer.setSingleShot(True)
+        self._log_flush_timer.setInterval(60)
+        self._log_flush_timer.timeout.connect(self._flush_log_buf)
         self.donePopup.connect(self._on_done_path)
         self._refresh_quota()
 
@@ -350,6 +357,14 @@ class DashboardVM(QObject):
         self._emit.log_signal.emit(
             "    " + tr("Switch the VPN node and press New IP, or skip the rest without transcripts."))
         self.transcriptStateChanged.emit()
+        # v1.0.13: desktop notification so the user sees the block even when
+        # outside the app (another tab, minimised, lock screen).
+        announce("error",
+                 tr("Transcripts paused — IP blocked"),
+                 tr("YouTube has stopped answering transcripts. "
+                    "Switch the VPN node and press New IP, or skip."),
+                 page=0, icon="warning", source=tr("Scraper"),
+                 group="ip-block", force=True)
 
     def _bump(self, which):
         with self._tr_lock:
@@ -698,7 +713,20 @@ class DashboardVM(QObject):
     # ── GUI-thread slots (queued from worker via SignalEmitter) ─────────
     @Slot(str)
     def _on_log(self, message):
-        self.logLine.emit(message)
+        # v1.0.14: batch log lines during a scrape to reduce GUI updates.
+        # Lines emitted within 60ms are coalesced and dispatched together,
+        # cutting ListModel churn from ~20/s (per-video) to ~5-8 bursts/s.
+        if not self._is_running:
+            self.logLine.emit(message)
+            return
+        self._log_buf.append(message)
+        if not self._log_flush_timer.isActive():
+            self._log_flush_timer.start()
+
+    def _flush_log_buf(self):
+        buf, self._log_buf = self._log_buf, []
+        for msg in buf:
+            self.logLine.emit(msg)
 
     @Slot(int)
     def _on_progress(self, value):
@@ -718,6 +746,9 @@ class DashboardVM(QObject):
         self._scrape_thread = None
         self._flush_timer.stop()
         self._flush_results()
+        # flush any remaining log lines
+        self._log_flush_timer.stop()
+        self._flush_log_buf()
         self.runningChanged.emit()
         self._set_status("Ready · Configure settings above and press Start.",
                          "secondary_container")

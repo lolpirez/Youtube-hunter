@@ -108,6 +108,8 @@ Item {
                 anchors.fill: parent
                 preferredRendererType: Shape.CurveRenderer
                 transformOrigin: Item.Center
+                layer.enabled: true
+                layer.smooth: true
                 ShapePath {
                     strokeWidth: 0
                     strokeColor: "transparent"
@@ -133,6 +135,8 @@ Item {
                 anchors.fill: parent
                 preferredRendererType: Shape.CurveRenderer
                 transformOrigin: Item.Center
+                layer.enabled: true
+                layer.smooth: true
                 ShapePath {
                     strokeWidth: 1.5
                     strokeColor: U.withAlpha(Theme.outline, 0.55)
@@ -154,6 +158,8 @@ Item {
                 anchors.fill: parent
                 preferredRendererType: Shape.CurveRenderer
                 transformOrigin: Item.Center
+                layer.enabled: true
+                layer.smooth: true
                 ShapePath {
                     strokeWidth: 0
                     strokeColor: "transparent"
@@ -207,6 +213,8 @@ Item {
                 Item {
                     anchors.fill: parent
                     rotation: modelData.a
+                    layer.enabled: true
+                    layer.smooth: true
                     Rectangle {
                         x: orb.c - width / 2
                         y: orb.c - modelData.r - height / 2

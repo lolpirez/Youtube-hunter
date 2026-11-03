@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Window
 import NicheScope
+import "../Utils.js" as U
 
 // A single icon. Normally a remixicon glyph rendered as text; names that have
 // a custom SVG in assets/icons/ (see app.ui.icons.SVG_ICONS) are drawn through
@@ -16,7 +17,10 @@ Text {
     // so its icons stay exactly as they were)
     property bool svg: true
 
-    readonly property bool _svg: svg && name !== "" && Icons.hasSvg(name)
+    // v1.0.9 perf: the SVG set is fixed for the life of the process (it is
+    // discovered from assets/icons at startup), so the answer is memoised in
+    // the shared Utils library instead of asking Python per glyph.
+    readonly property bool _svg: svg && name !== "" && U.iconHasSvg(Icons, name)
 
     // v3.39.8 — an icon that is not on screen does not reload.
     //

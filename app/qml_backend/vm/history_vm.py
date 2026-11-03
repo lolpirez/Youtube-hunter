@@ -13,6 +13,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import threading
 from datetime import datetime
 
 from PySide6.QtCore import QObject, Property, Signal, Slot
@@ -35,6 +36,8 @@ class HistoryVM(QObject):
     changed = Signal()            # list model changed
     folderChanged = Signal()
     toast = Signal(str, str)      # (message, kind)
+    # v1.0.12: (rows, total row count, token) from the off-thread folder scan
+    _scanned = Signal(list, int, int)
 
     @Slot()
     def retranslate(self):
@@ -56,6 +59,16 @@ class HistoryVM(QObject):
         self._rows = []           # cached list of dicts for QML
         self._all_rows = []       # unfiltered (for the search box + totals)
         self._total_rows = 0      # sum of row counts over every export
+        # v1.0.12: the folder scan runs on a worker thread, and row counts are
+        # remembered per (path, size, mtime) so an unchanged export is never
+        # re-read. Before, every visit to History re-opened every CSV / JSONL
+        # line by line, every XLSX workbook and every SQLite export ON THE GUI
+        # THREAD, twice on the first visit (build + show): the page switch
+        # froze for as long as that took.
+        self._scan_token = 0
+        self._count_cache = {}
+        self._count_lock = threading.Lock()
+        self._scanned.connect(self._on_scanned)
 
     # ── properties ─────────────────────────────────────────────────────
     @Property(str, notify=folderChanged)
@@ -127,36 +140,72 @@ class HistoryVM(QObject):
 
     @Slot()
     def refresh(self):
-        self._all_rows = []
-        self._total_rows = 0
+        """Re-scan the export folder off the GUI thread. The list on screen
+        stays as it is until the scan lands (newest scan wins)."""
+        self._scan_token += 1
+        token = self._scan_token
         folder = self._folder
+        # translated strings resolved here, on the GUI thread
+        labels = {"na": tr("N/A"), "file": tr("FILE")}
+
+        def worker():
+            try:
+                rows, total = self._scan_folder(folder, labels)
+            except Exception:       # noqa: BLE001 — best effort
+                rows, total = [], 0
+            try:
+                self._scanned.emit(rows, int(total), token)
+            except RuntimeError:    # VM already gone (app closing)
+                pass
+
+        threading.Thread(target=worker, name="history-scan",
+                         daemon=True).start()
+
+    @Slot(list, int, int)
+    def _on_scanned(self, rows, total, token):
+        if token != self._scan_token:
+            return                  # a newer scan superseded this one
+        self._all_rows = list(rows)
+        self._total_rows = int(total)
+        self._derive()
+
+    def _scan_folder(self, folder, labels):
+        """Pure (no Qt): the export rows + the summed row count."""
+        all_rows = []
+        total_rows = 0
         if not folder or not os.path.isdir(folder):
-            self._rows = []
-            self.changed.emit()
-            return
+            return all_rows, total_rows
         try:
             files = [fn for fn in os.listdir(folder) if fn.lower().endswith(_EXPORT_EXTS)]
         except Exception:
             files = []
-        files.sort(key=lambda f: os.path.getmtime(os.path.join(folder, f)), reverse=True)
 
+        def _mtime(f):
+            try:
+                return os.path.getmtime(os.path.join(folder, f))
+            except OSError:
+                return 0.0
+        files.sort(key=_mtime, reverse=True)
+
+        seen = set()
         for fn in files:
             path = os.path.join(folder, fn)
             partial = _is_partial(fn)
+            seen.add(path)
             try:
                 size_kb = os.path.getsize(path) / 1024
                 size_txt = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{size_kb / 1024:.2f} MB"
             except Exception:
-                size_txt = tr("N/A")
-            rows = self._count_rows(path)
+                size_txt = labels["na"]
+            rows = self._count_rows_cached(path)
             if rows:
-                self._total_rows += rows
+                total_rows += rows
             try:
                 saved = datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d %H:%M")
             except Exception:
-                saved = tr("N/A")
-            ext = os.path.splitext(fn)[1].lstrip(".").upper() or tr("FILE")
-            self._all_rows.append({
+                saved = labels["na"]
+            ext = os.path.splitext(fn)[1].lstrip(".").upper() or labels["file"]
+            all_rows.append({
                 "name": fn,
                 "path": path,
                 # the reference shows a "source" sub-line under the file name;
@@ -164,10 +213,29 @@ class HistoryVM(QObject):
                 "source": ext + " · " + os.path.basename(folder),
                 "partial": partial,
                 "size": size_txt,
-                "rows": humanize_count(rows) if rows is not None else tr("N/A"),
+                "rows": humanize_count(rows) if rows is not None else labels["na"],
                 "saved": saved,
             })
-        self._derive()
+        # forget counts of files that are gone
+        with self._count_lock:
+            for p in [p for p in self._count_cache if os.path.dirname(p) == folder and p not in seen]:
+                self._count_cache.pop(p, None)
+        return all_rows, total_rows
+
+    def _count_rows_cached(self, path):
+        try:
+            st = os.stat(path)
+            key = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            return None
+        with self._count_lock:
+            hit = self._count_cache.get(path)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+        n = self._count_rows(path)
+        with self._count_lock:
+            self._count_cache[path] = (key, n)
+        return n
 
     def _derive(self):
         """Apply the status filter + search box to the cached list. Runs over a

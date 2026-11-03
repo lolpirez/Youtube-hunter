@@ -178,6 +178,11 @@ class ChatVM(QObject):
     sourcesChanged = Signal()
     pendingChanged = Signal()
     streamChanged = Signal()
+    # v1.0.7: the "thinking" step list has its own signal. It shared
+    # streamChanged, which fires ~20x a second while an answer streams, and
+    # every emit handed the Repeater a NEW list: all step rows were destroyed
+    # and rebuilt on every flush, for the whole length of the answer.
+    stepsChanged = Signal()
     busyChanged = Signal()
     configChanged = Signal()
     pickerChanged = Signal()
@@ -289,6 +294,11 @@ class ChatVM(QObject):
         # The provider / model / effort Settings routes "chat" to (AI routing),
         # falling back to the active provider — see app.core.ai.profiles.
         cfg = load_app_config()
+        # v1.0.12: rebuild the QML-exposed choice lists while we already
+        # have cfg+state (they used to reload both on EVERY getter call)
+        self._cached_choices = self._build_profile_choices(cfg)
+        self._cached_groups = self._build_model_groups(cfg)
+        self._cached_follows_default = self._check_follows_default(cfg)
         r = resolve_ai_route("chat", cfg)
         self._ai_route = r
         self._ai_provider = r["provider"]
@@ -366,10 +376,10 @@ class ChatVM(QObject):
         self._reload_ai_config()
         self.configChanged.emit()
 
-    @Property("QVariantList", notify=configChanged)
-    def profileChoices(self):
+    def _build_profile_choices(self, cfg=None):
         """Every saved provider, for the "which AI answers here" list."""
-        state = load_ai_state(load_app_config())
+        if cfg is None: cfg = load_app_config()
+        state = load_ai_state(cfg)
         route = state["routes"].get("chat", {})
         out = [{"id": "", "label": tr("Default provider"),
                 "sub": (find_ai_profile(state, state["active"]) or {}).get("name", ""),
@@ -384,6 +394,10 @@ class ChatVM(QObject):
                         "current": route.get("profile") == p["id"]})
         return out
 
+    @Property("QVariantList", notify=configChanged)
+    def profileChoices(self):
+        return getattr(self, "_cached_choices", [])
+
     @Slot(str)
     def setProfile(self, pid):
         update_ai_route("chat", "profile", pid)
@@ -397,10 +411,10 @@ class ChatVM(QObject):
     _GLYPHS = {"openai": "provider_openai", "anthropic": "provider_anthropic",
                "gemini": "provider_gemini"}
 
-    @Property("QVariantList", notify=configChanged)
-    def modelGroups(self):
+    def _build_model_groups(self, cfg=None):
         try:
-            state = load_ai_state(load_app_config())
+            if cfg is None: cfg = load_app_config()
+            state = load_ai_state(cfg)
         except Exception:
             return []
         route = state["routes"].get("chat", {})
@@ -445,12 +459,20 @@ class ChatVM(QObject):
             })
         return out
 
-    @Property(bool, notify=configChanged)
-    def followsDefault(self):
+    @Property("QVariantList", notify=configChanged)
+    def modelGroups(self):
+        return getattr(self, "_cached_groups", [])
+
+    def _check_follows_default(self, cfg=None):
         try:
-            return not load_ai_state(load_app_config())["routes"].get("chat", {}).get("profile")
+            if cfg is None: cfg = load_app_config()
+            return not load_ai_state(cfg)["routes"].get("chat", {}).get("profile")
         except Exception:
             return True
+
+    @Property(bool, notify=configChanged)
+    def followsDefault(self):
+        return getattr(self, "_cached_follows_default", True)
 
     @Slot(str, str)
     def pickModel(self, pid, model):
@@ -1602,7 +1624,7 @@ class ChatVM(QObject):
     def streamBuildingCards(self):
         return self._stream_cards
 
-    @Property("QVariantList", notify=streamChanged)
+    @Property("QVariantList", notify=stepsChanged)
     def steps(self):
         return self._steps
 
@@ -1707,9 +1729,11 @@ class ChatVM(QObject):
         steps.append(tr("Thinking"))
         steps.append(tr("Writing the answer"))
         self._steps = steps
+        self.stepsChanged.emit()
         self._step_idx = 0
         self._stream_raw = ""
         self._stream_md = ""
+        self._flush.setInterval(45)
         self._stream_cards = False
         self._phase = "thinking"
         self._set_busy(True)
@@ -1769,7 +1793,11 @@ class ChatVM(QObject):
                     last_user, has_sources=bool(srcs),
                     has_briefs=any(s.get("kind") == "brief" for s in srcs),
                     turn_no=turn_no)
-                system = build_system_prompt(block, ui_lang, analysis, hint)
+                try:
+                    creator = load_app_config().get("ideas_creator") or {}
+                except Exception:      # noqa: BLE001 — the profile is optional
+                    creator = {}
+                system = build_system_prompt(block, ui_lang, analysis, hint, creator=creator)
                 history = self._history(history_rows)
                 if stop.is_set():
                     raise ChatCancelled()
@@ -1849,6 +1877,12 @@ class ChatVM(QObject):
 
     def _flush_stream(self):
         self._stream_md, self._stream_cards = stream_display(self._stream_raw)
+        # v1.0.7: the live answer is ONE Markdown Text, re-parsed and re-laid
+        # out in full on every flush. Cheap for a short reply, but on a long
+        # one (several screens of Markdown) each pass costs real frame time.
+        # Flush less often as the answer grows: 45 ms -> 90 -> 150.
+        n = len(self._stream_md)
+        self._flush.setInterval(45 if n < 2500 else 90 if n < 8000 else 150)
         self.streamChanged.emit()
 
     @Slot(int, int)

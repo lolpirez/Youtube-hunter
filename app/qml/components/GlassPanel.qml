@@ -13,8 +13,15 @@ Rectangle {
     // drop shadow turns into a soft accent halo. Used by cards that are
     // interactive or worth "lighting up" (Panel, stat cards).
     property bool hoverGlow: false
+    // v1.0.11: tracking is separate from the glow. A card that switches its
+    // glow off for a while (ArchiveVideoCard while its grid scrolls) keeps
+    // tracking the pointer: disabling a HoverHandler and enabling it again
+    // while the pointer is already inside left `hovered` false until the
+    // pointer left the card and came back, i.e. "no hover for 1-10 s after
+    // scrolling". Defaults to hoverGlow, so every other panel is unchanged.
+    property bool hoverTrack: hoverGlow
     readonly property bool _lit: hoverGlow && gpHover.hovered
-    // pointer is over the card (only tracked when hoverGlow is on)
+    // pointer is over the card (only tracked when hoverTrack is on)
     readonly property bool hovered: gpHover.hovered
     readonly property real _glowK: Theme.glow_level !== undefined ? Theme.glow_level : 1.0
 
@@ -27,7 +34,7 @@ Rectangle {
     Behavior on border.color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durGlow; easing.type: Easing.OutCubic } }
     antialiasing: true
 
-    HoverHandler { id: gpHover; enabled: root.hoverGlow }
+    HoverHandler { id: gpHover; enabled: root.hoverTrack }
 
     // Specular top edge — a 1px line of light that fades out toward the
     // corners, so a card reads as a lit sheet of glass rather than a flat box.

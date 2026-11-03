@@ -93,7 +93,7 @@ Item {
     function _append(batch) {
         for (let i = 0; i < batch.length; ++i)
             _all.push(batch[i])
-        rebuildTimer.interval = Dashboard.isRunning ? 700 : 60
+        rebuildTimer.interval = Dashboard.isRunning ? 1200 : 60
         if (!rebuildTimer.running) rebuildTimer.start()
     }
     Timer {

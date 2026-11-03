@@ -24,7 +24,7 @@ import os
 import re
 import threading
 
-from PySide6.QtCore import QObject, Property, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
 
 from app.config import load_app_config
 from app.core.audio_tracks import audio_tracks_from_formats
@@ -186,6 +186,10 @@ class QualityProbeVM(QObject):
     # worker → GUI bridge (auto-queued across threads)
     _done = Signal(str, "QVariant", str, bool, bool, int)
     # (video_id, rows_or_None, error, ip_limited, clients_agreed, best_px)
+    # v1.0.14: a format / dub switch re-sizes the rows WITHOUT going busy
+    # (video_id, generation, rows_or_None, error)
+    _resized = Signal(str, int, "QVariant", str)
+    resizingChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -212,6 +216,23 @@ class QualityProbeVM(QObject):
         self._audio = ""
         self._done.connect(self._on_done)
         self._tracksReady.connect(self._on_tracks)
+        # v1.0.14: switching MP3 -> M4A -> OPUS used to flip the whole picker
+        # into its "probing" state (busy): skeleton bars, spinner, the ladder's
+        # delegates torn down and rebuilt, the dub list hidden (so the dialog
+        # changed height) and back, on every click. Now a switch keeps the
+        # rows on screen, only marks the sizes as `resizing`, and a quick
+        # run of switches (sliding across the segment, arrow keys) is
+        # coalesced into ONE re-size of the last pick. A generation number
+        # drops any older answer that lands late, so the numbers on screen
+        # always belong to the format that is selected.
+        self._resizing = False
+        self._refmt = False
+        self._gen = 0
+        self._resized.connect(self._on_resized)
+        self._resizeTimer = QTimer(self)
+        self._resizeTimer.setSingleShot(True)
+        self._resizeTimer.setInterval(90)
+        self._resizeTimer.timeout.connect(self._run_recompute)
 
     # ── read-only state for QML ──────────────────────────────────────────
     @Property(str, notify=changed)
@@ -221,6 +242,12 @@ class QualityProbeVM(QObject):
     @Property(bool, notify=changed)
     def busy(self):
         return self._busy
+
+    @Property(bool, notify=resizingChanged)
+    def resizing(self):
+        """Sizes are being re-computed for a new output format / dub. The
+        rows stay valid (same qualities); only the numbers may change."""
+        return self._resizing
 
     @Property(bool, notify=changed)
     def probed(self):
@@ -337,22 +364,28 @@ class QualityProbeVM(QObject):
     def audioFormat(self):
         return self._fmt["audio"]
 
+    def _known(self, kind, key):
+        rows = VIDEO_CONTAINERS if kind == "video" else AUDIO_CODECS
+        return any(c["key"] == key for c in rows)
+
     @Slot(str)
     def setVideoFormat(self, key):
         key = (key or "").lower()
-        if key and key != self._fmt["video"]:
-            save_download_prefs(video=key)
-            self._fmt = download_prefs()
+        if key and key != self._fmt["video"] and self._known("video", key):
+            # in memory first, so the switch answers in the same frame; the
+            # config write is already buffered + off-thread (app.config)
+            self._fmt = dict(self._fmt, video=key)
             self.formatChanged.emit()
+            save_download_prefs(video=key)
             self._recompute()
 
     @Slot(str)
     def setAudioFormat(self, key):
         key = (key or "").lower()
-        if key and key != self._fmt["audio"]:
-            save_download_prefs(audio=key)
-            self._fmt = download_prefs()
+        if key and key != self._fmt["audio"] and self._known("audio", key):
+            self._fmt = dict(self._fmt, audio=key)
             self.formatChanged.emit()
+            save_download_prefs(audio=key)
             self._recompute()
 
     # ── audio track (dubbed videos, v1.2) ────────────────────────────────
@@ -391,8 +424,9 @@ class QualityProbeVM(QObject):
         self.audioChanged.emit()
 
     def _rows_for(self, info):
+        fmt = dict(self._fmt)
         ok, opts, err = qualities_from_info(
-            info, self._fmt["video"], self._fmt["audio"],
+            info, fmt["video"], fmt["audio"],
             audio_lang=audio_lang_for(self._video_id))
         if not ok:
             log_crash("QualityProbeVM: no rows: " + str(err))
@@ -404,28 +438,61 @@ class QualityProbeVM(QObject):
                         if not r.get("isAudio") and r.get("key") != "best"), "")
         return _apply_saved(rows, saved_files(self._video_id), top_key), ""
 
+    def _set_resizing(self, on):
+        on = bool(on)
+        if on != self._resizing:
+            self._resizing = on
+            self.resizingChanged.emit()
+
     def _recompute(self):
         """Re-size the rows for a new output format, from the cached
         extraction (no network). Off the GUI thread: yt-dlp's selection is
-        quick but not free, and the dialog must not stutter on a click."""
+        quick but not free, and the dialog must not stutter on a click.
+
+        v1.0.14: never goes `busy` (the rows stay on screen), and a burst of
+        switches is coalesced: the timer restarts on every call, so only the
+        last pick is computed."""
         vid, info = self._info
+        if self._busy:
+            # the probe is still running: re-size once it has landed, so its
+            # rows cannot keep the format that was picked before the switch
+            self._refmt = True
+            return
         if not info or vid != self._video_id:
             return
-        limited = bool(info.get(_PROBE_LIMITED))
-        agreed = bool(info.get(_PROBE_AGREED))
-        best_px = int(info.get(_PROBE_BEST_PX) or 0)
-        self._busy = True
-        self.changed.emit()
+        self._gen += 1
+        self._set_resizing(True)
+        self._resizeTimer.start()
 
-        def worker(_vid=vid, _info=info):
+    def _run_recompute(self):
+        vid, info = self._info
+        if not info or vid != self._video_id or self._busy:
+            self._set_resizing(False)
+            return
+        gen = self._gen
+
+        def worker(_vid=vid, _info=info, _gen=gen):
             try:
                 rows, err = self._rows_for(_info)
-                self._done.emit(_vid, rows, err, limited, agreed, best_px)
+                self._resized.emit(_vid, _gen, rows, err)
             except Exception as exc:      # noqa: BLE001
                 log_crash("QualityProbeVM._recompute failed: " + str(exc))
-                self._done.emit(_vid, None, str(exc), limited, agreed, best_px)
+                self._resized.emit(_vid, _gen, None, str(exc))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    @Slot(str, int, "QVariant", str)
+    def _on_resized(self, video_id, gen, rows, error):
+        # stale: another switch (or another video) came after this one
+        if video_id != self._video_id or gen != self._gen or self._busy:
+            return
+        self._set_resizing(False)
+        if not rows:
+            # keep the rows already on screen; a failed re-size must not
+            # throw the user back to the generic ladder
+            return
+        self._rows = rows
+        self.changed.emit()
 
     # ── actions ──────────────────────────────────────────────────────────
     @Slot(str)
@@ -457,6 +524,10 @@ class QualityProbeVM(QObject):
             return
 
         self._video_id = video_id
+        self._refmt = False
+        self._resizeTimer.stop()
+        self._gen += 1
+        self._set_resizing(False)
         self._busy = True
         self._probed = False
         self._error = ""
@@ -512,6 +583,9 @@ class QualityProbeVM(QObject):
         """Forget the current probe. Called when the picker closes so the next
         open starts clean instead of flashing the previous video's list."""
         self._video_id = ""
+        self._resizeTimer.stop()
+        self._gen += 1
+        self._set_resizing(False)
         self._busy = False
         self._probed = False
         self._error = ""
@@ -538,6 +612,11 @@ class QualityProbeVM(QObject):
             self._rows = rows
             self._probed = True
             self._error = ""
+            if self._refmt:
+                self._refmt = False
+                self.changed.emit()
+                self._recompute()
+                return
         else:
             # The probe failed, but what is already on disk is still known:
             # the generic ladder keeps its saved markers.

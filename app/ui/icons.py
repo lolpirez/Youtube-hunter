@@ -117,6 +117,11 @@ ICON_MAP = {
     'apps': (59972, 59971),                 # apps-line / apps-fill
     'extension': (62545, 62544),            # puzzle-line / puzzle-fill
     'schedule': (62450, 62449),             # calendar-schedule-line / -fill
+    # v9: ContentLab asked for these two but they were never mapped, so they
+    # silently drew the generic 'icon' grid. Native SVGs now; font fallbacks
+    # (check / file glyph) kept so they never blank if the SVG goes missing.
+    'done_all': (60283, 60283),
+    'upload_file': (60687, 60686),
 }
 
 _FALLBACK = ICON_MAP['icon']

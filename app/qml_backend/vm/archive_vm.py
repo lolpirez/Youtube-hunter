@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 
+from app.qml_backend.vm._row_sig import row_sig
 from PySide6.QtCore import QObject, Property, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 
@@ -1897,4 +1898,5 @@ class ArchiveVM(QObject):
             # The card's fourth stat is how many views this channel drew
             # across ALL matched videos, not just the hero's.
             base["views"] = humanize_count(r.get("view_count", 0) or 0)
+        base["rowSig"] = row_sig(base)
         return base

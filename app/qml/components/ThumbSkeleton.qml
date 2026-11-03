@@ -58,11 +58,13 @@ Item {
         // A soft breathing pulse under the sweep: on a very wide cell the band
         // spends a moment off-screen, and without this the tile looks dead in
         // that gap.
-        SequentialAnimation on opacity {
+        // v1.0.12: Animators (render thread) instead of NumberAnimations, so
+        // a grid of loading tiles costs the GUI thread nothing per frame
+        SequentialAnimation {
             running: root.active && root.visible && root.animate
             loops: Animation.Infinite
-            NumberAnimation { to: 0.72; duration: 900; easing.type: Easing.InOutQuad }
-            NumberAnimation { to: 1.0; duration: 900; easing.type: Easing.InOutQuad }
+            OpacityAnimator { target: base; from: 1.0; to: 0.72; duration: 900; easing.type: Easing.InOutQuad }
+            OpacityAnimator { target: base; from: 0.72; to: 1.0; duration: 900; easing.type: Easing.InOutQuad }
         }
 
         // the travelling highlight band
@@ -82,10 +84,11 @@ Item {
                     color: U.withAlpha(Theme.on_surface, Theme.isDark ? 0.09 : 0.07) }
                 GradientStop { position: 1.0; color: U.withAlpha(Theme.on_surface, 0.0) }
             }
-            SequentialAnimation on x {
+            SequentialAnimation {
                 running: root.active && root.visible && root.animate
                 loops: Animation.Infinite
-                NumberAnimation {
+                XAnimator {
+                    target: sweep
                     from: -sweep.width
                     to: base.width + sweep.width
                     duration: 1250

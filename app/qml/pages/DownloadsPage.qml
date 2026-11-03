@@ -474,7 +474,7 @@ Item {
                                     GradientStop { position: 1.0; color: U.withAlpha(Theme.primary, 0.0) }
                                 }
                                 SequentialAnimation on x {
-                                    running: busySweep.visible
+                                    running: busySweep.visible && page.visible && Tokens.appActive
                                     loops: Animation.Infinite
                                     NumberAnimation { from: -busySweep.width; to: sweepLane.width
                                                       duration: 1200; easing.type: Easing.InOutQuad }
@@ -1087,7 +1087,7 @@ Item {
             visible: ld.pulse
         }
         ParallelAnimation {
-            running: ld.pulse && ld.visible
+            running: ld.pulse && ld.visible && page.visible && Tokens.appActive
             loops: Animation.Infinite
             NumberAnimation { target: ldHalo; property: "scale"; from: 1; to: 2.8; duration: 1400; easing.type: Easing.OutCubic }
             NumberAnimation { target: ldHalo; property: "opacity"; from: 0.55; to: 0; duration: 1400; easing.type: Easing.OutCubic }
@@ -1136,7 +1136,7 @@ Item {
                     GradientStop { position: 1.0; color: Qt.rgba(1, 1, 1, 0.0) }
                 }
                 NumberAnimation on x {
-                    running: ptFill.visible && ptFill.width > 24
+                    running: ptFill.visible && ptFill.width > 24 && page.visible && Tokens.appActive
                     loops: Animation.Infinite
                     from: -90
                     to: Math.max(0, ptFill.width)
@@ -1153,7 +1153,7 @@ Item {
             radius: parent.radius
             color: pt.accent
             SequentialAnimation on x {
-                running: ptSweep.visible
+                running: ptSweep.visible && page.visible && Tokens.appActive
                 loops: Animation.Infinite
                 NumberAnimation { from: -ptSweep.width; to: pt.width
                                   duration: 1300; easing.type: Easing.InOutQuad }
@@ -1270,7 +1270,7 @@ Item {
             ringSize: 46
             thickness: 4
             value: tov.pct
-            spinning: tov.kind === "merging"
+            spinning: tov.kind === "merging" && page.visible && Tokens.appActive
             label: tov.kind === "merging" ? "" : Math.round(tov.pct * 100) + "%"
         }
         Rectangle {

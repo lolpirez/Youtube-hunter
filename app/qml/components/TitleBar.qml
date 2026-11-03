@@ -437,8 +437,11 @@ Rectangle {
                 scale: pressed ? 0.92 : 1.0
                 Behavior on scale { NumberAnimation { duration: Tokens.durFast; easing.type: Easing.OutCubic } }
                 // a press on the bell while the tray is open already closed it (press
-                // outside); don't let the same click open it straight back up
-                onClicked: notifTray.opened ? notifTray.close()
+                // outside); don't let the same click open it straight back up.
+                // v1.0.15: everything here follows notifTray.showing (set the
+                // instant the tray opens / closes), not `opened`, which waits
+                // for the enter transition and filled the bell 1-2 s late.
+                onClicked: notifTray.showing ? notifTray.close()
                          : (Date.now() - notifTray.closedAt > 250 ? notifTray.open() : undefined)
 
                 // HoverHandler avoids the tooltip-open hover blink (see langBtn).
@@ -446,19 +449,19 @@ Rectangle {
 
                 background: Rectangle {
                     radius: Tokens.radiusSm
-                    color: bellHover.hovered || notifTray.opened ? Theme.hover_bg : U.withAlpha(Theme.hover_bg, 0)
+                    color: bellHover.hovered || notifTray.showing ? Theme.hover_bg : U.withAlpha(Theme.hover_bg, 0)
                     Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
                 }
                 contentItem: IconGlyph {
                     name: "notifications"
-                    fill: notifTray.opened
+                    fill: notifTray.showing
                     size: 16
-                    glyphColor: bellHover.hovered || notifTray.opened ? Theme.primary : Theme.on_surface_var
+                    glyphColor: bellHover.hovered || notifTray.showing ? Theme.primary : Theme.on_surface_var
                 }
 
                 // unread count badge (hidden while the tray itself is showing them)
                 Rectangle {
-                    visible: Notifications.unreadCount > 0 && !notifTray.opened
+                    visible: Notifications.unreadCount > 0 && !notifTray.showing
                     z: 2
                     radius: height / 2
                     height: 15
@@ -482,7 +485,7 @@ Rectangle {
                 }
 
                 AppTooltip {
-                    visible: bellHover.hovered && !notifTray.opened
+                    visible: bellHover.hovered && !notifTray.showing
                     delay: 350
                     text: I18n.tr("Notifications")
                 }

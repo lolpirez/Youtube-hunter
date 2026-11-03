@@ -1,4 +1,5 @@
-"""tools/build_icons.py - YouTube Hunter "Aurora 2026" icon set generator.
+"""tools/build_icons.py - YouTube Hunter "Aurora 2026" icon set generator
+(v9 "Aurora Pro" refresh: see the ICONS.update block below).
 
 Every in-page icon (everything except the sidebar's kinetic NavIcon set and
 the fmt_* format toggles) is drawn here on a 24-unit grid and written to
@@ -299,6 +300,97 @@ ALIASES = {
     "filter_none": "content_copy", "search_2": "search",
 }
 
+
+# ── v9 "Aurora Pro" refresh (2026) ─────────────────────────────────────────
+# Audit of the v8 set: these icons either used a dated metaphor (floppy save,
+# skeleton key, hex-nut "settings", database cylinder, globe-with-lens), carried
+# a skeuomorphic glint (search / favorite / lightbulb) that turned into a bite
+# mark on the bold face, or produced a broken bold face (zebra globes, carved
+# chart, jagged gauge, "0" keyhole). Redrawn on the same 24 grid / 1.75 stroke,
+# and where the sidebar's kinetic NavIcon already had modern artwork (gear,
+# spark lens, gauge, trend chart, bulb) the in-page icon now uses the SAME
+# geometry, so the rail and the pages finally speak one language.
+#
+# New role  "o" = line-face-only detail (skipped on the bold face).
+
+
+def _rounded(geom, r_in=0.55, r_out=0.55):
+    """Round both concave and convex corners of a shapely shape."""
+    return geom.buffer(r_in, quad_segs=16).buffer(-r_in - r_out, quad_segs=16).buffer(r_out, quad_segs=16)
+
+
+def _key_outline():
+    from shapely.geometry import Point, LineString
+    from shapely.ops import unary_union
+    import _icon_geom as G
+    bow = Point(15.2, 8.8).buffer(5.6, quad_segs=32)
+    shaft = LineString([(12.2, 11.8), (4.6, 19.4)]).buffer(1.55, cap_style="flat")
+    tooth1 = LineString([(7.3, 16.7), (9.3, 18.7)]).buffer(1.25, cap_style="flat")
+    tooth2 = LineString([(5.2, 18.8), (6.6, 20.2)]).buffer(1.25, cap_style="flat")
+    g = _rounded(unary_union([bow, shaft, tooth1, tooth2]), 0.7, 0.6)
+    return G.to_d(g)
+
+
+_GEAR = ("M10.02 4.87L10.25 2.56A9.6 9.6 0 0 1 13.75 2.56L13.98 4.87A7.4 7.4 0 0 1 15.64 5.56L17.44 4.09"
+         "A9.6 9.6 0 0 1 19.91 6.56L18.44 8.36A7.4 7.4 0 0 1 19.13 10.02L21.44 10.25A9.6 9.6 0 0 1 21.44 13.75"
+         "L19.13 13.98A7.4 7.4 0 0 1 18.44 15.64L19.91 17.44A9.6 9.6 0 0 1 17.44 19.91L15.64 18.44"
+         "A7.4 7.4 0 0 1 13.98 19.13L13.75 21.44A9.6 9.6 0 0 1 10.25 21.44L10.02 19.13A7.4 7.4 0 0 1 8.36 18.44"
+         "L6.56 19.91A9.6 9.6 0 0 1 4.09 17.44L5.56 15.64A7.4 7.4 0 0 1 4.87 13.98L2.56 13.75A9.6 9.6 0 0 1 2.56 10.25"
+         "L4.87 10.02A7.4 7.4 0 0 1 5.56 8.36L4.09 6.56A9.6 9.6 0 0 1 6.56 4.09L8.36 5.56A7.4 7.4 0 0 1 10.02 4.87Z")
+_SPARK_LENS = "M10.9 7.1l.92 2.86 2.86.92-2.86.92-.92 2.86-.92-2.86-2.86-.92 2.86-.92z"
+_GLOBE = [("l", C(12, 12, 9)), ("l", E(12, 12, 3.9, 9)), ("l", P("M3 12h18"))]
+_TREND = [("l", P("M3 3v14.8A3.2 3.2 0 0 0 6.2 21H21")),
+          ("l", P("M7.2 15.2l4-4.6 3.2 3.2 6-7.6")),
+          ("a", C(20.4, 6.2, 1.6))]
+_PANEL = R(3, 4, 18, 16, 3.5)
+
+ICONS.update({
+    # dated metaphors → 2026 metaphors
+    "save": [("l", P("M8.5 7H7a2.5 2.5 0 0 0-2.5 2.5v8.5A2.5 2.5 0 0 0 7 20.5h10a2.5 2.5 0 0 0 2.5-2.5V9.5A2.5 2.5 0 0 0 17 7h-1.5")),
+             ("l", P("M12 3.2v10.6M8.6 10.6l3.4 3.4 3.4-3.4"))],
+    "key": [("b", P(_key_outline())), ("a", C(16.6, 7.4, 1.45))],
+    "settings": [("b", P(_GEAR)), ("b", C(12, 12, 3))],
+    "data": [("b", P("M12 3.4l8.3 4.2a.5.5 0 0 1 0 .9L12 12.7 3.7 8.5a.5.5 0 0 1 0-.9z")),
+             ("l", P("M3.6 12.4l8.4 4.3 8.4-4.3")),
+             ("l", P("M3.6 16.4l8.4 4.3 8.4-4.3"))],
+    "travel_explore": [("b", C(10.9, 10.9, 7.4)), ("l", P("M16.4 16.4l4.6 4.6")), ("a", P(_SPARK_LENS))],
+    # glints removed (they became bite marks on the bold face)
+    "search": [("l", C(10.8, 10.8, 6.9)), ("l", P("M15.9 15.9l4.6 4.6"))],
+    "favorite": [("b", P(HEART))],
+    "lightbulb": [("b", P("M8.64 17.6v-.45c0-.78-.34-1.57-1.01-2.13A7.28 7.28 0 1 1 16.37 15.02c-.67.56-1.01 1.34-1.01 2.13v.45z")),
+                  ("l", P("M9.2 21.2h5.6"))],
+    # broken bold faces rebuilt
+    "chart": _TREND,
+    "query_stats": [("l", P("M3.42 19.15A9.9 9.9 0 1 1 20.58 19.15")),
+                    ("o", P("M6.5 10.35l1.1.88M12 6.5v1.43M17.5 10.35l-1.1.88")),
+                    ("l", P("M12 14.2l4.18-4.73")), ("a", C(12, 14.2, 2))],
+    "language": _GLOBE,
+    "public": _GLOBE,
+    "lock": [("b", R(4.5, 10, 15, 11, 3.5)), ("l", P("M8 10V7.5a4 4 0 0 1 8 0V10")), ("a", R(11, 13.1, 2, 4.4, 1))],
+    "hourglass_empty": [("b", P("M7 3.5h10v2.4a4.4 4.4 0 0 1-1.7 3.5L12 12l3.3 2.6a4.4 4.4 0 0 1 1.7 3.5v2.4H7v-2.4a4.4 4.4 0 0 1 1.7-3.5L12 12 8.7 9.4A4.4 4.4 0 0 1 7 5.9z")),
+                        ("a", P("M9.6 18.9c0-1.2 1.1-2.1 2.4-2.1s2.4.9 2.4 2.1z"))],
+    "visibility_off": [("b", P(EYE)), ("o", C(12, 12, 3.2)), ("l", P("M4 4l16 16"))],
+    "bar_chart": [("b", R(4.5, 12.5, 3, 8, 1.5)), ("b", R(10.5, 3.5, 3, 17, 1.5)), ("b", R(16.5, 8.5, 3, 12, 1.5))],
+    # were remixicon font fallbacks (a different visual language) → native
+    "telegram": [("b", C(12, 12, 9)),
+                 ("A", P("M7.3 11.6l8.6-3.4c.4-.15.8.2.7.6l-1.5 7.2c-.1.45-.6.6-1 .35l-2.3-1.7-1.2 1.15c-.2.2-.55.1-.55-.2v-2.1l3.9-3.6-4.9 3-1.9-.65c-.4-.15-.4-.55.15-.65z"))],
+    "sidebar_fold": [("b", _PANEL), ("l", P("M9 4v16")), ("l", P("M15.6 9.6 13.2 12l2.4 2.4"))],
+    "sidebar_unfold": [("b", _PANEL), ("l", P("M9 4v16")), ("l", P("M13.2 9.6l2.4 2.4-2.4 2.4"))],
+    "done_all": [("l", P("M2.5 12.6l4.4 4.4 9.1-9.4")), ("l", P("M12.4 16.6l.4.4 9.1-9.4"))],
+    "upload_file": [("b", P(DOC)), ("l", P("M14 3v3.5a2 2 0 0 0 2 2h3.5")), ("l", P("M12 17.6v-6.2M9.4 13.9 12 11.3l2.6 2.6"))],
+})
+
+ALIASES.update({
+    "menu_fold": "sidebar_fold", "menu_unfold": "sidebar_unfold",
+    "provider_gemini": "gemini",
+    # in-page uses of the rail names (the rail itself keeps its kinetic set)
+    "nav_scrape": "cloud_download", "nav_niche": "travel_explore", "nav_insights": "chart",
+    "nav_archive": "archive", "nav_ideas": "lightbulb", "nav_downloads": "download",
+    "nav_settings": "settings", "nav_studio": "description", "nav_usage": "query_stats",
+    "nav_chat": "messages", "nav_lab": "biotech", "nav_cutter": "scissors",
+    "nav_history": "history", "nav_monetize": "monetization_on",
+})
+
 # ── Two clean faces, one colour each ─────────────────────────────────────
 # LINE : pure 1.75 outline. Every stroke full-strength currentColor, no fills
 #        except tiny accent dots (the i of info, the ! of warning).
@@ -318,7 +410,7 @@ def render_line(parts):
     stroke = f'stroke="currentColor" stroke-width="{SW_LINE}" stroke-linecap="round" stroke-linejoin="round"'
     out = []
     for role, el in parts:
-        if role in ("b", "l", "f", "A"):
+        if role in ("b", "l", "f", "A", "o"):
             out.append(_style(el, f'fill="none" {stroke}'))
         elif role == "a":
             out.append(_style(el, 'fill="currentColor" stroke="none"'))
@@ -332,6 +424,8 @@ def bold_geometry(parts):
     from shapely.geometry import GeometryCollection
     acc = GeometryCollection()
     for role, el in parts:
+        if role == "o":                      # line-face-only detail
+            continue
         if role in ("b", "t"):
             shape = G.fill_region(el).union(G.stroke_region(el, SW_BOLD)) if role == "b" else G.fill_region(el)
         elif role in ("l", "f"):

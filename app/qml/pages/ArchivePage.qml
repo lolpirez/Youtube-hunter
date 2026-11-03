@@ -121,6 +121,12 @@ Item {
     // v3.44 perf: the page's rows converted from the VM ONCE per change. Every
     // cell used to read Archive.rows itself, i.e. 24 full list conversions.
     readonly property var _rows: Archive.rows || []
+    // v1.0.9 perf: converted ONCE per change and shared by every card (see
+    // ArchiveVideoCard.downloadsMap) instead of once per card.
+    readonly property var _dlMap: Archive.downloads || ({})
+    readonly property var _doneIds: Archive.downloadedIds || []
+    readonly property var _savedIds: Archive.savedIds || []
+    readonly property var _ideaKeys: Ideas.selectedKeys || []
     property int _specSeen: -2
     readonly property int _heroSize: Math.round(Math.max(30, Math.min(50, masterCol.width / 30)))
 
@@ -895,34 +901,24 @@ Item {
                 glyphColor: Theme.primary
             }
         }
+        // v1.0.9 perf: the provider's pre-cut round picture
+        // (image://thumbs/circle/…) instead of Image + mask layer + MultiEffect.
+        // Every section tile (and the open section's header and mini dock)
+        // used to carry two offscreen textures and a shader pass for its logo.
         Image {
             id: saImg
             anchors.centerIn: parent
             width: sa.size; height: sa.size
-            visible: false
-            source: sa.thumb !== "" ? "image://thumbs/" + sa.thumb : ""
-            fillMode: Image.PreserveAspectCrop
+            visible: sa.thumb !== ""
+            source: sa.thumb !== "" ? "image://thumbs/circle/" + sa.thumb : ""
+            fillMode: Image.PreserveAspectFit
             asynchronous: true
             cache: true
-            sourceSize.width: sa.size
-            sourceSize.height: sa.size
-        }
-        Item {
-            id: saMask
-            anchors.centerIn: parent
-            width: sa.size; height: sa.size
-            visible: false
-            layer.enabled: true
-            Rectangle { anchors.fill: parent; radius: width / 2; color: "white" }
-        }
-        MultiEffect {
-            anchors.centerIn: parent
-            width: sa.size; height: sa.size
-            visible: sa.thumb !== ""
-            source: saImg
-            maskEnabled: true
-            maskSource: saMask
-            opacity: saImg.status === Image.Ready ? 1 : 0
+            smooth: true
+            mipmap: true
+            sourceSize.width: sa.size * 2
+            sourceSize.height: sa.size * 2
+            opacity: status === Image.Ready ? 1 : 0
             Behavior on opacity { NumberAnimation { duration: Tokens.durMed } }
         }
     }
@@ -2537,6 +2533,19 @@ Item {
                     // never reflows mid-scroll; a 0-opacity item is skipped
                     // by the renderer entirely.
                     readonly property real _paintPad: cardW * 9 / 16 + 320
+                    // v1.0.9 perf: where the viewport's top edge is, in THIS
+                    // grid's coordinates. One mapToItem per scroll frame for
+                    // the whole deck; every cell then compares its own y with
+                    // it. Each of the 24 cells used to run its own mapToItem
+                    // (twice: paint switch + inView) on every frame.
+                    readonly property real _viewTop: {
+                        const fl = detailScroll.contentItem
+                        if (!fl || !fl.contentItem) return 0
+                        const vy = fl.contentY
+                        const deps = grid.y + deckLoader.y + detailCol.y
+                        return vy - grid.mapToItem(fl.contentItem, 0, 0).y
+                    }
+                    readonly property real _viewH: detailScroll.height
                     Connections {
                         target: App
                         function onRailAnimatingChanged() {
@@ -2571,7 +2580,33 @@ Item {
                         model: Archive.pageSize
                         Item {
                             id: cell
-                            readonly property var rowData: page._rows[index] || ({})
+                            // v1.0.9 perf: the card only gets a NEW row when the
+                            // row really changed. Every rowsChanged (live-stats
+                            // tick, favourite toggle, refresh) hands QML 24 fresh
+                            // objects, and re-assigning them re-ran ~100 bindings
+                            // per card even for the 23 cards whose numbers did not
+                            // move. Rows carry a content signature (rowSig, built
+                            // in archive_vm) and an unchanged one is skipped.
+                            // bound only until this object completes, then set imperatively
+                            property var rowData: cell._src || ({})
+                            property string _rowSig: "-"
+                            property bool _rowLive: false
+                            readonly property var _src: page._rows[index] || null
+                            function _takeRow() {
+                                if (!cell._rowLive) return
+                                const r = cell._src
+                                const sig = r ? String(r.rowSig || "") : ""
+                                if (r && sig !== "" && sig === cell._rowSig) return
+                                cell._rowSig = r ? sig : "-"
+                                cell.rowData = r || ({})
+                            }
+                            on_SrcChanged: cell._takeRow()
+                            Component.onCompleted: {
+                                const r = cell._src
+                                cell._rowSig = r ? String(r.rowSig || "") : "-"
+                                cell.rowData = r || ({})      // replaces the initial binding
+                                cell._rowLive = true
+                            }
                             visible: index < page._rows.length
                             Layout.preferredWidth: grid.cardW
                             Layout.preferredHeight: vcard.implicitHeight
@@ -2595,16 +2630,10 @@ Item {
                             // popped in one after another. Reading y of every
                             // ancestor up to the content makes it follow the
                             // layout.
-                            readonly property real _top: {
-                                const fl = detailScroll.contentItem
-                                const deps = cell.y + deckLoader.y + detailCol.y + cell.height
-                                if (!fl || !fl.contentItem) return deps
-                                return cell.mapToItem(fl.contentItem, 0, 0).y
-                            }
-                            readonly property real _viewY: detailScroll.contentItem ? detailScroll.contentItem.contentY : 0
-                            readonly property bool inView: visible && detailScroll.height > 0
-                                                           && _top + height > _viewY
-                                                           && _top < _viewY + detailScroll.height
+                            // in the deck's own coordinates (see grid._viewTop)
+                            readonly property bool inView: visible && grid._viewH > 0
+                                                           && cell.y + cell.height > grid._viewTop
+                                                           && cell.y < grid._viewTop + grid._viewH
 
                             C.ArchiveVideoCard {
                                 id: vcard
@@ -2622,15 +2651,9 @@ Item {
                                 // scroll position — mapToItem alone does not
                                 // register that dependency. Opacity, not
                                 // `visible`, so the Layout keeps its geometry.
-                                opacity: {
-                                    const vh = detailScroll.height
-                                    if (!detailScroll.contentItem || vh <= 0) return 1
-                                    const pad = grid._paintPad
-                                    const viewY = cell._viewY
-                                    const top = cell._top
-                                    return (top + cell.height > viewY - pad
-                                            && top < viewY + vh + pad) ? 1 : 0
-                                }
+                                opacity: (grid._viewH <= 0
+                                          || (cell.y + cell.height > grid._viewTop - grid._paintPad
+                                              && cell.y < grid._viewTop + grid._viewH + grid._paintPad)) ? 1 : 0
                                 // v1.0.1: pictures land together (see grid)
                                 holdPicture: !grid.picturesReleased
                                 // v3.52: no hover effects while the grid is
@@ -2638,6 +2661,10 @@ Item {
                                 scrollIdle: !detailScroll.gliding
                                 row: cell.rowData
                                 target: Archive
+                                downloadsMap: page._dlMap
+                                doneIds: page._doneIds
+                                savedList: page._savedIds
+                                ideaKeys: page._ideaKeys
                                 cardWidth: grid.cardW
                                 onDownloadRequested: (vid, title, thumb) => qualityPicker.openFor(vid, title, thumb)
                                 onThumbDownloadRequested: (thumb, title, isShort) => page.saveThumb(thumb, title, isShort)

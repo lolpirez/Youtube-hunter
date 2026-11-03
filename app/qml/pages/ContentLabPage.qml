@@ -200,10 +200,9 @@ Item {
         ContentLab.refreshCombineChoices()
         if (ContentLab.tab === 1) Studio.refreshLibrary()
     }
-    Component.onCompleted: {
-        ContentLab.reloadConfig()
-        ContentLab.refreshEntries()
-    }
+    // v1.0.12: removed the duplicate load during background warm-up;
+    // the onVisibleChanged handler above runs on first real show.
+    Component.onCompleted: { }
 
     // Debounce the library search field — pure CPU re-slicing, but rebuilding
     // the card grid on every keystroke still stutters on a big library.
@@ -1258,6 +1257,7 @@ Item {
                                                 position: (index + 1) + " / " + page._railIdeas.length
                                                 active: ContentLab.activeId === (modelData.id || 0)
                                                 regenerating: ContentLab.regenId === (modelData.id || 0)
+                                                loading: labStage.pendingId === (modelData.id || 0)
                                                 onSelected: (id) => { railStrip.forceActiveFocus(); ContentLab.selectIdea(id) }
                                                 onFavorited: (id) => ContentLab.toggleFavorite(id)
                                                 onDeleteRequested: (id) => confirmDelete.ask(id)
@@ -1323,9 +1323,10 @@ Item {
 
                             // the open blueprint
                             // v3.16-p3: async, double-buffered host (see BlueprintStage)
-                            // — switching blueprints shows a loading veil instead
-                            // of freezing the page.
+                            // — a switch keeps the current blueprint on screen and
+                            // lights the chosen rail card while the next one builds.
                             C.BlueprintStage {
+                                id: labStage
                                 Layout.fillWidth: true
                                 scroller: labScroll
                                 visible: ContentLab.hasActive
@@ -2401,7 +2402,7 @@ Item {
                                             GradientStop { position: 1.0; color: Theme.primary_hover }
                                         }
                                         SequentialAnimation on x {
-                                            running: ContentLab.csvBusy && csvSweep.visible
+                                            running: ContentLab.csvBusy && csvSweep.visible && page.visible && Tokens.appActive
                                             loops: Animation.Infinite
                                             NumberAnimation { from: -csvSweep.width; to: csvSweep.parent.width; duration: 1400; easing.type: Easing.InOutQuad }
                                         }

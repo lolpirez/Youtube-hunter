@@ -16,6 +16,8 @@ import "../Utils.js" as U
 //     opening line sits in a quote bar like the hook card in the blueprint;
 //   * the active card carries an accent wash, an accent edge and a lit bar
 //     along its foot — "this is the one open below" reads from across the room;
+//     while that blueprint is still being built the bar turns into a sweep and
+//     the foot says "Opening …", so the selection itself carries the wait;
 //   * `position` ("3 / 12") prints in the corner so keyboard stepping always
 //     says where you are.
 Item {
@@ -24,6 +26,7 @@ Item {
     property var idea: ({})
     property bool active: false
     property bool regenerating: false
+    property bool loading: false
     property string position: ""
 
     signal selected(int ideaId)
@@ -90,12 +93,47 @@ Item {
             width: root.active ? parent.width * 0.5 : 0
             height: 3
             radius: 1.5
+            opacity: root.loading ? 0.3 : 1
+            Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
             Behavior on width { NumberAnimation { duration: Tokens.durSlow; easing.type: Easing.OutCubic } }
             gradient: Gradient {
                 orientation: Gradient.Horizontal
                 GradientStop { position: 0.0; color: U.withAlpha(Theme.primary, 0.0) }
                 GradientStop { position: 0.5; color: Theme.primary }
                 GradientStop { position: 1.0; color: U.withAlpha(Theme.primary, 0.0) }
+            }
+        }
+
+        // while this blueprint is being built the selection's lit bar sweeps:
+        // the wait is carried by the chosen card, not by a spinner over the
+        // blueprint that is still on screen
+        Item {
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 1
+            anchors.horizontalCenter: parent.horizontalCenter
+            width: root.active ? parent.width * 0.5 : 0
+            height: 3
+            clip: true
+            visible: root.loading && root.active
+            Behavior on width { NumberAnimation { duration: Tokens.durSlow; easing.type: Easing.OutCubic } }
+            Rectangle {
+                width: Math.max(40, parent.width * 0.45)
+                height: parent.height
+                radius: 1.5
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.0; color: U.withAlpha(Theme.primary, 0.0) }
+                    GradientStop { position: 0.5; color: Theme.primary }
+                    GradientStop { position: 1.0; color: U.withAlpha(Theme.primary, 0.0) }
+                }
+                XAnimator on x {
+                    running: root.loading
+                    loops: Animation.Infinite
+                    from: I18n.rtl ? parent.width : -width
+                    to: I18n.rtl ? -width : parent.width
+                    duration: 950
+                    easing.type: Easing.InOutSine
+                }
             }
         }
 
@@ -317,9 +355,11 @@ Item {
                 }
                 C.AppText {
                     Layout.fillWidth: true
-                    text: root.regenerating ? I18n.tr("Rebuilding …") : (root.idea.source || "")
+                    text: root.regenerating ? I18n.tr("Rebuilding …")
+                        : root.loading ? I18n.tr("Opening …")
+                        : (root.idea.source || "")
                     font.pixelSize: Tokens.fontMicro
-                    color: root.regenerating ? Theme.primary : Theme.outline
+                    color: root.regenerating || root.loading ? Theme.primary : Theme.outline
                     elide: Text.ElideRight
                 }
                 C.AppText {

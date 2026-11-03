@@ -24,9 +24,10 @@ import "../Utils.js" as U
 //     While you pick references far below it, a floating dock carries the
 //     same Create button, so the one action on the page is never a scroll away.
 //   * Pipeline — (removed in v1.0.4: the step badges on each panel say it)
-//   * My channel (v1.0.4) — who is making the video: niche, audience, what
-//     they can't do (faceless, phone only…) and the output language. Set once,
-//     sent with every run, so a greenlight is something THIS creator can shoot.
+//   * My channel (v1.0.6) — who is making the video: format (cooking, walking
+//     tour, faceless…), niche, audience, what already works, stage, voice,
+//     what they can't do and the output language. Set once, sent with every
+//     run, so a greenlight is something THIS creator can shoot.
 //   * Type & colour — Hanken / IRANYekanX via FontBridge, live Theme accent;
 //     the accent is reserved for "chosen", "ready" and the Create action.
 Item {
@@ -390,215 +391,17 @@ Item {
                     }
                 }
 
-                // ═══════════════ MY CHANNEL (v1.0.4) ═══════════════
+                // ═══════════════ MY CHANNEL (v1.0.6) ═══════════════
                 // The one thing every run was missing: who is making the video.
-                // Folded to one line once it is set; it rides along with every
-                // run (and every single-greenlight rebuild) from then on.
-                C.GlassPanel {
+                // v2: format · channel · stage · voice · limits, as a channel ID
+                // card (see components/CreatorCard.qml). It rides along with
+                // every run, every single-greenlight rebuild and AI Chat.
+                C.CreatorCard {
                     id: creatorCard
                     objectName: "tour_ideasCreator"
                     Layout.fillWidth: true
-                    radius: Tokens.radiusXl
-                    property bool open: false
-                    implicitHeight: creatorCol.implicitHeight + Tokens.space5 * 2
-                    border.color: Ideas.hasCreator ? U.withAlpha(Theme.primary, 0.30) : Theme.border
-
-                    ColumnLayout {
-                        id: creatorCol
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: Tokens.space5
-                        spacing: Tokens.space4
-
-                        GridLayout {
-                            Layout.fillWidth: true
-                            columns: page._narrow ? 1 : 3
-                            columnSpacing: Tokens.space4
-                            rowSpacing: Tokens.space3
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: Tokens.space3
-                                C.IconTile {
-                                    iconName: "user"
-                                    size: 36
-                                    tint: Theme.primary
-                                    Layout.preferredWidth: 36
-                                    Layout.preferredHeight: 36
-                                }
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 2
-                                    Row {
-                                        spacing: Tokens.space2
-                                        C.AppText {
-                                            anchors.verticalCenter: parent.verticalCenter
-                                            text: I18n.tr("My channel")
-                                            weight: Tokens.weightBold
-                                            font.pixelSize: Tokens.fontSubtitle
-                                            color: Theme.text_strong
-                                        }
-                                        Rectangle {
-                                            visible: Ideas.hasCreator
-                                            anchors.verticalCenter: parent.verticalCenter
-                                            radius: Tokens.radiusPill
-                                            implicitWidth: inUse.implicitWidth + 14
-                                            implicitHeight: 22
-                                            color: U.withAlpha(Theme.secondary_container, 0.12)
-                                            border.width: 1
-                                            border.color: U.withAlpha(Theme.secondary_container, 0.35)
-                                            C.AppText {
-                                                id: inUse
-                                                anchors.centerIn: parent
-                                                text: I18n.tr("In every run")
-                                                font.pixelSize: Tokens.fontMicro
-                                                weight: Tokens.weightBold
-                                                color: Theme.secondary_container
-                                            }
-                                        }
-                                    }
-                                    C.AppText {
-                                        Layout.fillWidth: true
-                                        text: Ideas.hasCreator
-                                              ? Ideas.creatorSummary
-                                              : I18n.tr("Tell the AI what you make and what you can't do, so every greenlight is one you can actually shoot.")
-                                        font.pixelSize: Tokens.fontCaption + 1
-                                        color: Theme.on_surface_var
-                                        wrapMode: Text.Wrap
-                                        maximumLineCount: 2
-                                        elide: Text.ElideRight
-                                    }
-                                }
-                            }
-
-                            // output language: always one click away
-                            RowLayout {
-                                spacing: Tokens.space2
-                                Layout.alignment: Qt.AlignVCenter
-                                C.IconGlyph { name: "translate"; size: 15; glyphColor: Theme.on_surface_var }
-                                C.SlideSegment {
-                                    solid: false
-                                    cellHeight: 30
-                                    fontSize: Tokens.fontCaption + 1
-                                    enabledCells: !Ideas.busy
-                                    model: Ideas.outputLanguageOptions
-                                    currentIndex: Ideas.outputLanguage
-                                    onActivated: (i) => Ideas.outputLanguage = i
-                                }
-                            }
-
-                            C.PrimaryButton {
-                                Layout.alignment: Qt.AlignVCenter
-                                variant: creatorCard.open || Ideas.hasCreator ? "ghost" : "primary"
-                                iconName: creatorCard.open ? "check" : (Ideas.hasCreator ? "edit" : "add")
-                                text: creatorCard.open ? I18n.tr("Done")
-                                      : Ideas.hasCreator ? I18n.tr("Edit") : I18n.tr("Set up")
-                                implicitHeight: 38
-                                onClicked: {
-                                    if (creatorCard.open) { nicheSave.flush(); audienceSave.flush() }
-                                    creatorCard.open = !creatorCard.open
-                                }
-                            }
-                        }
-
-                        // ── the form ──
-                        ColumnLayout {
-                            visible: creatorCard.open
-                            Layout.fillWidth: true
-                            spacing: Tokens.space4
-
-                            GridLayout {
-                                Layout.fillWidth: true
-                                columns: page._wide ? 2 : 1
-                                columnSpacing: Tokens.space4
-                                rowSpacing: Tokens.space3
-                                C.LineField {
-                                    id: nicheField
-                                    Layout.fillWidth: true
-                                    label: I18n.tr("What is your channel about?")
-                                    placeholder: I18n.tr("e.g. Honest street-food reviews, one Short a day")
-                                    Component.onCompleted: text = Ideas.creatorNiche
-                                    onTextChanged: nicheSave.restart()
-                                }
-                                C.LineField {
-                                    id: audienceField
-                                    Layout.fillWidth: true
-                                    label: I18n.tr("Who watches it?")
-                                    placeholder: I18n.tr("e.g. 18-30, students, watch on their phone at night")
-                                    Component.onCompleted: text = Ideas.creatorAudience
-                                    onTextChanged: audienceSave.restart()
-                                }
-                            }
-                            // typing is saved after a short pause, not per key
-                            Timer {
-                                id: nicheSave; interval: 700
-                                onTriggered: Ideas.creatorNiche = nicheField.text
-                                function flush() { if (running) { stop(); triggered() } }
-                            }
-                            Timer {
-                                id: audienceSave; interval: 700
-                                onTriggered: Ideas.creatorAudience = audienceField.text
-                                function flush() { if (running) { stop(); triggered() } }
-                            }
-
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: Tokens.space2
-                                C.AppText {
-                                    text: I18n.tr("What you can't or won't do")
-                                    weight: Tokens.weightDemiBold
-                                    font.pixelSize: Tokens.fontBody
-                                    color: Theme.text_strong
-                                }
-                                Flow {
-                                    Layout.fillWidth: true
-                                    spacing: Tokens.space2
-                                    Repeater {
-                                        model: Ideas.constraintOptions
-                                        delegate: AbstractButton {
-                                            id: chip
-                                            required property var modelData
-                                            readonly property bool on: Ideas.creatorConstraints.indexOf(modelData.key) >= 0
-                                            hoverEnabled: true
-                                            implicitHeight: 34
-                                            implicitWidth: chipRow.implicitWidth + 24
-                                            onClicked: Ideas.toggleConstraint(modelData.key)
-                                            HoverHandler { cursorShape: Qt.PointingHandCursor }
-                                            background: Rectangle {
-                                                radius: Tokens.radiusPill
-                                                color: chip.on ? U.withAlpha(Theme.primary, 0.14)
-                                                     : chip.hovered ? Theme.hover_bg : Theme.surface_low
-                                                border.width: 1
-                                                border.color: chip.on ? U.withAlpha(Theme.primary, 0.50) : Theme.border_med
-                                                Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
-                                            }
-                                            contentItem: Item {
-                                                Row {
-                                                    id: chipRow
-                                                    anchors.centerIn: parent
-                                                    spacing: 6
-                                                    C.IconGlyph {
-                                                        anchors.verticalCenter: parent.verticalCenter
-                                                        name: chip.on ? "check" : chip.modelData.icon
-                                                        size: 14
-                                                        glyphColor: chip.on ? Theme.primary : Theme.on_surface_var
-                                                    }
-                                                    C.AppText {
-                                                        anchors.verticalCenter: parent.verticalCenter
-                                                        text: chip.modelData.label
-                                                        font.pixelSize: Tokens.fontCaption + 1
-                                                        weight: Tokens.weightDemiBold
-                                                        color: chip.on ? Theme.text_strong : Theme.on_surface
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    narrow: page._narrow
+                    wide: page._wide
                 }
 
                 // ═══════════════ STEP 1 — the composer ═══════════════

@@ -10,7 +10,7 @@
 
 [Install](docs/INSTALL.md) · [Browser extension](docs/EXTENSION.md) · [Build from source](#build-from-source) · [Changelog](CHANGELOG.md)
 
-![Version](https://img.shields.io/badge/version-1.0.1-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-1.0.2-22c55e?style=flat-square)
 ![Platform](https://img.shields.io/badge/Windows-10%201809%2B%20%7C%2011%20(x64)-0ea5e9?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab?style=flat-square&logo=python&logoColor=white)
 ![Qt](https://img.shields.io/badge/Qt%20Quick-6.12-41cd52?style=flat-square&logo=qt&logoColor=white)
@@ -25,12 +25,12 @@ YouTube Hunter is a desktop workspace for people who run YouTube channels. Point
 It is a native Windows application (Python + Qt Quick/QML). Everything runs on your machine: your API key, your downloads, your archive. A companion **Chrome/Edge extension** puts the same download and cut panel on the YouTube page itself, and the desktop app does the work in the background.
 
 <div align="center">
-<img src="screenshots/scraper.png?v=ocean" width="880" alt="Scraper page">
+<img src="screenshots/scraper.png" width="880" alt="Scraper page">
 </div>
 
 ## Download & install
 
-1. Open the **[latest release](../../releases/latest)** and download **`YouTubeHunter-Setup-1.0.1-x64.exe`**.
+1. Open the **[latest release](../../releases/latest)** and download **`YouTubeHunter-Setup-1.0.2-x64.exe`**.
 2. Run it. It installs **per user** in `%LOCALAPPDATA%\Programs\YouTube Hunter` — no administrator prompt, no UAC, nothing written to `Program Files`.
 3. Launch **YouTube Hunter** from the Start menu or the desktop shortcut.
 
@@ -102,15 +102,15 @@ Step-by-step install (30 seconds): **[docs/EXTENSION.md](docs/EXTENSION.md)**.
 
 | Niche Finder | Video Cutter |
 |---|---|
-| ![Niche Finder](screenshots/niche-finder.png?v=ocean) | ![Video Cutter](screenshots/video-cutter.png?v=ocean) |
+| ![Niche Finder](screenshots/niche-finder.png) | ![Video Cutter](screenshots/video-cutter.png) |
 
 | Content Lab | Settings |
 |---|---|
-| ![Content Lab](screenshots/content-lab.png?v=ocean) | ![Settings](screenshots/settings.png?v=ocean) |
+| ![Content Lab](screenshots/content-lab.png) | ![Settings](screenshots/settings.png) |
 
 | Niche Scan | Scraper |
 |---|---|
-| ![Niche Scan](screenshots/niche-scan.png?v=ocean) | ![Scraper](screenshots/scraper.png?v=ocean) |
+| ![Niche Scan](screenshots/niche-scan.png) | ![Scraper](screenshots/scraper.png) |
 
 ## Supported Windows
 
@@ -195,7 +195,7 @@ installer.iss             Inno Setup script (bundles the app, the extension, the
 
 ## Version
 
-**1.0.1** — the Scraper gains a fast lane with a live results board (outlier sort, title search, deep scan, published window, transcript and file-type toggles) and shows eight videos at a time with **Show more**; saved Niche Scan cards are redesigned; AI Chat is now "Hunter"; the title bar follows the project on Telegram; Settings builds its cards in the background; and Main.qml precompiles during startup, while the existing launch screen stays as it was. Search Archive paints only the cards near the viewport, opens cold sections behind a skeleton, releases thumbnails as one batch and defers the heaviest hover effects while scrolling; the Niche Finder grid gets the same viewport-only painting and a single whole-grid reveal. The Transcripts switch no longer blinks red. The Monetize Checker loads YouTube's pages gzip-compressed and in parallel, probes two videos instead of four and caches the signals for 20 minutes, so a full check returns in seconds instead of minutes; its revenue is now priced per format — the next 30 days split by each upload's own Shorts/long-form format, the back catalogue by a Shorts share capped to the Shorts era — so a channel that pivoted to Shorts is no longer priced at the Shorts pool rate across its entire history.
+**1.0.2** — Content Lab blueprints build only what is on screen: the cover and the open act are built for the first paint and the other acts arm one per idle beat, so the first blueprint is ready in ~1 s instead of 2.4–3.6 s and switching ideas settles in ~0.2–0.9 s. The icon set is redrawn (Aurora Pro); both video grids scroll on a glide wheel and hover returns the moment you aim; the download picker switches format instantly; Niche Finder leads with goal recipes ("Pick a hunt") plus Fine-tune; AI Ideas greenlight follows schema v10 "Masterplan". The Scraper fires a desktop notification when YouTube blocks the IP and shows the block as a glass card. The Monetize Checker prices RPM on the audience and follows the real Partner Program; the notification bell fills on click; settings save in the background; My channel is a channel ID card (Format, Channel, Stage, Voice, Limits); and AI Chat re-renders long answers more calmly.
 
 ## License
 

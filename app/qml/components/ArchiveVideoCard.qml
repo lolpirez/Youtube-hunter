@@ -95,7 +95,7 @@ C.GlassPanel {
     implicitWidth: cardWidth
     implicitHeight: col.implicitHeight
     radius: Tokens.radiusXl
-    elevation: (hovered && scrollIdle) ? 1.25 : 0.4
+    elevation: _hot ? 1.25 : 0.4
     // v3.52 — the page drops this to false while its scroller is moving.
     // Scrolling a grid slides a new card under a pointer that is standing
     // still, and every one of them used to light up: the cover zoomed (re-
@@ -109,28 +109,77 @@ C.GlassPanel {
     // the heaviest three kept firing mid-scroll.
     property bool scrollIdle: true
     hoverGlow: scrollIdle
+    // v1.0.11: the pointer is tracked even while the grid scrolls (see
+    // GlassPanel.hoverTrack); only the EFFECTS wait for scrollIdle. Before,
+    // the HoverHandler itself was switched off mid-scroll and did not come
+    // back on for the card already under the pointer.
+    hoverTrack: true
+    // pointer over the card AND the grid at rest: what every effect reads
+    readonly property bool _hot: hovered && scrollIdle
     Behavior on elevation { NumberAnimation { duration: Tokens.durMed; easing.type: Easing.OutCubic } }
 
     readonly property bool _motion: App.ambientMotion !== undefined ? App.ambientMotion : true
     transform: Translate {
-        y: (card.hovered && card._motion && card.scrollIdle) ? -4 : 0
+        y: (card._hot && card._motion) ? -4 : 0
         Behavior on y { NumberAnimation { duration: Tokens.durMed; easing.type: Easing.OutCubic } }
     }
 
+    // ── shared per-page lookups (v1.0.9 perf) ──
+    // `target.downloads` is a Python dict of every transfer this session, and
+    // reading it from QML converts the WHOLE dict into a fresh JS object. Each
+    // card used to do that on its own, so with a download running (10 ticks a
+    // second) a 24-card page converted it 240 times a second on the GUI
+    // thread: the stutter you felt scrolling while something downloaded. The
+    // grid now converts each of these once per change and hands the same JS
+    // object to every card. The defaults keep any other user of the card
+    // working unchanged.
+    property var downloadsMap: card.target.downloads
+    property var doneIds: card.target.downloadedIds
+    property var savedList: card.target.savedIds
+    property var ideaKeys: Ideas.selectedKeys
+
+    // Row-dependent bindings re-run for every card on every page flip / live
+    // tick; each I18n.tr() / Theme.x read in them is a round-trip into Python.
+    // The strings and colours they need are resolved ONCE per card here.
+    readonly property string _tViews: I18n.tr("views")
+    readonly property string _tPerHour: I18n.tr("per hour")
+    readonly property string _tEngage: I18n.tr("engage")
+    readonly property string _tVsAvg: I18n.tr("vs ch. avg")
+    readonly property string _tUploads: I18n.tr("uploads")
+    readonly property string _tAvgUpload: I18n.tr("avg / upload")
+    readonly property string _tHitsHere: I18n.tr("hits here")
+    readonly property string _tHitViews: I18n.tr("hit views")
+    readonly property string _tSubs: I18n.tr("{s} subs")
+    readonly property var _tTiers: [I18n.tr("Typical"), I18n.tr("Typical"), I18n.tr("Rising"),
+                                    I18n.tr("Strong"), I18n.tr("Breakout"), I18n.tr("Viral")]
+    readonly property color _cPrimary: Theme.primary
+    readonly property color _cWarn: Theme.warn
+    readonly property color _cOnVar: Theme.on_surface_var
+    // v1.0.12: hover-dependent bindings (title, channel name, chevron) and
+    // the download button used to read Theme / I18n on every hover flip and
+    // every download tick; resolved once per card like the ones above.
+    readonly property color _cTextStrong: Theme.text_strong
+    readonly property color _cOutline: Theme.outline
+    readonly property string _tMerging: I18n.tr("Merging…")
+    readonly property string _tDownloading: I18n.tr("Downloading…")
+    readonly property string _tStoppedAt: I18n.tr("Stopped at {pct}%")
+    readonly property string _tOpenFile: I18n.tr("Open file")
+    readonly property string _tDownload: I18n.tr("Download")
+
     // ── download state (shared by Niche Finder + Archive) ──
-    readonly property var _dl: (card.target.downloads[row.videoId || ""]) || null
+    readonly property var _dl: ((card.downloadsMap || {})[row.videoId || ""]) || null
     readonly property bool _downloading: _dl !== null && _dl.state === "running"
     readonly property bool _stopped: _dl !== null && _dl.state === "stopped"
-    readonly property bool _alreadyDone: (card.target.downloadedIds || []).indexOf(row.videoId || "") !== -1
+    readonly property bool _alreadyDone: (card.doneIds || []).indexOf(row.videoId || "") !== -1
     readonly property bool _openable: !_downloading && !_stopped
                                        && ((_dl !== null && _dl.state === "done") || _alreadyDone)
-    readonly property bool _merging: _downloading && (_dl.text || "") === I18n.tr("Merging…")
+    readonly property bool _merging: _downloading && (_dl.text || "") === card._tMerging
     readonly property real _pct: Math.max(0, Math.min(1, ((card._dl && card._dl.pct) || 0) / 100))
     readonly property string _targetUrl: row.isChannel ? (row.channelUrl || "") : (row.videoUrl || "")
 
     // Public so the handler name is plain (onSavedChanged) — drives the pop.
-    readonly property bool saved: (card.target.savedIds || []).indexOf(row.videoId || "") >= 0
-    onSavedChanged: if (card.hovered && card._motion) savePop.restart()
+    readonly property bool saved: (card.savedList || []).indexOf(row.videoId || "") >= 0
+    onSavedChanged: if (card._hot && card._motion) savePop.restart()
 
     // ── outlier heat ──
     // Log-scaled: 1× → 0, 10× → 0.25, 100× → 0.5, 1Kx → 0.75, 10Kx+ → 1.
@@ -139,15 +188,11 @@ C.GlassPanel {
     readonly property real heat: _hasMult ? Math.max(0.04, Math.min(1, Math.log(Math.max(1, _mult)) / Math.LN10 / 4)) : 0
     // 1..5 lit bars on the signal meter
     readonly property int _bars: !_hasMult ? 0 : (_mult < 2 ? 1 : _mult < 10 ? 2 : _mult < 100 ? 3 : _mult < 1000 ? 4 : 5)
-    readonly property color _heatColor: _bars >= 5 ? U.mix(Theme.primary, Theme.warn, 0.62)
-                                        : _bars >= 4 ? U.mix(Theme.primary, Theme.warn, 0.30)
-                                        : _bars >= 3 ? Theme.primary
-                                        : U.mix(Theme.primary, Theme.on_surface_var, 0.45)
-    readonly property string _tier: _bars >= 5 ? I18n.tr("Viral")
-                                  : _bars >= 4 ? I18n.tr("Breakout")
-                                  : _bars >= 3 ? I18n.tr("Strong")
-                                  : _bars >= 2 ? I18n.tr("Rising")
-                                  : I18n.tr("Typical")
+    readonly property color _heatColor: _bars >= 5 ? U.mix(card._cPrimary, card._cWarn, 0.62)
+                                        : _bars >= 4 ? U.mix(card._cPrimary, card._cWarn, 0.30)
+                                        : _bars >= 3 ? card._cPrimary
+                                        : U.mix(card._cPrimary, card._cOnVar, 0.45)
+    readonly property string _tier: card._tTiers[Math.max(0, Math.min(5, _bars))]
     // "2.8Kx" → "2.8K" + "×", so the sign can sit smaller and lighter
     readonly property string _multNum: String(row.multiplier || "").replace(/[x×]\s*$/i, "")
 
@@ -162,25 +207,25 @@ C.GlassPanel {
     // upload, how many of its videos cleared MY filters, and how much attention
     // those hits pulled. Its best video's outlier is the hero above.
     readonly property var _stats: _isChan
-        ? [ { l: I18n.tr("uploads"),     v: row.uploadsText || "—", m: -1 },
-            { l: I18n.tr("avg / upload"), v: row.avgViewsText || "—", m: -1 },
-            { l: I18n.tr("hits here"),   v: row.hitsText || "0",   m: -1 },
-            { l: I18n.tr("hit views"),   v: row.views || "0",      m: -1 } ]
+        ? [ { l: card._tUploads,   v: row.uploadsText || "—", m: -1 },
+            { l: card._tAvgUpload, v: row.avgViewsText || "—", m: -1 },
+            { l: card._tHitsHere,  v: row.hitsText || "0",   m: -1 },
+            { l: card._tHitViews,  v: row.views || "0",      m: -1 } ]
         : (row.chOutlier || "") !== ""
         // v1.0.2: "× its channel's average video" — the cleanest outlier read.
         // Only Niche Finder rows carry it; Archive cards keep three columns.
-        ? [ { l: I18n.tr("views"),    v: row.views || "0",      m: -1 },
-            { l: I18n.tr("vs ch. avg"), v: String(row.chOutlier).replace(/x\s*$/i, "×"), m: -1 },
-            { l: I18n.tr("per hour"), v: row.perHour || "0",    m: -1 },
-            { l: I18n.tr("engage"),   v: row.engagement || "—",
+        ? [ { l: card._tViews,   v: row.views || "0",      m: -1 },
+            { l: card._tVsAvg,   v: String(row.chOutlier).replace(/x\s*$/i, "×"), m: -1 },
+            { l: card._tPerHour, v: row.perHour || "0",    m: -1 },
+            { l: card._tEngage,  v: row.engagement || "—",
               m: isNaN(card._engNum) ? -1 : Math.min(1, card._engNum / 8) } ]
-        : [ { l: I18n.tr("views"),    v: row.views || "0",      m: -1 },
-            { l: I18n.tr("per hour"), v: row.perHour || "0",    m: -1 },
-            { l: I18n.tr("engage"),   v: row.engagement || "—",
+        : [ { l: card._tViews,   v: row.views || "0",      m: -1 },
+            { l: card._tPerHour, v: row.perHour || "0",    m: -1 },
+            { l: card._tEngage,  v: row.engagement || "—",
               m: isNaN(card._engNum) ? -1 : Math.min(1, card._engNum / 8) } ]
 
     readonly property string _subLine: {
-        const subs = I18n.tr("{s} subs").replace("{s}", row.subsText || "—")
+        const subs = card._tSubs.replace("{s}", row.subsText || "—")
         if (row.isChannel === true || !(row.ageShort) || row.ageShort === "—")
             return subs
         return subs + "  ·  " + row.ageShort
@@ -191,7 +236,7 @@ C.GlassPanel {
     // audience's — it is a hint, so it sits quietly in the meta line.
     readonly property string _chanMeta: {
         const bits = []
-        bits.push(I18n.tr("{s} subs").replace("{s}", row.subsText || "—"))
+        bits.push(card._tSubs.replace("{s}", row.subsText || "—"))
         if ((row.channelAgeShort || "") !== "") bits.push(row.channelAgeShort)
         if ((row.channelCountry || "") !== "") bits.push(row.channelCountry)
         return bits.join("  ·  ")
@@ -258,7 +303,9 @@ C.GlassPanel {
                         && thumbImg.status !== Image.Error
                 // a skeleton that keeps sweeping while its card slides past is
                 // pure motion for the eye and pure work for the renderer
-                animate: card.scrollIdle
+                // v1.0.12: a card culled by the grid (opacity 0) kept both
+                // of its skeleton loops running off-screen
+                animate: card.scrollIdle && card.opacity > 0.01
                 topLeftRadius: card._r
                 topRightRadius: card._r
                 bottomLeftRadius: card._r
@@ -301,7 +348,7 @@ C.GlassPanel {
                     cache: true
                     sourceSize.width: _bucketW
                     sourceSize.height: Math.round(_bucketW * 9 / 16)
-                    scale: (card.hovered && card._motion && card.scrollIdle) ? 1.06 : 1.0
+                    scale: (card._hot && card._motion) ? 1.06 : 1.0
                     // v3.53: 720 ms was a slow "breathing" zoom that kept this
                     // card's layered thumbnail + mask re-rendering for most of a
                     // second on every hover — the single heaviest thing a grid of
@@ -460,7 +507,7 @@ C.GlassPanel {
                 anchors.top: parent.top
                 anchors.margins: Tokens.space2 + 2
                 spacing: Tokens.space1 + 2
-                readonly property bool shown: card.hovered && card.scrollIdle
+                readonly property bool shown: card._hot
                 opacity: shown ? 1 : 0
                 visible: opacity > 0.01
                 transform: Translate {
@@ -597,8 +644,8 @@ C.GlassPanel {
                 clip: true
                 implicitHeight: heroCol.implicitHeight
                 HoverHandler { id: meterHover }
-                C.AppTooltip {
-                    visible: meterHover.hovered
+                C.LazyTooltip {
+                    show: meterHover.hovered
                     delay: 300
                     text: card._isChan
                           ? I18n.tr("The best of this channel's matched videos — views ÷ subscribers")
@@ -657,7 +704,7 @@ C.GlassPanel {
                                 width: 11; height: 4; radius: 2
                                 color: lit ? card._heatColor : U.withAlpha(Theme.on_surface, Theme.isDark ? 0.10 : 0.09)
                                 // the lit steps fill in, one after another, on hover
-                                opacity: lit ? ((card.hovered && card._motion) ? 1.0 : 0.88) : 1.0
+                                opacity: lit ? ((card._hot && card._motion) ? 1.0 : 0.88) : 1.0
                                 Behavior on opacity { NumberAnimation { duration: Tokens.durMed + index * 40 } }
                             }
                         }
@@ -696,7 +743,7 @@ C.GlassPanel {
                     }
                     Connections {
                         target: card
-                        function onHoveredChanged() { if (card.hovered && card.scrollIdle && card._bars >= 4 && card._motion) sheenRun.restart() }
+                        function on_HotChanged() { if (card._hot && card._bars >= 4 && card._motion) sheenRun.restart() }
                     }
                 }
             }
@@ -709,7 +756,7 @@ C.GlassPanel {
                 text: row.title || ""
                 weight: Tokens.weightDemiBold
                 font.pixelSize: Tokens.fontLabel
-                color: titleHover.containsMouse ? Theme.primary : Theme.text_strong
+                color: titleHover.containsMouse ? card._cPrimary : card._cTextStrong
                 lineHeight: 1.28
                 wrapMode: Text.Wrap
                 maximumLineCount: 2
@@ -724,8 +771,8 @@ C.GlassPanel {
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
                     onClicked: card.target.openUrl(card._targetUrl)
-                    C.AppTooltip {
-                        visible: titleHover.containsMouse && titleText.truncated
+                    C.LazyTooltip {
+                        show: titleHover.containsMouse && titleText.truncated
                         delay: 500
                         text: row.title || ""
                     }
@@ -845,10 +892,24 @@ C.GlassPanel {
                             anchors.margins: -4
                             property bool armed: false
                             active: armed
+                            // v1.0.12: armed after the pointer has RESTED on
+                            // the card for a moment, not the instant it
+                            // crosses it. Sweeping the mouse over a grid used
+                            // to build a Canvas (texture + 40-arc JS paint)
+                            // in every card it touched: a small hitch per
+                            // card, which is what made the sweep feel rough.
+                            Timer {
+                                id: cometArm
+                                interval: 180
+                                repeat: false
+                                running: card._hot && !cometLoader.armed
+                                onTriggered: cometLoader.armed = true
+                            }
                             Connections {
-                                target: card
-                                function onHoveredChanged() {
-                                    if (card.hovered && card.scrollIdle) cometLoader.armed = true
+                                target: chanBlock
+                                // straight onto the channel row: build now
+                                function onHotChanged() {
+                                    if (chanBlock.hot) cometLoader.armed = true
                                 }
                             }
                             sourceComponent: Canvas {
@@ -903,7 +964,7 @@ C.GlassPanel {
                             text: row.channelTitle || "—"
                             weight: Tokens.weightDemiBold
                             font.pixelSize: card._isChan ? Tokens.fontLabel : Tokens.fontBody
-                            color: chanBlock.hot ? Theme.primary : Theme.text_strong
+                            color: chanBlock.hot ? card._cPrimary : card._cTextStrong
                             elide: Text.ElideRight
                             Layout.fillWidth: true
                             // room for the arrow, so it never sits on the text
@@ -954,7 +1015,7 @@ C.GlassPanel {
                         visible: card._isChan
                         name: I18n.rtl ? "chevron_left" : "chevron_right"
                         size: 16
-                        glyphColor: chanBlock.hovered ? Theme.primary : Theme.outline
+                        glyphColor: chanBlock.hovered ? card._cPrimary : card._cOutline
                         Layout.alignment: Qt.AlignVCenter
                     }
                 }
@@ -1056,8 +1117,8 @@ C.GlassPanel {
                     enabled: (row.videoUrl || "") !== ""
                     cursorShape: Qt.PointingHandCursor
                     onClicked: card.target.openUrl(row.videoUrl || "")
-                    C.AppTooltip {
-                        visible: bestArea.containsMouse
+                    C.LazyTooltip {
+                        show: bestArea.containsMouse
                         delay: 600
                         text: row.bestTitle || ""
                     }
@@ -1145,10 +1206,10 @@ C.GlassPanel {
                             : card._openable ? "play_circle"
                             : "download"
                     text: card._downloading
-                          ? (card._dl.text || I18n.tr("Downloading…"))
+                          ? (card._dl.text || card._tDownloading)
                           : card._stopped
-                            ? I18n.tr("Stopped at {pct}%").replace("{pct}", card._dl.pct || 0)
-                            : card._openable ? I18n.tr("Open file") : I18n.tr("Download")
+                            ? card._tStoppedAt.replace("{pct}", card._dl.pct || 0)
+                            : card._openable ? card._tOpenFile : card._tDownload
                     progress: card._downloading ? (card._dl.pct / 100)
                             : card._stopped ? ((card._dl.pct || 0) / 100) : -1
                     indeterminate: card._merging
@@ -1218,7 +1279,7 @@ C.GlassPanel {
                 Item {
                     id: ideaWrap
                     readonly property bool picked: (row.videoId || "") !== ""
-                                                   && (Ideas.selectedKeys || []).indexOf(row.videoId) >= 0
+                                                   && (card.ideaKeys || []).indexOf(row.videoId) >= 0
                     implicitWidth: 42; implicitHeight: 40
                     Layout.preferredWidth: 42
                     Layout.preferredHeight: 40

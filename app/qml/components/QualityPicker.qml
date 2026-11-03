@@ -365,6 +365,9 @@ Dialog {
         // ── keyboard: ← / → walk the ladder, Enter downloads (Esc closes) ──
         Shortcut { sequences: ["Right"]; enabled: root.opened; onActivated: root._step(1) }
         Shortcut { sequences: ["Left"]; enabled: root.opened; onActivated: root._step(-1) }
+        // v1.0.14: up / down walk the output format (MP3 -> M4A -> ...)
+        Shortcut { sequences: ["Down"]; enabled: root.opened && fmtSeg.visible; onActivated: fmtSeg.pick(Math.min(fmtSeg.fr.length - 1, fmtSeg.idx + 1)) }
+        Shortcut { sequences: ["Up"]; enabled: root.opened && fmtSeg.visible; onActivated: fmtSeg.pick(Math.max(0, fmtSeg.idx - 1)) }
         Shortcut { sequences: ["Return", "Enter"]; enabled: root.opened && dlBtn.enabled; onActivated: dlBtn.clicked() }
 
         // probe status: real formats / checking / generic ladder
@@ -516,11 +519,15 @@ Dialog {
                     : 0
 
                 Repeater {
-                    model: QualityProbe.busy ? [] : root.ladder
+                    // v1.0.14: a COUNT, not the array. A JS-array model rebuilds every
+                    // column whenever the rows change (each format switch), so
+                    // the bars popped instead of easing to their new height.
+                    model: QualityProbe.busy ? 0 : root.ladder.length
                     delegate: Item {
                         id: col
-                        readonly property var r: root.rows[modelData.idx] || ({})
-                        readonly property bool picked: root.selected === modelData.idx
+                        readonly property var m: root.ladder[index] || ({ idx: -1, crown: false, gap: false })
+                        readonly property var r: root.rows[col.m.idx] || ({})
+                        readonly property bool picked: root.selected === col.m.idx
                         readonly property real _h: {
                             var span = ladderBox.barMax - ladderBox.barMin
                             if (root._maxBytes > 0 && (r.sizeBytes || 0) > 0)
@@ -530,7 +537,7 @@ Dialog {
                             var n = Math.max(1, root.ladder.length)
                             return ladderBox.barMin + span * (index + 1) / n
                         }
-                        width: ladderRow.colW + (modelData.gap ? ladderBox.gapW : 0)
+                        width: ladderRow.colW + (col.m.gap ? ladderBox.gapW : 0)
                         height: ladderRow.height
 
                         // size readout above the bar
@@ -543,6 +550,9 @@ Dialog {
                             mono: true
                             weight: col.picked ? Tokens.weightBold : Tokens.weightMedium
                             font.pixelSize: Tokens.fontCaption
+                            // the numbers are being re-sized for a new format
+                            opacity: QualityProbe.resizing ? 0.45 : 1
+                            Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
                             color: col.picked ? Theme.primary : Theme.on_surface_var
                             Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
                         }
@@ -573,9 +583,9 @@ Dialog {
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 anchors.top: parent.top
                                 anchors.topMargin: Tokens.space2 + 2
-                                visible: modelData.crown || !!col.r.isAudio
-                                name: modelData.crown ? "star" : "music_note"
-                                fill: modelData.crown
+                                visible: col.m.crown || !!col.r.isAudio
+                                name: col.m.crown ? "star" : "music_note"
+                                fill: col.m.crown
                                 size: 17
                                 glyphColor: col.picked ? Theme.on_primary : Theme.on_surface_var
                             }
@@ -622,7 +632,7 @@ Dialog {
                             anchors.bottom: parent.bottom
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.selected = modelData.idx
+                            onClicked: root.selected = col.m.idx
                         }
                     }
                 }
@@ -672,11 +682,22 @@ Dialog {
                         Repeater {
                             model: ["←", "→"]
                             Rectangle {
+                                id: stepChip
                                 width: 24; height: 22
                                 radius: Tokens.radiusXs
-                                color: "transparent"
+                                color: stepArea.pressed ? Theme.surface_high
+                                     : stepArea.containsMouse ? U.hoverTint(Theme.surface_low, Theme.isDark, 0.06)
+                                     : "transparent"
                                 border.width: 1
-                                border.color: Theme.border_med
+                                border.color: stepArea.containsMouse ? Theme.outline : Theme.border_med
+                                // v1.0.14: clickable, not just a hint
+                                MouseArea {
+                                    id: stepArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: root._step(index === 0 ? -1 : 1)
+                                }
                                 C.AppText {
                                     anchors.centerIn: parent
                                     text: modelData
@@ -780,6 +801,11 @@ Dialog {
             }
         }
 
+        // v1.0.14 segment: the pill answers the pointer in the same frame
+        // (the switch no longer waits on a disk write or a re-probe), you can
+        // press and SLIDE across it, and the light labels live inside the
+        // pill and travel with it, so the colour change is exactly where the
+        // pill is instead of flipping before it arrives.
         Rectangle {
             id: fmtSeg
             visible: root.rows.length > 0
@@ -801,43 +827,121 @@ Dialog {
                 for (var i = 0; i < fr.length; ++i) if (fr[i].key === root.currentFormat) return i
                 return 0
             }
+            property bool dragging: false
+            property real dragX: 4
+            readonly property real restX: 4 + idx * segW
+            readonly property int hoverIdx: segMouse.containsMouse && !dragging
+                                            ? _indexAt(segMouse.mouseX) : -1
 
+            function _indexAt(px) {
+                if (segW <= 0) return 0
+                return Math.max(0, Math.min(fr.length - 1, Math.floor((px - 4) / segW)))
+            }
+            function pick(i) {
+                if (i < 0 || i >= fr.length || i === idx) return
+                var k = fr[i].key
+                if (root.selectedIsAudio) QualityProbe.setAudioFormat(k)
+                else QualityProbe.setVideoFormat(k)
+            }
+
+            // hover wash under the label the pointer is on
             Rectangle {
-                x: 4 + fmtSeg.idx * fmtSeg.segW
+                visible: fmtSeg.hoverIdx >= 0 && fmtSeg.hoverIdx !== fmtSeg.idx
+                x: 4 + Math.max(0, fmtSeg.hoverIdx) * fmtSeg.segW
                 y: 4
                 width: fmtSeg.segW
                 height: parent.height - 8
                 radius: Tokens.radiusMd
-                color: Theme.text_strong
-                visible: fmtSeg.fr.length > 0
-                Behavior on x { NumberAnimation { duration: Tokens.durMed; easing.type: Easing.OutCubic } }
+                color: U.hoverTint(Theme.surface_low, Theme.isDark, 0.06)
             }
+
+            // base labels (muted)
             Row {
                 x: 4; y: 4
                 Repeater {
                     model: fmtSeg.fr
-                    AbstractButton {
-                        id: fmtBtn
+                    Item {
                         width: fmtSeg.segW
                         height: fmtSeg.height - 8
-                        readonly property bool on: fmtSeg.idx === index
-                        HoverHandler { cursorShape: Qt.PointingHandCursor }
-                        background: Item { }
-                        contentItem: C.AppText {
+                        C.AppText {
+                            anchors.fill: parent
                             text: modelData.label
                             mono: true
                             weight: Tokens.weightBold
                             font.pixelSize: Tokens.fontBody
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
-                            color: fmtBtn.on ? Theme.surface : Theme.on_surface_var
-                        }
-                        onClicked: {
-                            if (root.selectedIsAudio) QualityProbe.setAudioFormat(modelData.key)
-                            else QualityProbe.setVideoFormat(modelData.key)
+                            color: index === fmtSeg.hoverIdx ? Theme.text_strong : Theme.on_surface_var
                         }
                     }
                 }
+            }
+
+            // the pill, carrying its own (light) copy of the labels
+            Rectangle {
+                id: segPill
+                x: fmtSeg.dragging ? fmtSeg.dragX : fmtSeg.restX
+                y: 4
+                width: fmtSeg.segW
+                height: parent.height - 8
+                radius: Tokens.radiusMd
+                color: Theme.text_strong
+                visible: fmtSeg.fr.length > 0
+                clip: true
+                scale: fmtSeg.dragging ? 0.97 : 1
+                Behavior on x {
+                    enabled: !fmtSeg.dragging
+                    NumberAnimation { duration: 240; easing.type: Easing.OutQuint }
+                }
+                Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+                Row {
+                    x: 4 - segPill.x
+                    y: 0
+                    Repeater {
+                        model: fmtSeg.fr
+                        Item {
+                            width: fmtSeg.segW
+                            height: segPill.height
+                            C.AppText {
+                                anchors.fill: parent
+                                text: modelData.label
+                                mono: true
+                                weight: Tokens.weightBold
+                                font.pixelSize: Tokens.fontBody
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                                color: Theme.surface
+                            }
+                        }
+                    }
+                }
+            }
+
+            // press, click or slide
+            MouseArea {
+                id: segMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                preventStealing: true
+                property real _pressX: 0
+                onPressed: (mouse) => { _pressX = mouse.x }
+                onPositionChanged: (mouse) => {
+                    if (!pressed) return
+                    if (!fmtSeg.dragging && Math.abs(mouse.x - _pressX) > 4) {
+                        fmtSeg.dragX = segPill.x
+                        fmtSeg.dragging = true
+                    }
+                    if (!fmtSeg.dragging) return
+                    fmtSeg.dragX = Math.max(4, Math.min(fmtSeg.width - 4 - fmtSeg.segW,
+                                                       mouse.x - fmtSeg.segW / 2))
+                    fmtSeg.pick(fmtSeg._indexAt(mouse.x))
+                }
+                onReleased: (mouse) => {
+                    if (fmtSeg.dragging) fmtSeg.dragging = false
+                    else fmtSeg.pick(fmtSeg._indexAt(mouse.x))
+                }
+                onCanceled: fmtSeg.dragging = false
             }
         }
 

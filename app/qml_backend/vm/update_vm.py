@@ -40,6 +40,16 @@ def _eta(sec):
     return "%ds" % sec
 
 
+
+def _hard_exit():
+    """os._exit skips atexit: write a pending config save first (v1.0.7)."""
+    try:
+        from app.config import flush_app_config
+        flush_app_config()
+    except Exception:  # noqa: BLE001
+        pass
+    os._exit(0)
+
 class UpdateVM(QObject):
     changed = Signal()
     progressChanged = Signal()
@@ -285,7 +295,7 @@ class UpdateVM(QObject):
         if updater.is_packaged():
             QTimer.singleShot(900, QCoreApplication.quit)
             # Belt and braces: if some window refuses to close, still leave.
-            QTimer.singleShot(6000, lambda: os._exit(0))
+            QTimer.singleShot(6000, _hard_exit)
 
     @Slot()
     def openReleasePage(self):

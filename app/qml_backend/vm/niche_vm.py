@@ -21,6 +21,7 @@ import sys
 import threading
 import time
 import traceback
+from app.qml_backend.vm._row_sig import row_sig
 from datetime import datetime, timezone
 
 from PySide6.QtCore import QObject, Property, Signal, Slot
@@ -286,6 +287,8 @@ class NicheVM(QObject):
     _dlMeta = Signal(str, "QVariantMap")
     _thumbDone = Signal(str, str)          # (saved_path_or_"", error)
     _poolLive = Signal(int, list)          # v3.43: (token, fresh rows)
+    # v1.0.12: (sorted ids on disk, token) from the off-thread scan
+    _dlScanned = Signal(list, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -395,6 +398,8 @@ class NicheVM(QObject):
         # whole dict and replaced, so QML's `Niche.signalCounts[track]` read
         # re-evaluates once per filter pass rather than per row.
         self._sig_counts = {}
+        self._preset_cnts = []           # v1.0.14: videos each recipe leaves
+        self._preset_key = None
 
         # per-card action state
         self._raw_by_key = {}     # video_id / channel_id → full raw pool row
@@ -405,6 +410,8 @@ class NicheVM(QObject):
         # Download button becomes Open for these instead of offering to fetch
         # what's already there.
         self._downloaded = set()
+        self._dl_scan_token = 0
+        self._dlScanned.connect(self._on_dl_scanned)
         self._refresh_downloaded(silent=True)
         self._last_query = ""     # for filing favorites under the right group
         self._last_params = {}    # params of the run being archived
@@ -610,6 +617,14 @@ class NicheVM(QObject):
     @Property("QVariantMap", constant=True)
     def signalStops(self):
         return {k: list(v) for k, v in NICHE_SIGNAL_STOPS.items()}
+
+    @Property("QVariantList", notify=resultsChanged)
+    def presetCounts(self):
+        """v1.0.14: how many pooled videos each recipe (NICHE_PRESETS order)
+        would leave if it were applied right now; -1 for "Clear filters".
+        Empty until the first pool exists. Same filter pass applyPreset()
+        triggers, so the number on a tile is the result you get."""
+        return self._preset_cnts
 
     @Property("QVariantMap", notify=resultsChanged)
     def signalCounts(self):
@@ -1368,6 +1383,13 @@ class NicheVM(QObject):
         immediately reports "file couldn't be found". Rebuilt wholesale (not
         incrementally) so entries removed on the Downloads page drop out here
         too. Emits downloadsChanged unless silent (init path)."""
+        self._dl_scan_token += 1      # a sync rebuild supersedes any scan
+        fresh = self._scan_downloaded()
+        self._apply_downloaded(fresh, silent)
+
+    @staticmethod
+    def _scan_downloaded():
+        """The ids whose finished file is on disk. Pure: safe off-thread."""
         try:
             rows = downloads_list()
         except Exception:           # noqa: BLE001 — DB not ready yet
@@ -1384,6 +1406,9 @@ class NicheVM(QObject):
             path = (r.get("filepath") or "").strip()
             if vid and path and os.path.isfile(path):
                 fresh.add(vid)
+        return fresh
+
+    def _apply_downloaded(self, fresh, silent=False):
         if fresh != self._downloaded:
             self._downloaded = fresh
             if not silent:
@@ -1395,8 +1420,37 @@ class NicheVM(QObject):
     def refreshDownloaded(self):
         """Re-read the finished-on-disk set — called when the page is shown,
         so a delete on the Downloads page is reflected here without a
-        restart."""
-        self._refresh_downloaded()
+        restart.
+
+        v1.0.12: off the GUI thread (same as Search Archive since v1.0.1).
+        One DB read + one os.path.isfile() per finished download ran inside
+        every switch to Niche Finder; with a long history or files on a slow
+        / network drive that stalled the page's first frame. The cards keep
+        the set they had until the scan lands, and only emit when it changed."""
+        self._dl_scan_token += 1
+        token = self._dl_scan_token
+
+        def worker():
+            try:
+                fresh = sorted(self._scan_downloaded())
+            except Exception:       # noqa: BLE001 — best effort
+                return
+            try:
+                self._dlScanned.emit(fresh, token)
+            except RuntimeError:    # VM already gone (app closing)
+                pass
+
+        threading.Thread(target=worker, name="niche-downloaded-scan",
+                         daemon=True).start()
+
+    @Slot(list, int)
+    def _on_dl_scanned(self, fresh, token):
+        if token != self._dl_scan_token:
+            return                  # a newer scan / sync rebuild superseded it
+        fresh = set(fresh)
+        if fresh != self._downloaded:
+            self._downloaded = fresh
+            self.downloadsChanged.emit()
 
     @Slot(str)
     def openDownloaded(self, video_id):
@@ -1532,6 +1586,7 @@ class NicheVM(QObject):
         visible result page is left alone until the next search."""
         self._sig_counts = self._signal_counts(self._pool or [],
                                                self._current_filters())
+        self._preset_cnts = self._preset_counts(self._pool or [])
         self.resultsChanged.emit()
 
     def _has_narrow_filters(self):
@@ -1684,6 +1739,14 @@ class NicheVM(QObject):
         search has already superseded."""
         rows = list(self._pool or [])
         query = self._last_query or (self._query or "").strip()
+        # v1.0.13: when the search was translated to another country's language,
+        # tag the archive section so "cloth" (English) and "cloth (BR)" (the
+        # same keyword searched in Brazilian Portuguese) land in separate
+        # sections and the user can tell them apart in the Search Archive.
+        params_for_tag = self._last_params or {}
+        region_tag = params_for_tag.get("translate_region", "")
+        if region_tag and query and not query.endswith("(" + region_tag + ")"):
+            query = query + " (" + region_tag + ")"
         if not rows or not query:
             if manual:
                 self.toast.emit(
@@ -2775,6 +2838,7 @@ class NicheVM(QObject):
             ctx = self._lens_context(pool)
             rows = [r for r in rows if self._lens_ok(r, lens, ctx)]
         self._sig_counts = self._signal_counts(pool, filters)
+        self._preset_cnts = self._preset_counts(pool)
         sort_key = NICHE_SORTS_UI[self._sort][1]
         rows = sort_niche_rows(rows, sort_key)
         channels = self._channels_view
@@ -2860,6 +2924,64 @@ class NicheVM(QObject):
             return lambda r: (r.get("view_count", 0) or 0) >= n
         field = "multiplier" if track == "mult" else "channel_outlier"
         return lambda r: r.get(field) is not None and r[field] >= n
+
+    _PRESET_STR_KEYS = ("subs_min", "subs_max", "views_min", "views_max",
+                        "mult_min", "outlier_min", "vel_min", "eng_min")
+    _PRESET_INT_KEYS = ("format", "duration", "channel_age", "uploads",
+                        "per_channel", "category", "sort")
+
+    def _preset_counts(self, pool):
+        """For each recipe: the pooled videos it would leave (see
+        presetCounts). The form is swapped to the recipe for one filter pass
+        and always put back, so nothing the user set is touched."""
+        if not pool:
+            self._preset_key = None
+            return []
+        # A recipe resets every cut it names, so its count only moves with
+        # the pool and the cuts recipes never touch (country, window, quick
+        # text, mode, radar lens). Dragging a track must stay instant: reuse
+        # the last answer unless one of those changed.
+        try:
+            base = dict(self._current_filters())
+            for k in ("subs_min", "subs_max", "views_min", "views_max",
+                      "mult_min", "outlier_min", "vel_min", "eng_min",
+                      "dur_min_s", "dur_max_s", "ch_videos_max", "category",
+                      "format", "channel_max_age_days"):
+                base.pop(k, None)
+            key = (id(pool), len(pool), self._mode, bool(self._viral_active),
+                   self._viral_lens, repr(sorted(base.items(), key=lambda kv: kv[0])))
+        except Exception:                 # noqa: BLE001
+            key = None
+        if key is not None and key == getattr(self, "_preset_key", None):
+            return self._preset_cnts
+        keys = self._PRESET_STR_KEYS + self._PRESET_INT_KEYS
+        saved = {k: getattr(self, "_" + k) for k in keys}
+        lens = ctx = None
+        if self._viral_active and self._viral_lens:
+            lens = self._VIRAL_LENSES[self._viral_lens][1]
+            ctx = self._lens_context(pool)
+        out = []
+        try:
+            for _name, preset in NICHE_PRESETS:
+                if not preset:
+                    out.append(-1)
+                    continue
+                for k in self._PRESET_STR_KEYS:
+                    setattr(self, "_" + k, str(preset.get(k, "")))
+                for k in self._PRESET_INT_KEYS:
+                    setattr(self, "_" + k, int(preset.get(k, 0)))
+                rows = apply_niche_filters(pool, self._current_filters())
+                if lens:
+                    rows = [r for r in rows if self._lens_ok(r, lens, ctx)]
+                out.append(len(rows))
+        except Exception as exc:          # noqa: BLE001 — a hint, never fatal
+            log_crash("NicheVM._preset_counts: " + str(exc))
+            out = []
+        finally:
+            for k, v in saved.items():
+                setattr(self, "_" + k, v)
+        self._preset_key = key if out else None
+        return out
 
     def _signal_counts(self, pool, filters):
         """For each tuner track: how many pooled videos each stop would leave,
@@ -3044,6 +3166,7 @@ class NicheVM(QObject):
         }
         if channel:
             base.update(_channel_card_fields(r))
+        base["rowSig"] = row_sig(base)
         return base
 
     # ── export ──────────────────────────────────────────────────────────

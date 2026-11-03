@@ -200,13 +200,14 @@ def content_lab_add_ideas(entry_id, ideas):
         cur = conn.cursor()
         cur.execute("SELECT COALESCE(MAX(sort_order), -1) FROM content_lab_ideas WHERE entry_id = ?",
                     (entry_id,))
-        next_order = (cur.fetchone()[0] or -1) + 1
+        row = cur.fetchone()
+        next_order = (row[0] if row and row[0] is not None else -1) + 1
         new_rows = []
         for i, idea in enumerate(ideas):
             cur.execute(
                 "INSERT INTO content_lab_ideas (entry_id, idea_json, is_favorite, created_at, sort_order) "
                 "VALUES (?, ?, 0, ?, ?)",
-                (entry_id, json.dumps(idea), now, next_order + i))
+                (entry_id, json.dumps(idea, default=str, ensure_ascii=False), now, next_order + i))
             new_row = dict(idea)
             new_row["id"] = cur.lastrowid
             new_row["is_favorite"] = False
@@ -217,6 +218,12 @@ def content_lab_add_ideas(entry_id, ideas):
         conn.close()
         return new_rows
     except Exception:
+        import traceback
+        try:
+            from app.crash import log_crash
+            log_crash("content_lab_add_ideas failed:\n" + traceback.format_exc())
+        except Exception:
+            pass
         return []
 
 

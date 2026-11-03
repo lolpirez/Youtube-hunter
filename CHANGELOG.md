@@ -7,6 +7,107 @@ Version numbering restarted at **1.0.0** for the public release.
 
 ---
 
+## v1.0.2 — 2026-11-03 — Content Lab loading rework, Aurora Pro icons, faster grids
+
+- **A blueprint no longer builds all four acts before anything is shown.** The
+  pane used to instantiate all 37 sections (~3,900 QML objects) in one pass as
+  soon as an idea was picked — that was the stall behind the "Loading
+  greenlight…" veil, and it happened again on every idea switch. Only the
+  cover and the open act are built for the first paint now (~800 objects); the
+  other acts are Loaders that arm one per idle beat afterwards, so tab
+  switches stay instant without paying all four acts up front.
+- **Measured headless on the bundled library:** first blueprint ready in
+  0.8–1.1 s (was 2.4–3.6 s), switching between ideas 0.2–0.9 s (was ~1.2 s),
+  and the pane object itself builds in ~30–40 ms instead of 130–210 ms.
+- **Jumps still land:** stages register by key, so a section chip or "next
+  act" that races an act Loader waits for the stage instead of dropping the
+  scroll.
+- **Switching ideas no longer loads over loaded content.** The blueprint
+  already on screen stays while the next one builds; the chosen rail card is
+  the loading state ("Opening …", its lit foot bar sweeping), and a thin line
+  over the pane joins in only when a build outlasts a beat. The new blueprint
+  then replaces the old in one clean frame. The skeleton veil is first-open
+  only now, and its spinner stops the instant the pane lands instead of
+  spinning through the fade-out. Headless, the last loading UI used to clear
+  ~0.8 s after a switch; a fast switch now shows none and settles in ~0.2 s.
+
+## v1.0.2: bundle v1.0.15 — notification bell fix, smarter RPM, real YPP tiers
+
+### Title bar: bell fills on click, not 1-2 s later
+- The bell's filled / highlighted look was bound to the tray's `opened`, which only turns true once the enter transition FINISHES. That transition runs on the GUI thread and stalls while the tray lays out its rows, so the bell filled in late. NotificationsTray now exposes `showing` (set in aboutToShow / aboutToHide) and the bell, its badge and tooltip follow it.
+- Files: app/qml/components/NotificationsTray.qml, app/qml/components/TitleBar.qml
+
+### Monetize Checker: RPM priced on the audience, not the passport
+- `_infer_target_market`: declared languages vote first (video defaultAudioLanguage x2, video / channel defaultLanguage x1); with none declared, the 10 newest titles are read (>= 70 % ASCII letters, and English function words not outnumbered by es/pt/fr/de/it/id/tr ones). English content registered outside US/CA/GB/AU/NZ is priced as US.
+- `_duration_multiplier`: mean long-form duration (each clipped at 1 h, so one livestream VOD can't fake it) scales the long-form RPM band: >= 15 min x1.30, 8-15 min x1.15, < 3 min x0.80, else x1.00, no long-form x1.00. CPM is left alone (more breaks = more impressions, not a higher price).
+- Both are cached in `_ctx`, so retranslate() stays offline. New (additive) keys: rpm.durationMultiplier, rpm.targetMarket ("US (Inferred)" or the code), rpm.targetMarketCode, rpm.targetInferred.
+
+### Monetize Checker: verdict follows the real Partner Program
+- Proof weights: membership 99, super_thanks 98, merch 96, midroll 95, ads 75 (YouTube serves ads on non-partner channels too). Ads and nothing else: capped at 79 %, headline "probably monetized" plus an explanatory note.
+- 500-999 subs with fan-funding proof: "Monetized (Fan Funding Only)"; every ad-revenue figure (tier rows, earnings spans, headline) is $0 with the note "Requires 1,000 subscribers for ad revenue". Ad / mid-roll slots under 1,000 subs are not counted as proof. Hidden subs (None) never trigger this.
+- No proof, numbers only: certainty capped at 72 % (52 + score/5) with a Reused Content / policy note.
+- New (additive) keys: verdict.fanFundingOnly, verdict.adsOnly, headline.note, earnings.*.note. No key removed, no Signal / Slot / Property changed.
+- File: app/qml_backend/vm/monetize_vm.py
+
+## v1.0.2: bundle v1.0.14 — smooth format switch, "Hunt first" Niche tuner, Greenlight v10 "Masterplan"
+
+### Download picker: format switch is instant
+- Switching MP3 / M4A / OPUS / WAV / FLAC (or MP4 / MKV) no longer flips the whole picker into its "probing" state (skeleton, spinner, ladder rebuilt, dub list hidden + dialog resize) on every click. Rows stay on screen; only the sizes dim while they re-compute.
+- Rapid switches are coalesced (90 ms) into one re-size; a generation number drops late answers, so sizes always match the selected format.
+- Ladder columns persist across re-sizes (count model), so bars ease to their new height instead of popping.
+- Segment: pill moves in the same frame, press-and-slide across it, labels live inside the pill so the colour change travels with it. ↑/↓ walk formats, the ←/→ chips are clickable.
+- Files: app/qml_backend/vm/quality_probe.py, app/qml/components/QualityPicker.qml
+
+### Niche Finder: Outlier signal → "Pick a hunt" + "Fine-tune"
+- Recipes are now goal tiles at the top, with their exact cuts and a live count of fetched videos each would leave (NicheVM.presetCounts, cached so dragging a cut stays instant).
+- Tracks renamed in plain words with direction (Channel size · at most, Video views · at least, Beat its subscribers, Beat its own average); an unset track says "Any" quietly.
+- Files: app/qml_backend/vm/niche_vm.py, app/qml/pages/NichePage.qml
+
+### AI Ideas greenlight: schema v10 "Masterplan"
+- New: stakes, Shorts loop, target (Broad/Niche + Browse/Search/Suggested), raw & honest anti-hook on both formats, title+thumbnail pairing, timed audio cues, discovery (searches + spoken keywords), end-screen bridge, open loops inside re-hooks.
+- Rules: titles < 60 chars in 4 fixed formulas, thumbnail text never repeats the title, bottom-right kept clear, tags 0-5, description's first two lines for search/Home, no begging CTAs, debate-driven pinned comment.
+- New model-free checks: thumbnail text adds to the title, open loops planted, ends on a bridge not a goodbye.
+- Files: app/core/ai/content_lab.py, app/qml_backend/vm/_idea_shape.py, app/qml/components/BlueprintPane.qml
+
+## v1.0.13 — IP block desktop notification + modern banner + archive translate tag
+
+### Scraper: IP-block notification (desktop + in-app)
+- When YouTube blocks the IP during transcript extraction, a desktop notification now fires even when the user is outside the app (force=True), so they see the block on their lock screen, in another browser tab, or in another window.
+- The in-app transcript-pause banner is redesigned as a glass card (GlassPanel) with a pulsing shield icon, a shake animation on arrival, an error glow strip at the top, and broken-out stats (found / blocked / none) with icons instead of a single sentence. The two action buttons ("New IP" and "Skip transcripts") are larger and more prominent.
+
+### Niche Finder: translated keyword archive sections
+- Searching a keyword with country translation (e.g. "cloth" translated to Brazilian Portuguese) now archives the results under "cloth (BR)" instead of plain "cloth", so the translated search does not merge into the English one in the Search Archive and the user can tell them apart.
+
+## v1.0.11 — hover is back the moment you aim (Search Archive + Niche Finder)
+
+- Fix: after a scroll, the card under the pointer stayed un-hovered for 1-10 s. The card's HoverHandler was switched off while the grid moved and did not come back for a card the pointer was already inside. It now keeps tracking; only the effects wait for the grid to rest.
+- Fix: touchpad / free-spin / smooth-wheel inertia (and inertia pressing against the top or bottom of the page) no longer keeps hover suppressed; only deltas that really move the content count.
+- Fix: Flickable's lingering `moving` state no longer extends the no-hover window.
+- New: moving the mouse after the wheel goes quiet releases hover immediately, even while a glide tail is still settling.
+- Wheel glide snaps its last sub-pixel instead of crawling through it (~50 ms shorter no-hover tail).
+- Details: docs/CHANGES-v1.0.11-hover-after-scroll.md
+
+## v1.0.10 — faster, smoother video grids
+
+- Search Archive + Niche Finder grids: removed per-card blur layers (Download / icon button glows, section avatars), cut ~1000 Python calls per page flip, shared download/favourite lookups, live updates only rebind changed cards, lazy tooltips.
+- New wheel-scroll engine on every page: continuous glide with acceleration, no per-notch surge.
+- Details: docs/CHANGES-v1.0.10-grid-perf.md
+
+## v1.0.9 — "Aurora Pro" icons
+
+- Redrew the dated icons: save (no more floppy), key, settings (real gear), data, niche explore.
+- Removed skeuomorphic glints from search / favorite / lightbulb; rebuilt the broken bold faces (chart, gauge, globe, lock, hourglass, eye-off, bar chart).
+- Telegram, sidebar toggle, Gemini and nav-name icons are native SVGs now instead of font glyphs.
+- Fixed `done_all` and `upload_file` rendering as the generic grid icon.
+- Details: docs/CHANGES-v1.0.9-aurora-pro-icons.md
+
+## v1.0.2: start-up — settings save in the background, calmer AI Chat, My channel v2
+
+- **`config.json` is cached in memory and written in the background** (coalesced, flushed on exit). Every toggle, chip and switch that saved a setting used to block the UI on a disk write + fsync.
+- **AI Chat**: the "thinking" step rows are no longer rebuilt ~20x a second while an answer streams; long answers re-render less often (45 → 90 → 150 ms); Persian-text detection only scans the first 1.5 K characters.
+- **My channel v2** is a channel ID card: a ring that fills as the AI learns the channel, and five questions in order of impact: **Format** (13 tiles), **Channel** (about, audience, *what already works*), **Stage** (new / growing / established: search-first vs browse-first), **Voice**, and **Limits** (+ one location, zero budget, no reading scripts, family-friendly). Channel (topic) is step 01, Format step 02 with an **Other** tile + "Describe your format"; free-text "Anything else to avoid?" under Limits; the language switch is labelled "Ideas in". Sent with every run, every rebuild and AI Chat.
+- Fix: `CreatorCard.qml` Chip no longer overrides the FINAL `icon` property (QML failed to load Main.qml).
+
 ## v1.0.3 "Daybreak" — a new theme switch, and the archive flash fixed at its root
 
 - **The theme switch is now a daybreak.** The title-bar control blooms into a

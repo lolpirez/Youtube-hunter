@@ -189,6 +189,10 @@ def main():
     # stops printing them instead of dumping ~200 scary-looking lines that
     # mean nothing. Identical messages during a live session still show.
     app.aboutToQuit.connect(note_shutting_down)
+    # v1.0.7: config.json is written in the background (app/config.py); make
+    # sure the last change is on disk before the process goes away.
+    from app.config import flush_app_config
+    app.aboutToQuit.connect(flush_app_config)
 
     # ── the in-app donation page (Support window) ──────────────────────
     # DonateOverlay hosts a live WebEngineView, and QtWebEngine has to be

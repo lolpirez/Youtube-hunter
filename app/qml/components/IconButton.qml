@@ -57,12 +57,16 @@ AbstractButton {
         cursorShape: Qt.PointingHandCursor
     }
 
-    AppTooltip {
-        visible: root.tip !== "" && hh.hovered
+    // v1.0.9 perf: the tooltip is built on the first hover, not with the
+    // button. A grid card carries ~8 of these buttons, so a page of 24 cards
+    // used to build ~200 hidden tooltip trees up front.
+    LazyTooltip {
+        show: root.tip !== "" && hh.hovered
         delay: 350
         text: root.tip
         preferAbove: root.tipAbove
         boundsName: root.tipBoundsName
+        anchorItem: root
     }
 
     // v4: hover warms the tile toward the accent (tint + border + a faint
@@ -74,21 +78,29 @@ AbstractButton {
 
     background: Item {
         // soft accent halo behind the tile (bordered tiles only)
-        Rectangle {
+        // v1.0.9 perf: stacked rounded rects instead of a layer + blur. The
+        // layer used to be created on EVERY hover (a new offscreen texture
+        // and blur chain the moment the pointer arrived: the hover hitch) and
+        // stayed alive on every active tile, e.g. each favourited card.
+        Item {
             id: tileHalo
             anchors.fill: parent
             anchors.margins: 3
-            radius: Tokens.radiusSm + 2
-            color: root._hoverAccent
-            visible: !root.chromeless && !root.overlay && root.enabled
+            visible: !root.chromeless && !root.overlay && root.enabled && opacity > 0.01
             opacity: (root.hovered || root.active) ? 0.22 * (Theme.glow_level !== undefined ? Theme.glow_level : 1.0) : 0.0
             Behavior on opacity { NumberAnimation { duration: Tokens.durGlow; easing.type: Easing.OutCubic } }
-            layer.enabled: tileHalo.visible && tileHalo.opacity > 0.01
-            layer.effect: MultiEffect {
-                blurEnabled: true
-                blur: 1.0
-                blurMax: 24
-                autoPaddingEnabled: true
+            Repeater {
+                model: [0, 3, 7, 11]
+                Rectangle {
+                    required property int index
+                    required property var modelData
+                    anchors.fill: parent
+                    anchors.margins: -modelData
+                    radius: Tokens.radiusSm + 2 + modelData
+                    antialiasing: true
+                    color: root._hoverAccent
+                    opacity: [0.50, 0.28, 0.15, 0.07][index]
+                }
             }
         }
         Rectangle {
@@ -116,7 +128,12 @@ AbstractButton {
         size: root.glyphSize
         glyphColor: (root.overlay || root.active) ? root.accent
                     : root.hovered ? root._hoverAccent : Theme.on_surface_var
-        Behavior on glyphColor { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durMed } }
+        // v1.0.12: no colour fade on the glyph. An SVG glyph's colour is part
+        // of its image://svgicon URL, so a ColorAnimation asked Python for a
+        // brand-new raster on EVERY frame of every hover (each in-between
+        // colour is a cache miss): the hitch when the pointer crossed the
+        // buttons on a grid of cards. The tile tint + border still fade and
+        // the glyph still pops, so the hover reads the same.
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         scale: root.hovered && root.enabled ? 1.12 : 1.0

@@ -74,7 +74,13 @@ Button {
 
         // ── halo ── the accent light pooling under a filled key. A proxy rect,
         // blurred; the label is never rasterised (it lives in contentItem).
-        Rectangle {
+        // v1.0.9 perf: the soft glow under a filled button is FOUR plain
+        // rounded rects stacked outward (the same trick GlassPanel uses for
+        // its hover glow), not a layer + MultiEffect blur. The blur cost one
+        // offscreen texture chain + a shader pass PER BUTTON, so a grid page
+        // with 24 Download buttons carried 24 of them through every scroll
+        // frame and broke batching for everything drawn around them.
+        Item {
             id: halo
             visible: root._filled && root.enabled
             anchors.fill: parent
@@ -82,20 +88,24 @@ Button {
             anchors.rightMargin: 6
             anchors.topMargin: 8
             anchors.bottomMargin: -2
-            radius: Tokens.radiusMd
-            gradient: Gradient {
-                orientation: Gradient.Horizontal
-                GradientStop { position: 0.0; color: root._base }
-                GradientStop { position: 1.0; color: root._base2 }
-            }
             opacity: (root.pressed ? 0.10 : root.hovered ? 0.30 : 0.14) * root._glowK
             Behavior on opacity { NumberAnimation { duration: Tokens.durGlow; easing.type: Easing.OutCubic } }
-            layer.enabled: halo.visible
-            layer.effect: MultiEffect {
-                blurEnabled: true
-                blur: 1.0
-                blurMax: 36
-                autoPaddingEnabled: true
+            Repeater {
+                model: [0, 4, 9, 15]
+                Rectangle {
+                    required property int index
+                    required property var modelData
+                    anchors.fill: parent
+                    anchors.margins: -modelData
+                    radius: Tokens.radiusMd + modelData
+                    antialiasing: true
+                    opacity: [0.55, 0.30, 0.17, 0.08][index]
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.0; color: root._base }
+                        GradientStop { position: 1.0; color: root._base2 }
+                    }
+                }
             }
         }
 
@@ -279,7 +289,8 @@ Button {
                 // hover; no hover pop (the face lift is the feedback).
                 glyphColor: root._filled ? Theme.on_primary
                           : (root.hovered && root.enabled ? Theme.primary : Theme.on_surface_var)
-                Behavior on glyphColor { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+                // v1.0.12: no glyph colour fade (see IconButton: every
+                // in-between colour was a synchronous SVG raster in Python)
                 anchors.verticalCenter: parent.verticalCenter
             }
             AppText {

@@ -272,6 +272,28 @@ class ContentLabVM(QObject):
             for e in content_lab_list_entries(self._entry_search)
         ]
         self.entriesChanged.emit()
+        # v1.0.5: a section left OPEN here must pick up greenlights made in AI
+        # Ideas meanwhile — before, only the landing grid was refreshed and an
+        # open "My ideas" looked like the new idea was never added.
+        if self._open_entry_id is not None:
+            self._reload_open_entry()
+
+    def _reload_open_entry(self):
+        eid = self._open_entry_id
+        if content_lab_get_entry(eid) is None:      # deleted meanwhile
+            self._open_entry_id = None
+            self._open_title = ""
+            self._ideas = []
+            self._active_id = -1
+            self.resultsChanged.emit()
+            return
+        stored = content_lab_get_ideas(eid)
+        fresh = [idea_for_qml(i) for i in reversed(stored)]
+        if [i.get("id") for i in fresh] == [i.get("id") for i in self._ideas]:
+            return                                   # nothing new: keep state
+        self._ideas = fresh
+        self._ensure_active_visible()
+        self.resultsChanged.emit()
 
     @staticmethod
     def _entry_stats(ideas):

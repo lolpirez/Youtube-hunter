@@ -128,8 +128,19 @@ Popup {
     // when the tray last started closing (the bell uses it to ignore the
     // click whose press just closed the tray)
     property real closedAt: 0
-    onAboutToHide: closedAt = Date.now()
+    // v1.0.15: true from the moment open() is called until close() is
+    // called. `opened` only turns true once the enter transition has
+    // FINISHED, and that transition is a GUI-thread NumberAnimation: while
+    // the tray lays out its rows on first open it can stall for 1-2 s, so
+    // the bell (which used to bind to `opened`) filled in late. The bell
+    // now follows this flag, so it reacts on the same frame as the click.
+    property bool showing: false
+    onAboutToHide: {
+        closedAt = Date.now()
+        showing = false
+    }
     onAboutToShow: {
+        showing = true
         root.filter = "all"
         flick.contentY = 0
     }

@@ -36,7 +36,52 @@ from app.core.net import RequestCancelled
 #  generated before this change still render — see _content_lab_clean_idea.
 # ═════════════════════════════════════════════════════════════════════════
 
-CONTENT_LAB_SCHEMA_VERSION = 7
+CONTENT_LAB_SCHEMA_VERSION = 10
+
+# ── v10 "Masterplan" (v1.0.14) ─────────────────────────────────────────────
+# Checked against two full "4-act YouTube masterplan" briefs. v9 already
+# covered most of them (promise + payoff time, angle + triggers, 3 hooks,
+# evidence + model-free data pulse, 4 titles, 3 A/B thumbnails, timed script,
+# re-hooks, capture list, prep, fast version, caption / SEO, CTA, pinned
+# comment, risks, next videos, Shorts funnel). What was missing, and helps
+# EVERY channel type, is added; the old fields that already have renderers
+# are re-used rather than inventing new UI (~+500 tokens per greenlight):
+#   core_promise.stakes   what the viewer loses by skipping it
+#   core_promise.loop     Shorts: how the last beat flows back into the first
+#   target                Broad vs Niche + the traffic lane it is built for
+#                         (Browse / Search / Suggested) + how it holds both
+#   anti_hook             now a RAW & HONEST opener (no hype, cold open,
+#                         skeptic-defuser), asked for long-form too
+#   packaging_brief       pairing + stand_out: how title and thumbnail split
+#                         the job instead of repeating each other
+#   style_guide           music + timed AUDIO cues (dead silence, beat drop…)
+#   discovery             searches, suggested-beside, why it is clicked, and
+#                         spoken_keywords (said out loud, indexed by YouTube)
+#   end_screen            end_target + the last-5-seconds bridge line (no
+#                         goodbye), the "binge tunnel"
+#   rehooks               now must include open loops (plant -> payoff time)
+# Rules tightened: titles <= 60 chars in four fixed formulas, thumbnail text
+# never repeats the title, bottom-right corner left clear for the timestamp,
+# tags cut to 0-5 (they barely matter), the description's first two lines
+# written for search / Home, CTAs never beg, the pinned comment starts a
+# debate. seo.keywords is no longer asked: discovery.search_queries is it.
+
+# ── v9 "Universal" (v1.0.6) ────────────────────────────────────────────────
+# v8 Essentials was lean, but it stopped at the WORDS: a cook, a walking-tour
+# filmer or a faceless editor still had to work out what to capture and what
+# to prepare, and nothing said what the video promises or when it pays off.
+# v9 adds five compact, channel-agnostic fields (~700 tokens) and re-enables
+# their existing renderers:
+#   channel_type     the format the greenlight was written for (verifiable)
+#   core_promise     the one promise + exactly when it is paid off
+#   shot_list        the CAPTURE list: camera, screen, source clips, stock,
+#                    route stops, steps — whatever this format films
+#   production_plan  prep / shoot / edit time, place, what you need, the
+#                    before-you-record checklist (gear only beyond a phone)
+#   lite_version     the version that ships in an hour
+#   funnel           Shorts to cut from a long video / where a Short points
+# The creator profile also grows: channel type, stage, voice and "what
+# already works", so the model stops guessing the format at all.
 
 # ── v7: the audit pack (v1.0.3) ────────────────────────────────────────────
 # A section-by-section audit of the v6 greenlight found four places where two
@@ -179,6 +224,8 @@ def _content_lab_default_idea(format="short"):
         "audience": "",
         "pillar": "",
         "difficulty": "Medium",
+        # v9: the format the greenlight was written for ("Cooking", "Vlog" …)
+        "channel_type": "",
         # Three thumbnail prompts to A/B rather than one to accept. The
         # singular "thumbnail_prompt" stays as the first of them so v1
         # readers (the PDF export, older stored records) keep working.
@@ -188,7 +235,7 @@ def _content_lab_default_idea(format="short"):
         "viral_angle": {"concept": "", "triggers": [], "reasoning": ""},
         # visual/text are LISTS in v2 (two options each) — see
         # _content_lab_clean_str_or_list for how v1 strings are absorbed.
-        "hook": {"focus_tag": "", "visual": [], "text": [], "reasoning": ""},
+        "hook": {"focus_tag": "", "spoken": [], "visual": [], "text": [], "reasoning": ""},
         # An ANTI-HOOK is a reverse-psychology / disqualifying opener that works
         # by pushing the wrong viewer away ("don't watch this if…", "this isn't
         # for everyone") so the right viewer leans in — on a Short a swipe then
@@ -264,7 +311,9 @@ def _content_lab_default_idea(format="short"):
         # ── v5 pack (see the note at CONTENT_LAB_SCHEMA_VERSION) ──
         "score_breakdown": [],
         "core_promise": {"promise": "", "payoff": "", "payoff_time": "",
-                         "differentiator": ""},
+                         "differentiator": "", "stakes": "", "loop": ""},
+        # v10: who it is built for and which traffic lane it is built to win
+        "target": {"spectrum": "", "lane": "", "both": ""},
         "style_guide": {"look": "", "palette": [], "typography": "",
                         "captions": "", "music": "", "sfx": []},
         "on_screen_text": [],
@@ -277,7 +326,8 @@ def _content_lab_default_idea(format="short"):
         "community_post": "",
         # ── v6 pack (see the note at CONTENT_LAB_SCHEMA_VERSION) ──
         "why_now": {"shelf_life": "", "window": "", "why": ""},
-        "discovery": {"search_queries": [], "suggested_beside": [], "browse_trigger": ""},
+        "discovery": {"search_queries": [], "suggested_beside": [], "browse_trigger": "",
+                      "spoken_keywords": []},
         "delivery": {"tone": "", "pace": "", "energy": "", "emphasis": [], "avoid": []},
         "end_screen": {"cards": [], "end_target": "", "line": ""},
         "checkpoints": [],
@@ -321,10 +371,11 @@ def _content_lab_clean_idea(raw, format="short"):
     d["pillar"] = _content_lab_clean_str(raw.get("pillar"))
     diff = _content_lab_clean_str(raw.get("difficulty")).title()
     d["difficulty"] = diff if diff in _CONTENT_LAB_DIFFICULTIES else "Medium"
+    d["channel_type"] = _content_lab_clean_str(raw.get("channel_type"))[:40]
     d["titles"] = _content_lab_clean_list(raw.get("titles"), 5)
 
     # ── thumbnails: 3 labelled prompts in v2, one bare string in v1 ──
-    thumbs = _content_lab_clean_obj_list(raw.get("thumbnails"), ("label", "prompt"), 3)
+    thumbs = _content_lab_clean_obj_list(raw.get("thumbnails"), ("label", "prompt", "text"), 3)
     if not thumbs:
         legacy = _content_lab_clean_str(raw.get("thumbnail_prompt"))
         if legacy:
@@ -349,15 +400,18 @@ def _content_lab_clean_idea(raw, format="short"):
     hk = raw.get("hook") if isinstance(raw.get("hook"), dict) else {}
     d["hook"] = {
         "focus_tag": _content_lab_clean_str(hk.get("focus_tag")),
+        # v8: three spoken / first-line openers, each a different technique
+        "spoken": _content_lab_clean_str_or_list(hk.get("spoken"), 3),
         "visual": _content_lab_clean_str_or_list(hk.get("visual"), 2),
         "text": _content_lab_clean_str_or_list(hk.get("text"), 2),
         "reasoning": _content_lab_clean_str(hk.get("reasoning")),
     }
 
-    # ── anti-hook: short-form only ──
-    # Fill only for Shorts, leaving the empty default on long-form even if a
-    # model reply included the field anyway (same policy as `seo`, inverted).
-    if d["format"] == "short":
+    # ── anti-hook ──
+    # v1-v9: short-form only (a reverse-psychology opener). v10: a raw &
+    # honest opener on BOTH formats; older long-form records simply have none.
+    if d["format"] == "short" or int(raw.get("schema_version") or 0) >= 10 \
+            or not raw.get("schema_version"):
         ah = raw.get("anti_hook") if isinstance(raw.get("anti_hook"), dict) else {}
         d["anti_hook"] = {
             "focus_tag": _content_lab_clean_str(ah.get("focus_tag")),
@@ -500,6 +554,7 @@ def _content_lab_clean_idea(raw, format="short"):
     _clean_v5(raw, d)
     _clean_v6(raw, d)
     _clean_v7(raw, d)
+    _clean_v10(raw, d)
     # stored, already-resolved data passes straight through
     if isinstance(raw.get("refs"), list):
         d["refs"] = [r for r in raw["refs"][:24] if isinstance(r, dict)]
@@ -543,7 +598,8 @@ def _clean_v5(raw, d):
 
     cp = raw.get("core_promise") if isinstance(raw.get("core_promise"), dict) else {}
     d["core_promise"] = {k: _content_lab_clean_str(cp.get(k))
-                         for k in ("promise", "payoff", "payoff_time", "differentiator")}
+                         for k in ("promise", "payoff", "payoff_time", "differentiator",
+                                   "stakes", "loop")}
 
     sg = raw.get("style_guide") if isinstance(raw.get("style_guide"), dict) else {}
     palette = [c for c in _content_lab_clean_list(sg.get("palette"), 5) if _HEX_RE.match(c)]
@@ -602,6 +658,7 @@ def _clean_v6(raw, d):
         "search_queries": _content_lab_clean_list(dc.get("search_queries"), 6),
         "suggested_beside": _content_lab_clean_list(dc.get("suggested_beside"), 3),
         "browse_trigger": _content_lab_clean_str(dc.get("browse_trigger")),
+        "spoken_keywords": _content_lab_clean_list(dc.get("spoken_keywords"), 6),
     }
     dl = raw.get("delivery") if isinstance(raw.get("delivery"), dict) else {}
     d["delivery"] = {
@@ -621,6 +678,27 @@ def _clean_v6(raw, d):
         raw.get("checkpoints"), ("when", "check", "good_sign", "if_not"), 4)
     d["reply_bank"] = _content_lab_clean_obj_list(
         raw.get("reply_bank"), ("comment", "reply"), 5)
+
+
+_SPECTRUM = ("Broad", "Niche")
+_LANES = ("Browse", "Search", "Suggested")
+
+
+def _clean_v10(raw, d):
+    """The v10 "Masterplan" target block — fixed tokens kept fixed, a
+    translated / free-text answer degrades to empty instead of a wrong chip."""
+    tg = raw.get("target") if isinstance(raw.get("target"), dict) else {}
+    spec = _content_lab_clean_str(tg.get("spectrum")).title()
+    spec = {"عام": "Broad", "گسترده": "Broad", "تخصصی": "Niche", "خاص": "Niche"}.get(spec, spec)
+    lane = _content_lab_clean_str(tg.get("lane")).title()
+    lane = {"جستجو": "Search", "سرچ": "Search", "پیشنهادی": "Suggested",
+            "صفحه اصلی": "Browse", "براوز": "Browse", "Home": "Browse",
+            "Shorts Feed": "Browse", "Suggested Videos": "Suggested"}.get(lane, lane)
+    d["target"] = {
+        "spectrum": spec if spec in _SPECTRUM else "",
+        "lane": lane if lane in _LANES else "",
+        "both": _content_lab_clean_str(tg.get("both")),
+    }
 
 
 def _clean_v7(raw, d):
@@ -756,20 +834,113 @@ def _attach_refs(ideas, videos, csv_sources):
     return ideas
 
 
-def _content_lab_parse_ideas_response(raw, n_expected=3, format="short"):
-    text = (raw or "").strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text[:4].lower() == "json":
-            text = text[4:]
-        text = text.strip()
-    start, end = text.find("{"), text.rfind("}")
-    candidate = text[start:end + 1] if (start != -1 and end != -1 and end > start) else text
+_THINK_RE = __import__("re").compile(
+    r"<(think|thinking|reasoning)>.*?</\1>", __import__("re").S | __import__("re").I)
+_IDEAS_KEY_RE = __import__("re").compile(r'\{\s*"ideas"\s*:')
+_TRAILING_COMMA_RE = __import__("re").compile(r",\s*([}\]])")
+
+
+def _strip_reasoning(text):
+    """Drop a reasoning model's <think>…</think> preamble (DeepSeek-R1, QwQ,
+    many OpenRouter / local models send it INSIDE the content). Its braces
+    used to be taken for the JSON and the whole reply read as unstructured."""
+    t = _THINK_RE.sub("", text or "")
+    low = t.lower()
+    for tag in ("</think>", "</thinking>", "</reasoning>"):
+        i = low.rfind(tag)
+        if i != -1:                       # a close with no open: keep what follows
+            t = t[i + len(tag):]
+            low = t.lower()
+    for tag in ("<think>", "<thinking>", "<reasoning>"):
+        if low.lstrip().startswith(tag):  # never closed (cut off): skip to the JSON
+            m = _IDEAS_KEY_RE.search(t)
+            t = t[m.start():] if m else ""
+            break
+    return t
+
+
+def _close_truncated_json(text):
+    """Best-effort repair of a reply that was CUT OFF mid-JSON (the provider's
+    output cap). Walks the text tracking strings and brackets, then retries
+    the parse from the end backwards: cut after the last complete member,
+    close every open bracket. Returns the parsed object or None."""
+    stack, cuts = [], []
+    in_str = esc = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            cuts.append((i + 1, tuple(stack)))
+        elif ch == ",":
+            cuts.append((i, tuple(stack)))
+    for pos, st in reversed(cuts[-400:]):
+        if not st:
+            chunk = text[:pos]
+        else:
+            chunk = text[:pos] + "".join(reversed(st))
+        try:
+            return json.loads(_TRAILING_COMMA_RE.sub(r"\1", chunk))
+        except Exception:
+            continue
+    return None
+
+
+def _loads_lenient(candidate):
+    """json.loads, then the cheap fixes models need most often: trailing
+    junk after the object, trailing commas, and a truncated tail."""
     try:
-        data = json.loads(candidate)
-        ideas_raw = data.get("ideas") or []
+        return json.loads(candidate)
+    except Exception:
+        pass
+    try:
+        return json.JSONDecoder().raw_decode(candidate)[0]
+    except Exception:
+        pass
+    try:
+        return json.loads(_TRAILING_COMMA_RE.sub(r"\1", candidate))
+    except Exception:
+        pass
+    return _close_truncated_json(candidate)
+
+
+def _content_lab_parse_ideas_response(raw, n_expected=3, format="short"):
+    text = _strip_reasoning((raw or "").strip()).strip()
+    # code fences anywhere in the reply, not only at the very start
+    if "```" in text:
+        import re as _re
+        m = _re.search(r"```(?:json|JSON)?\s*(.*?)(?:```|$)", text, _re.S)
+        if m and "{" in m.group(1):
+            text = m.group(1).strip()
+    m = _IDEAS_KEY_RE.search(text)
+    start = m.start() if m else text.find("{")
+    if start == -1:
+        start = text.find("[")
+    candidate = text[start:] if start != -1 else text
+    data = _loads_lenient(candidate) if candidate else None
+    try:
+        if isinstance(data, dict):
+            ideas_raw = data.get("ideas")
+            if ideas_raw is None and data.get("title"):
+                ideas_raw = [data]          # a model that sent one idea bare
+        elif isinstance(data, list):
+            ideas_raw = data
+        else:
+            ideas_raw = None
+        ideas_raw = ideas_raw if isinstance(ideas_raw, list) else []
         cleaned = [_content_lab_clean_idea(i, format) for i in ideas_raw[:max(n_expected, 1)]
-                   if isinstance(i, dict)]
+                   if isinstance(i, dict) and str(i.get("title") or "").strip()]
         if cleaned:
             # Freshly generated, so by definition written to the current
             # schema — the model never sends schema_version itself, and
@@ -803,6 +974,7 @@ def _is_persian(text):
 
 # v1.0.4 — the creator profile ("My channel" on the AI Ideas page). Tokens are
 # fixed English keys (stored in config); the model gets a plain sentence each.
+# v1.0.6: + channel type, stage, voice and "what already works".
 CREATOR_CONSTRAINTS = {
     "faceless": "Faceless channel: the creator never appears on camera. No talking-head shots.",
     "solo": "One person does everything (script, shoot, edit). No crew, no second host.",
@@ -810,32 +982,105 @@ CREATOR_CONSTRAINTS = {
     "quick_edit": "Edits must be quick: under ~2 hours per video, simple cuts and captions.",
     "no_voice": "No voiceover: tell the story with on-screen text, captions and music.",
     "clips": "Clip / compilation channel: builds on existing footage, adds framing and commentary.",
+    "home": "Films at home / in one location. No travel, no outdoor set-ups, no booked venues.",
+    "no_budget": "Zero budget: nothing to buy, rent or book; only what the creator already has.",
+    "no_script": "Does not read scripts: lines must work as short talking points to say naturally.",
+    "family": "Family-friendly: no swearing, no shock or gore, nothing a parent would skip.",
 }
+
+# What the videos LOOK like. Picking one is the biggest single lift in fit:
+# the model no longer has to guess whether "travel" means a talking-head
+# vlog, a silent 4K walk or a faceless explainer.
+CREATOR_TYPES = {
+    "talking_head": "Talking head: the creator speaks to camera; the face and voice carry the video.",
+    "vlog": "Vlog: follows the creator's real day / trip / project, filmed as it happens.",
+    "walk": "Walking tour / POV: the camera walks a real place with little or no talking; "
+            "the route, the ambient sound and on-screen labels carry it.",
+    "tutorial": "Tutorial / how-to: teaches a skill or fixes a problem step by step (tech, DIY, crafts, beauty).",
+    "cooking": "Cooking / recipes: the dish, the ingredients and the steps, close-up.",
+    "education": "Education / lessons: teaches a subject or a language; clarity, examples and practice moments.",
+    "faceless": "Faceless voice-over: narration over B-roll, stock, screen recordings or animation.",
+    "compilation": "Compilation / edit: built from existing clips (reactions, rankings, highlights, memes).",
+    "gaming": "Gaming: gameplay footage with commentary, challenges or guides.",
+    "review": "Reviews / unboxing: products, places or services, judged honestly.",
+    "story": "Storytelling / commentary: a narrated story, case, documentary or opinion piece.",
+    "music": "Music / ASMR / ambience: sound and visuals first, few or no words.",
+    "podcast": "Podcast / interview: conversation between people, often clipped into Shorts.",
+}
+
+CREATOR_STAGES = {
+    "new": "New channel (under ~1K subscribers): almost no browse / suggested traffic yet. Favour clear, "
+           "searchable topics and titles over curiosity-only packaging; one idea per video.",
+    "growing": "Growing channel (~1K-100K subscribers): a returning audience exists. Balance search and "
+               "browse, and build repeatable series viewers can binge.",
+    "established": "Established channel (100K+ subscribers): strong browse and returning viewers. Packaging "
+                   "and novelty matter most; keep the channel's recognisable format.",
+}
+
+CREATOR_TONES = {
+    "energetic": "Energetic: fast, punchy, high-energy delivery.",
+    "calm": "Calm: slow, relaxed, soothing delivery; no shouting, no hype.",
+    "funny": "Funny: humour first; jokes, timing and playful edits.",
+    "serious": "Serious: credible, precise, no clickbait tone.",
+    "cinematic": "Cinematic: visual, moody, music-led storytelling.",
+    "warm": "Warm: friendly and personal, like talking to a friend.",
+}
+
+
+def creator_fact_lines(creator):
+    """The profile as plain fact lines ("- Channel: ..."), shared by the
+    greenlight prompt and AI Chat. [] when the profile says nothing."""
+    c = creator if isinstance(creator, dict) else {}
+    niche = str(c.get("niche") or "").strip()[:400]
+    audience = str(c.get("audience") or "").strip()[:300]
+    proven = str(c.get("proven") or "").strip()[:400]
+    ctype = CREATOR_TYPES.get(str(c.get("type") or ""))
+    stage = CREATOR_STAGES.get(str(c.get("stage") or ""))
+    tone = CREATOR_TONES.get(str(c.get("tone") or ""))
+    rules = [CREATOR_CONSTRAINTS[t] for t in (c.get("constraints") or [])
+             if t in CREATOR_CONSTRAINTS]
+    # v1.0.7: "Other" format and limits in the creator's own words
+    type_custom = str(c.get("type_custom") or "").strip()[:120]
+    if str(c.get("type") or "") == "other":
+        ctype = (f"{type_custom} (the creator's own description of the format; "
+                 "treat it like any listed format)") if type_custom else None
+    limits_custom = str(c.get("limits_custom") or "").strip()[:300]
+    out = []
+    if ctype:
+        out.append(f"- Format: {ctype}")
+    if niche:
+        out.append(f"- Channel: {niche}")
+    if audience:
+        out.append(f"- Audience: {audience}")
+    if stage:
+        out.append(f"- Stage: {stage}")
+    if tone:
+        out.append(f"- Voice: {tone}")
+    if proven:
+        out.append(f"- Already works on this channel (lean on it): {proven}")
+    for r in rules:
+        out.append(f"- Hard constraint: {r}")
+    if limits_custom:
+        out.append(f"- Hard constraint (in the creator's words): {limits_custom}")
+    return out
 
 
 def creator_block(creator):
     """The creator profile as a prompt block, or "" when it says nothing.
 
-    `creator` is {"niche": str, "audience": str, "constraints": [token, ...]}.
-    It is stated as hard facts about who is making the video, because a
-    blueprint that ignores them (a face-cam idea for a faceless channel, a
-    drone shot for a phone shooter) is a blueprint the creator cannot make."""
-    c = creator if isinstance(creator, dict) else {}
-    niche = str(c.get("niche") or "").strip()[:400]
-    audience = str(c.get("audience") or "").strip()[:300]
-    rules = [CREATOR_CONSTRAINTS[t] for t in (c.get("constraints") or [])
-             if t in CREATOR_CONSTRAINTS]
-    if not (niche or audience or rules):
+    `creator` is {"type", "niche", "audience", "stage", "tone", "proven",
+    "constraints": [token, ...]}. It is stated as hard facts about who is
+    making the video, because a blueprint that ignores them (a face-cam idea
+    for a faceless channel, a drone shot for a phone shooter, a script to read
+    for a walking-tour channel) is a blueprint the creator cannot make."""
+    lines = creator_fact_lines(creator)
+    if not lines:
         return ""
     out = ["\n\nTHE CREATOR — facts about who will make this video. Every blueprint must fit them:"]
-    if niche:
-        out.append(f"- Channel: {niche}")
-    if audience:
-        out.append(f"- Audience: {audience}")
-    for r in rules:
-        out.append(f"- Hard constraint: {r}")
-    out.append("If a reference video relies on something these constraints rule out, keep its "
-               "pattern and find a way to execute it within them.")
+    out.extend(lines)
+    out.append("If a reference video relies on something these facts rule out, keep its "
+               "pattern and find a way to execute it within them. When a Format is given, "
+               "\"channel_type\" must name that format.")
     return "\n".join(out)
 
 
@@ -857,8 +1102,11 @@ def generate_content_lab_ideas(videos, client, n=3, avoid_titles=None, format="s
     out = []
     avoid = [t for t in (avoid_titles or []) if t]
     remaining = n
+    # Gemini has a 64k output window; most OpenAI-compatible / custom models
+    # stop at 4-8k. One greenlight per call keeps every reply inside that cap.
+    batch_size = _BATCH if getattr(client, "api_mode", "") == "google_genai" else 1
     while remaining > 0:
-        k = min(_BATCH, remaining)
+        k = min(batch_size, remaining)
         try:
             batch = _generate_content_lab_batch(
                 videos, client, n=k, avoid_titles=avoid, format=format,
@@ -985,8 +1233,7 @@ def _generate_content_lab_batch(videos, client, n=3, avoid_titles=None, format="
     lang_line = ("\nWrite every text field in Persian (Farsi) — titles, hooks, reasoning, "
                  "everything — except the \"score_label\" and \"focus_tag\" fields, which "
                  "should stay short punchy English tags (e.g. \"EXPLOSIVE\", \"Curiosity Gap\"). "
-                 "Fixed-choice fields (difficulty, rights.risk, monetization.ad_safety, "
-                 "why_now.shelf_life, checkpoints.when) keep their exact English values."
+                 "The fixed-choice \"difficulty\" field keeps its exact English value."
                  if want_fa else
                  ("\nWrite every text field in English, even where the inputs are in another language."
                   if out_lang == "en" else ""))
@@ -1029,14 +1276,18 @@ def _generate_content_lab_batch(videos, client, n=3, avoid_titles=None, format="
     seo_field = ""
     seo_shape = ""
     if is_long:
+        # v10: the keywords ARE discovery.search_queries (asked once, below);
+        # tags barely move anything on today's YouTube, so 0-5 variants only;
+        # the description's first two lines are what search and Home show.
         seo_field = (
-            '\n- "seo": {"tags": array of 10-15 short YouTube tags (the search phrases '
-            'themselves go in "discovery.search_queries" — do not repeat them here), "description": a ready-'
-            'to-paste 2-3 sentence YouTube description ending with a soft call-to-action, '
-            '"timestamps": array of 4-7 objects {"time": "0:00"-style timestamp, "label": chapter '
-            'name} matching the pacing in "retention.phases".}'
+            '\n- "seo": {"description": a ready-to-paste YouTube description of 2-3 sentences whose '
+            'FIRST TWO LINES are written for search results and Home (they are all that shows): open '
+            'with the promise and the main search phrase, never "In this video…"; end with a soft '
+            'call-to-action, "tags": 0-5 tags, ONLY misspellings / alternate names of the main term '
+            '([] if none), "timestamps": array of 4-7 objects {"time": "0:00"-style timestamp, '
+            '"label": a chapter name that contains a real search word} matching "retention.phases".}'
         )
-        seo_shape = ('\n,"seo":{"tags":["...","..."],"description":"...",'
+        seo_shape = ('\n,"seo":{"description":"...","tags":["..."],'
                       '"timestamps":[{"time":"0:00","label":"..."}]}')
 
     # ── framing: the three brief modes are genuinely different asks ──
@@ -1181,11 +1432,13 @@ angle from the pattern instead.{avoid_block}"""
                        "as speech (3-5 sentences, ready to read off a teleprompter — never a "
                        "description of what happens), \"visual\": what is on screen meanwhile "
                        "(camera framing, screen recording, B-roll, graphic) in one sentence}")
-        shot_hint = ("6-10 objects covering the whole video, {\"shot\": a short code like \"A1\", "
-                     "\"type\": e.g. \"Talking head\"/\"Screen recording\"/\"B-roll\", \"desc\": "
-                     "what to actually capture and how (framing, angle, movement), \"beat\": the "
-                     "script time range it covers, \"broll\": true only for shots whose job "
-                     "is covering cuts rather than carrying information}")
+        shot_hint = ("the CAPTURE list: 5-8 objects covering the whole video, {\"shot\": a short code "
+                     "like \"A1\", \"type\": what kind of material, in THIS format's terms (e.g. "
+                     "\"Talking head\", \"Close-up of the pan\", \"Route stop\", \"Screen "
+                     "recording\", \"Source clip\", \"Stock footage\", \"Gameplay\"), \"desc\": "
+                     "what exactly to film, record or gather and how (framing, angle, movement, "
+                     "or which clip / search term), \"beat\": the script time range it covers, "
+                     "\"broll\": true only for material whose job is covering cuts}")
         cta_hint = ('2 objects: one MID-VIDEO ask placed right after the biggest payoff, and one '
                     'end-screen ask that teases a specific follow-up video rather than a generic '
                     '"subscribe". {"label": short name, "text": exactly what to ask for and how, '
@@ -1198,38 +1451,32 @@ angle from the pattern instead.{avoid_block}"""
                        "with no words, leave it \"\", \"visual\": what the viewer SEES in that beat "
                        "(the clip, the framing, the cut) in one sentence — stage directions go "
                        "here, never in \"line\"}")
-        shot_hint = ("4-7 objects, {\"shot\": a short code like \"A1\", \"type\": e.g. "
-                     "\"Screen recording\"/\"Close-up\"/\"Source clip\"/\"B-roll\", \"desc\": what "
-                     "to actually capture and how (framing, angle, movement), \"beat\": the script "
-                     "time range it covers, \"broll\": true only for shots whose job is "
-                     "covering cuts rather than carrying information}")
+        shot_hint = ("the CAPTURE list: 3-6 objects, {\"shot\": a short code like \"A1\", \"type\": "
+                     "what kind of material in THIS format's terms (e.g. \"Close-up\", \"POV walk\", "
+                     "\"Screen recording\", \"Source clip\", \"Stock footage\", \"Face cam\"), "
+                     "\"desc\": what exactly to film, record or gather and how (framing, angle, "
+                     "movement, or which clip / search term), \"beat\": the script time range it "
+                     "covers, \"broll\": true only for material whose job is covering cuts}")
         cta_hint = ('2 objects offering genuinely different asks (e.g. a comment-bait line vs. an '
                     'implicit loop that needs no spoken CTA at all). {"label": short name, "text": '
                     'exactly what to ask for and how, "timing": when in the video}')
 
-    # ── anti-hook: short-form ONLY ──
-    # A third opener alongside the visual hook and the caption hook. An anti-hook
-    # works by REPELLING rather than promising — reverse psychology ("don't watch
-    # this if…"), disqualification ("this isn't for beginners"), or a
-    # self-deprecating / low-stakes open ("I almost didn't post this") — so that
-    # dismissing the video feels like a loss and the 3-second hold goes up. It is
-    # asked for only on Shorts, where scroll-stopping is the whole game; long-form
-    # gets an empty string here so its prompt is unchanged.
-    if is_long:
-        anti_hook_field = ""
-        anti_hook_shape = ""
-    else:
-        anti_hook_field = (
-            '\n- "anti_hook": a REVERSE-PSYCHOLOGY opener, distinct from "hook" above. Where a normal '
-            'hook promises value, an anti-hook repels the wrong viewer so the right one leans in — '
-            'e.g. reverse psychology ("don\'t watch this if you\'re happy with your current setup"), '
-            'disqualification ("this isn\'t for beginners"), or a low-stakes/self-deprecating open '
-            '("I almost didn\'t post this"). On a Short this makes swiping away feel like a loss. '
-            '{"focus_tag": a short label for the technique (e.g. "Reverse psychology", '
-            '"Disqualifier"), "options": an array of exactly 2 DIFFERENT anti-hook opening lines '
-            '(ready to say/show, genuinely different from the "hook" options — not a reworded hook), '
-            '"reasoning": one sentence on why repelling works better than promising here.}')
-        anti_hook_shape = (',"anti_hook":{"focus_tag":"...","options":["...","..."],"reasoning":"..."}')
+    # ── anti-hook (v10: both formats) ──
+    # v1-v9 asked for a reverse-psychology opener on Shorts only, and v8
+    # stopped asking at all (the "spoken" hooks already carry a reverse-
+    # psychology option). v10 brings it back as the opposite of hype: a RAW &
+    # HONEST start that builds trust, which works on a 10-minute documentary
+    # as well as on a Short.
+    anti_hook_field = (
+        '\n- "anti_hook": a RAW & HONEST alternative opening, the opposite of a hype hook: no '
+        'exaggeration, no fake urgency. Either a plain admission ("I got this wrong for two years"), '
+        'a cold open dropped straight into the tension, or a skeptic-defuser for viewers tired of '
+        'clickbait ("this isn\'t a hack, it\'s three weeks of boring work, here\'s all of it"). '
+        '{"focus_tag": the technique in 1-3 words (e.g. "Cold open", "Honest admission", '
+        '"Skeptic defuser"), "options": exactly 2 DIFFERENT opening lines, ready to say or show, '
+        'genuinely different from the "hook" options, "reasoning": one sentence on why trust beats '
+        'hype for this audience.}')
+    anti_hook_shape = (',"anti_hook":{"focus_tag":"...","options":["...","..."],"reasoning":"..."}')
 
     # The competitor rows must describe REAL videos wherever the user supplied
     # them. Without references there is nothing real to name, so the ask
@@ -1284,105 +1531,58 @@ angle from the pattern instead.{avoid_block}"""
             'adds context without spoiling the payoff, "hashtags": 3-6 hashtags this audience '
             'actually searches, each starting with #}')
         caption_shape = ',"caption_pack":{"description":"...","hashtags":["#...","#..."]}'
-    v4_fields = f"""
-- "audience_profile": {{"persona": one sentence describing the specific viewer (age band, situation,
-  what they already know), "pain_points": 2-3 short phrases — what bugs them about this topic,
-  "desires": 2-3 short phrases — what they want to feel or get, "objections": 1-2 reasons they
-  might scroll past / click away, "watch_context": where and how they watch (e.g. "phone, commute,
-  sound off")}}
-- "rehooks": {rehook_count} objects {{"time": timestamp where attention typically dips, "device": the
-  re-hook technique (e.g. "Open loop", "Pattern interrupt", "Stakes raise"), "line": the exact words
-  or on-screen moment}}
-- "evidence": {evidence_hint}
-- "monetization": {{"ad_safety": exactly one of "Safe", "Limited", "Risky" — how advertiser-friendly
-  this content is under YouTube's ad guidelines, "why": one sentence, "sponsor_fit": 2-3 kinds of
-  sponsor/brand that fit this audience, "product_tie_in": one sentence on a natural product,
-  affiliate or own-offer tie-in (or "none" if it would feel forced)}}
-- "repurpose": 2-3 objects {{"platform": e.g. "TikTok", "Instagram Reels", "Shorts cut", "X/Twitter",
-  "how": what to change for that platform (length, crop, caption, hook)}}
-- "pinned_comment": the exact comment to pin under the video to start discussion{caption_field}
-- "core_promise": {{"promise": the ONE sentence the title, thumbnail and hook all promise the viewer,
-  "payoff": exactly what the viewer gets that keeps that promise, "payoff_time": the timestamp where
-  it is paid off, "differentiator": the one thing this video has that the reference / competing
-  videos do not}}
-- "style_guide": {{"look": one sentence on lighting, grade and framing, "palette": 3-4 hex colours
-  (e.g. "#FFD400") for captions, graphics and the thumbnail so they match, "typography": the caption
-  / title font style (e.g. "heavy condensed sans, white with a black stroke"), "captions": how the
-  running captions behave (size, position, word-by-word or phrase, highlight colour), "music": the
-  mood, genre and BPM range — describe it, never name a specific copyrighted track, "sfx": 2-5 objects
-  {{"time": timestamp, "cue": the sound effect and why it lands there}}}}
-- "on_screen_text": 3-8 objects {{"time": timestamp, "text": the exact overlay text, "style": e.g.
-  "Big centre caption", "Lower third", "Counter", "Arrow + label"}} — every overlay that is NOT the
-  running caption (counters, labels, stakes, chapter cards)
-- "production_plan": {{"prep": time estimate e.g. "30 min", "shoot": time estimate, "edit": time
-  estimate, "gear": 2-5 items actually needed (a phone is fine — do not pad the list), "props": 0-4
-  items, "location": where to shoot it, "checklist": 3-6 things to check before recording, in order}}
-- "ab_plan": {{"thumbnail_first": which thumbnail concept label to launch with and why, "title_first":
-  which of the "titles" to launch with, "swap_rule": when to switch to the next variant (use YouTube's
-  Test & Compare where available) — phrased against the channel's OWN usual numbers, never an invented
-  absolute figure}}
-- "rights": {{"risk": exactly one of "Low", "Medium", "High" — the copyright / Content ID / fair-use
-  risk of the material this video uses, "notes": one sentence on what specifically carries that risk
-  (third-party clips, music, logos, a person's likeness), "safe_moves": 2-3 concrete ways to keep it
-  transformative and safe}}
-- "community_post": a ready-to-post Community tab / Stories teaser that announces the video without
-  giving away the payoff
-- "why_now": {{"shelf_life": exactly one of "Evergreen", "Seasonal", "Trending", "window": how long
-  this idea stays worth making (e.g. "any time", "before the holidays", "the next 2 weeks"), "why":
-  one sentence on why NOW is (or is not) the moment, grounded in the references above}}
-- "discovery": {{"search_queries": 3-5 exact phrases a viewer would type into YouTube search to find
-  this, "suggested_beside": 1-2 kinds of video (or a reference id like "V2") this should show up next
-  to in Suggested, "browse_trigger": one sentence on why someone scrolling Home / the Shorts feed
-  stops on it}}
-- "delivery": {{"tone": the speaking tone in a few words, "pace": the speaking pace (e.g. "fast,
-  ~170 words a minute, no pauses before 0:10"), "energy": where the energy rises and falls, "emphasis":
-  2-5 exact words or short phrases from the script to punch, "avoid": 1-3 delivery mistakes that would
-  kill THIS video}}
-- "end_screen": {{"cards": 0-3 objects {{"time": timestamp, "target": what the info card points to
-  and why there}}, "end_target": the video / playlist the end screen should push (a "series_next"
-  title is ideal), "line": the exact words spoken over the last seconds that send the viewer there}}
-- "checkpoints": exactly 3 objects {{"when": "1 hour", "24 hours", "7 days", "check": the one YouTube
-  Studio number to look at then, "good_sign": what good looks like, phrased against the channel's
-  OWN usual (never an invented absolute figure), "if_not": the concrete move if it is not there}}
-- "reply_bank": 3-4 objects {{"comment": a comment this video is likely to get (a question, a
-  push-back, a request), "reply": the ready reply that keeps the thread going}}
-- "packaging_brief": {{"thumb_text": exactly 2 options for the words ON the thumbnail, 4 words or
-  fewer each and never a repeat of the title, "focal": the one subject + expression/emotion the eye
-  lands on first, "pairing": how the title and the thumbnail split the job (what each one says that
-  the other does not), "stand_out": how this thumbnail looks different from the reference videos'
-  thumbnails sitting beside it in the same feed}}
-- "fact_check": 0-4 objects {{"claim": a checkable factual claim the script makes (a number, a
-  date, a "this works because"), "verify": how to verify it before publishing — the KIND of primary
-  source to check}} — an empty array when the script makes no factual claims
-- "lite_version": {{"time": the total time the fast version takes (e.g. "1 hour"), "cut": what to
-  drop from the full plan, "keep": the parts that must stay because the video fails without them}}
-- "funnel": {funnel_hint}"""
-    v4_shape = (',"audience_profile":{"persona":"...","pain_points":["..."],"desires":["..."],'
-                '"objections":["..."],"watch_context":"..."},'
-                '"rehooks":[{"time":"...","device":"...","line":"..."}],'
-                '"evidence":[{"claim":"...","ref":"V1"}],'
-                '"monetization":{"ad_safety":"Safe","why":"...","sponsor_fit":["..."],"product_tie_in":"..."},'
-                '"repurpose":[{"platform":"...","how":"..."}],"pinned_comment":"..."' + caption_shape
-                + ',"core_promise":{"promise":"...","payoff":"...","payoff_time":"...","differentiator":"..."},'
-                '"style_guide":{"look":"...","palette":["#...","#..."],"typography":"...","captions":"...",'
-                '"music":"...","sfx":[{"time":"...","cue":"..."}]},'
-                '"on_screen_text":[{"time":"...","text":"...","style":"..."}],'
-                '"production_plan":{"prep":"...","shoot":"...","edit":"...","gear":["..."],"props":["..."],'
-                '"location":"...","checklist":["..."]},'
-                '"ab_plan":{"thumbnail_first":"...","title_first":"...","swap_rule":"..."},'
-                '"rights":{"risk":"Low","notes":"...","safe_moves":["..."]},"community_post":"...",'
-                '"why_now":{"shelf_life":"Evergreen","window":"...","why":"..."},'
-                '"discovery":{"search_queries":["..."],"suggested_beside":["..."],"browse_trigger":"..."},'
-                '"delivery":{"tone":"...","pace":"...","energy":"...","emphasis":["..."],"avoid":["..."]},'
-                '"end_screen":{"cards":[{"time":"...","target":"..."}],"end_target":"...","line":"..."},'
-                '"checkpoints":[{"when":"1 hour","check":"...","good_sign":"...","if_not":"..."}],'
-                '"reply_bank":[{"comment":"...","reply":"..."}],'
-                '"packaging_brief":{"thumb_text":["...","..."],"focal":"...","pairing":"...","stand_out":"..."},'
-                '"fact_check":[{"claim":"...","verify":"..."}],'
-                '"lite_version":{"time":"...","cut":"...","keep":"..."},'
-                '"funnel":{"clips":[{"from":"...","hook":"..."}],"link_to":"...","why":"..."}')
+    # ── v8 "Essentials" (v1.0.5) ──────────────────────────────────────────
+    # v7 asked for ~40 fields per greenlight. Most were niche (gear lists,
+    # sponsor fit, reply banks, fact checks, end-screen cards…), many only fit
+    # one kind of channel, and together they pushed one reply past 9k tokens —
+    # which is exactly why custom / OpenAI-compatible providers with an 8k
+    # output cap came back "unstructured". v8 asks only for what helps EVERY
+    # channel type (talking head, faceless voice-over, edit/compilation, music,
+    # tutorial/cooking, gaming): the angle, the hooks, the title + thumbnail,
+    # the words, the caption/SEO, the risks and the next video.
+    if is_long:
+        caption_field = ""
+        caption_shape = ""
+    else:
+        caption_field = (
+            '\n- "caption_pack": {"description": a ready-to-paste 1-2 line Shorts caption that '
+            'adds context without spoiling the payoff, "hashtags": 3-6 hashtags this audience '
+            'actually searches, each starting with #}')
+        caption_shape = ',"caption_pack":{"description":"...","hashtags":["#...","#..."]}'
+    rehook_count = "4-6" if is_long else "2-3"
+    loop_count = "2" if is_long else "1"
+    # v10: a Short must loop; a long video does not
+    loop_line = ('', ',"loop":"..."') if is_long else (
+        ', "loop": how the LAST beat flows straight back into the first line so a rewatch feels '
+        'seamless (the exact last words + why they connect)', ',"loop":"..."')
+    spoken_window = "minute" if is_long else "5 seconds"
+    loop_shape = "" if is_long else loop_line[1]
+    evidence_field = (f'\n- "evidence": {evidence_hint}' if has_refs else "")
+    evidence_shape = (',"evidence":[{"claim":"...","ref":"V1"}]' if has_refs else "")
 
     prompt = f"""{intro_block}{creator_txt}{csv_block}
+
+ADAPT TO THE CHANNEL TYPE. Use the creator's Format when the profile gives one; otherwise decide
+silently what kind of channel makes this video — from the idea and the references: talking-head,
+vlog, walking tour / POV, tutorial/how-to, cooking, education / language lessons, faceless
+voice-over, edit/compilation of existing footage, gaming, review, storytelling / commentary,
+music / ASMR, podcast / interview. Then write every field for THAT channel:
+- Vlogs: the script is talking points and moments to catch on the day, not a speech; the
+  capture list names real moments (arrival, the problem, the reveal), not studio shots.
+- Walking tours / POV: the route IS the structure — stops in order, what each one shows, on-screen
+  labels (place names, prices, tips) and ambient sound; little or no narration, "line" may be the
+  on-screen text.
+- Education / language lessons: one clear learning goal, real examples, a practice / quiz moment
+  the viewer answers, and the exact words or phrases taught shown on screen.
+- Reviews: the verdict early, honest pros and cons, real use, the price/value question.
+- Podcasts / interviews: the questions to ask, the moment to clip, and the guest's angle.
+- Music / no-voice channels: the "hook" lines and "full_script" lines are on-screen text and visual
+  beats, never narration; "line" is "" for music-only beats.
+- Tutorials and cooking: show the finished result in the first seconds, titles must be searchable
+  (the dish / the problem in plain words), the script walks the real steps in order.
+- Edit / compilation / clip channels: name the exact moments to cut in and what the creator adds
+  (ranking, captions, commentary); include a copyright / reused-content risk when it applies.
+- Faceless: no face on camera anywhere; the hook is carried by the first frame and the first line.
 
 For EACH blueprint, return an object with exactly these fields:
 - "title": a short, punchy working title.
@@ -1394,86 +1594,123 @@ For EACH blueprint, return an object with exactly these fields:
   Be strict: 18-20 only when the data above proves it, 10-13 is ordinary. Most ideas land 55-75.
 - "score": exactly the sum of the five score_breakdown points.
 - "score_label": one short punchy tag summarizing that score (e.g. "EXPLOSIVE", "STRONG", "SOLID").
-- "hook_preview": the exact opening line to say in the first 2-3 seconds, ready to read on camera.
+- "hook_preview": the single best opening line (said, or shown as text), ready to use.
 {source_line}
-- "audience": one short phrase naming who this is for — the specific viewer, not "everyone"
-  (e.g. "iPhone owners, 20-45, tech-tip audience").
-- "pillar": the content pillar/category this belongs to, 2-4 words (e.g. "Tech & Gadgets").
-- "difficulty": how hard this is to actually produce — exactly one of "Easy", "Medium", "Hard",
-  judged from the shot list and the amount of motion/editing work it needs.
+- "audience": one short phrase naming who this is for — the specific viewer, not "everyone".
+- "pillar": the content pillar/category this belongs to, 2-4 words.
+- "difficulty": exactly one of "Easy", "Medium", "Hard" — how much footage and editing work it takes.
+- "channel_type": 1-3 words naming the format this greenlight is written for (e.g. "Cooking",
+  "Walking tour", "Faceless explainer", "Language lesson", "Vlog").
+- "core_promise": {{"promise": the ONE thing the title, thumbnail and hook all promise, in one
+  sentence, "payoff": how and where the video delivers it, "payoff_time": the timestamp it lands,
+  "stakes": what the viewer loses, risks or misses by NOT watching (concrete, one sentence){loop_line[0]}}}.
+- "target": {{"spectrum": exactly "Broad" (casual viewers found on Home / Suggested) or "Niche"
+  (enthusiasts who already care), "lane": exactly one of "Browse", "Search", "Suggested" — where
+  most of its views should come from, which decides how the title is written, "both": one
+  sentence on how it keeps the casual viewer AND the enthusiast watching}}.
+- "hook": {{"focus_tag": a short label for the main hook style (e.g. "Curiosity Gap"),
+  "spoken": an array of exactly 3 DIFFERENT opening lines for the first 3 seconds, each using a
+  different technique (e.g. curiosity gap, bold claim / result first, reverse psychology like
+  "don't watch this if…") — ready to say, or to show as text on a no-voice channel,
+  "visual": an array of exactly 2 DIFFERENT one-sentence options for the first frame on screen,
+  "text": an array of exactly 2 DIFFERENT on-screen text options for the hook (readable with the
+  sound off, for viewers previewing it muted), "reasoning": one sentence on why the best one works.}}{anti_hook_field}
+- "titles": an array of exactly 4 titles, each UNDER 60 characters (mobile cuts the rest), key
+  words first, in this order: 1) curiosity gap, 2) concrete result / number / transformation,
+  3) identity call-out (names who it is for), 4) counter-intuitive / myth-breaking. No worn-out
+  bait ("you won't believe", "insane", "shocking", "gone wrong").
 - "thumbnails": an array of exactly 3 objects {{"label": "Concept A"/"Concept B"/"Concept C",
-  "prompt": a vivid, detailed AI-image-generation prompt for that thumbnail (composition, subject,
-  expression, text overlay, colors)}}. Make the three genuinely DIFFERENT approaches to test
-  against each other, not three rewordings of one image.
-- "titles": an array of 4 alternate high-CTR title options for this same idea.
-- "viral_angle": {{"concept": one paragraph on the core creative concept, "triggers": array of
-  3-4 short psychological-trigger phrases (e.g. "Curiosity gap", "Social proof"), "reasoning":
-  one paragraph on WHY this angle performs{reasoning_ref}.}}
-- "hook": {{"focus_tag": a short label for the hook style (e.g. "Curiosity Gap", "Pattern Interrupt"),
-  "visual": an array of exactly 2 DIFFERENT one-sentence options for what is on screen in the first
-  3 seconds, "text": an array of exactly 2 DIFFERENT on-screen text/caption options for the hook,
-  "reasoning": one sentence on why this hook works.}}{anti_hook_field}
+  "text": the 0-3 words written ON the thumbnail — it must ADD to the title, never repeat its
+  words ("" for an image-only concept), "prompt": a vivid, detailed AI-image-generation prompt:
+  one focal subject on a rule-of-thirds line, the expression / gaze (or an arrow) leading to the
+  text, high colour contrast against YouTube's white and dark backgrounds, readable at phone size,
+  and the BOTTOM-RIGHT corner kept empty (YouTube's timestamp covers it)}}. Three genuinely
+  DIFFERENT approaches to A/B test, not three rewordings of one image.
+- "packaging_brief": {{"pairing": one sentence on how the title and the thumbnail split the job
+  (what each one says that the other does not), "stand_out": one sentence on what makes it pop
+  next to the reference videos in the same feed}}
+- "viral_angle": {{"concept": 2-3 sentences on the core creative concept, "triggers": array of
+  2-4 short psychological-trigger phrases (e.g. "Curiosity gap", "Social proof"), "reasoning":
+  2-3 sentences on WHY this angle performs{reasoning_ref}.}}{evidence_field}
 - "full_script": {script_hint}
 - "shot_list": {shot_hint}
-- "competitors": {competitors_hint}
-- "execution": {{"editing": one sentence on editing/pacing style, "assets": one sentence on what
-  footage/B-roll/AI-generated assets are needed (music and sound belong in "style_guide"), "render": one sentence on export/resolution/upscale notes, "reasoning":
-  one sentence {execution_ref}.}}
-- "packaging": {{"framework": the title-writing formula used (e.g. "Number + Promise + Twist")}}
-- "cta_options": {cta_hint}
+- "production_plan": {{"prep": time to prepare (e.g. "20 min"), "shoot": time to film / record /
+  gather, "edit": time to edit, "location": where it is made (the kitchen, the route from A to B,
+  the desk / screen, "stock + screen only"), "props": 2-6 things needed (ingredients, products,
+  files, sources, outfits; [] if nothing), "gear": only gear BEYOND a phone and a basic mic ([] if
+  none), "checklist": 3-5 things to do before recording (permissions, charge, prep, research)}}
+- "lite_version": {{"time": how long the fast version takes, "keep": what must stay or the video
+  fails, "cut": what can go when time is short}}
+- "funnel": {funnel_hint}
+- "rehooks": {rehook_count} objects {{"time": timestamp where attention typically dips, "device":
+  the re-hook technique (e.g. "Open loop", "Pattern interrupt"), "line": the exact words or
+  on-screen moment}}. At least {loop_count} of them must be OPEN LOOPS: device exactly "Open loop",
+  "line" = the question planted, then " → answered at m:ss" (it must be answered LATER, in the
+  next phase, so leaving early means never getting the answer).
+- "style_guide": {{"music": the music mood and the moment it changes, in one sentence ("none" for a
+  talk-only video), "sfx": 2-4 objects {{"time": timestamp, "cue": an AUDIO cue that resets
+  attention — a hard cut to dead silence, a beat drop, music in / out, a riser, a hit — and what it
+  underlines}}}}
 - "retention": {{"total_seconds": your estimated ideal video length in seconds ({retention_seconds_hint}), "phases": an
   array of {retention_phase_count_hint} objects {{"label": phase name e.g. {retention_phase_label_hint}, "end_pct":
-  the percentage (1-100) of the video where this phase ends, "desc": one short sentence on what
-  happens in this phase}} }}.{seo_field}
-- "risks": an array of 2-4 objects {{"risk": what would make THIS video underperform, "fix": the
-  concrete change that removes it}}. Not generic pitfalls ("post consistently") — name the thing
-  about THIS idea: the misleading title, the slow first minute, the thumbnail that repeats the last
-  video, the segment that drags, the promise the footage cannot keep. A creator reads this before
-  the shoot, so every entry has to be actionable before the camera rolls
-- "publish_plan": {{"day": the weekday this video should go up on, "time": a concrete upload time,
-  "why": one line on why that slot suits THIS audience and format, "first_hour": an array of 3-4
-  concrete things to do in the first hour after publishing (what to answer, what to pin, where to
-  share, what to check)}}. The best upload time is NOT public data: if the CHANNEL DATA above shows a
-  best weekday, use it and say so; otherwise give a sensible starting slot for this audience and
-  say in "why" to confirm it in YouTube Studio → Audience → "When your viewers are on YouTube"
-- "series_next": an array of 2-3 objects {{"title": the follow-up video, "why": the retention logic}}
-  — the next question the person who just watched this one asks, or the same format on an adjacent
-  topic. One video is a view; a series is a subscriber{v4_fields}
+  the percentage (1-100) of the video where this phase ends, "desc": one short sentence}} }}.{seo_field}{caption_field}
+- "discovery": {{"search_queries": 3-5 phrases people actually type into YouTube search for this
+  (plain words, no hashtags), "suggested_beside": 2 kinds of videos (or reference titles from the
+  data) it should be suggested next to, "browse_trigger": one sentence on why it gets clicked on
+  Home / the Shorts feed, "spoken_keywords": 3-5 key phrases the creator must SAY out loud in the
+  first {spoken_window} — YouTube transcribes speech and indexes it}}
+- "cta_options": {cta_hint} Never beg for a subscribe or a like: tie each ask to a real need the
+  viewer has at that exact moment.
+- "pinned_comment": the exact comment to pin: a debate-starting question with two clear sides
+  (or an empathetic one people want to answer about themselves) — never "what do you think?".
+- "end_screen": {{"end_target": the ONE video / playlist the end screen pushes (a "series_next"
+  title is ideal), "line": the exact words for the last ~5 seconds that hand the viewer to it while
+  a question is still open — no goodbye, no "thanks for watching", no recap}}
+- "risks": an array of 2-3 objects {{"risk": what would make THIS video underperform (or get it
+  claimed / demonetized), "fix": the concrete change that removes it}}. Name the thing about THIS
+  idea — never generic advice like "post consistently".
+- "series_next": an array of 2-3 objects {{"title": the follow-up video, "why": one line on why the
+  viewer of this one wants it next}}.
 
 Do NOT include any estimated view count, projected reach, similarity percentage, or trending-audio
-usage statistic anywhere in your answer. You have no basis for those numbers and a made-up one is
-worse than none. Every field above should be a creative or production decision, not a metric.
-The one exception: in "evidence" you may quote a REAL number that appears in the data above
-(views, multiplier, length, weekday) — never a projected or invented one. Production time
-estimates in "production_plan" and the 0-20 marks in "score_breakdown" are judgements, not
-audience metrics, and are expected.
+usage statistic anywhere. You have no basis for those numbers and a made-up one is worse than none.
+The one exception: in "evidence" you may quote a REAL number that appears in the data above.
 
-Depth rules — this is the document a creator shoots from, so thin answers are failures:
-- Name exact things: the exact words, the exact overlay text, the exact clip/moment, the exact
-  framing. "Make it engaging", "use trending music", "add B-roll" are not answers.
-- Every timestamp in full_script, rehooks, on_screen_text, style_guide.sfx, end_screen.cards and core_promise must
-  fall inside retention.total_seconds, and the script must cover the whole length.
-- Keep titles under 70 characters (YouTube cuts the rest on mobile).
-- Do not repeat the same sentence across sections; each section adds something new.
+Quality rules:
+- Name exact things: the exact words, the exact overlay text, the exact clip/moment. "Make it
+  engaging", "use trending music", "add B-roll" are not answers.
+- Every timestamp in full_script, rehooks, shot_list, style_guide and core_promise must fall
+  inside retention.total_seconds, and the script must cover the whole length.
+- Title words and thumbnail text never repeat each other; the hook pays off the title's promise
+  inside the first 3 seconds, the payoff lands at core_promise.payoff_time.
+- Time estimates (production_plan, lite_version) are honest for THIS creator's constraints.
+- Do not repeat the same sentence across fields; each field adds something new.
+- Keep it tight: no field needs more than 3 sentences, except the script lines.
 
-Respond with ONLY minified JSON, no markdown code fences, no commentary before or after, in
-exactly this shape, with exactly {n} objects in the "ideas" array:
+Respond with ONLY minified JSON, no markdown code fences, no thinking, no commentary before or
+after, in exactly this shape, with exactly {n} objects in the "ideas" array:
 {{"ideas":[{{"title":"...","score_breakdown":{{"hook":{{"points":14,"why":"..."}},"retention":{{"points":13,"why":"..."}},"packaging":{{"points":14,"why":"..."}},"novelty":{{"points":12,"why":"..."}},"feasibility":{{"points":16,"why":"..."}}}},"score":69,"score_label":"...","hook_preview":"...","source":"...",
-"audience":"...","pillar":"...","difficulty":"Medium",
-"thumbnails":[{{"label":"Concept A","prompt":"..."}},{{"label":"Concept B","prompt":"..."}},{{"label":"Concept C","prompt":"..."}}],
+"audience":"...","pillar":"...","difficulty":"Medium","channel_type":"...",
+"core_promise":{{"promise":"...","payoff":"...","payoff_time":"0:40","stakes":"..."{loop_shape}}},
+"target":{{"spectrum":"Broad","lane":"Browse","both":"..."}},
+"hook":{{"focus_tag":"...","spoken":["...","...","..."],"visual":["...","..."],"text":["...","..."],"reasoning":"..."}}{anti_hook_shape},
 "titles":["...","...","...","..."],
-"viral_angle":{{"concept":"...","triggers":["...","..."],"reasoning":"..."}},
-"hook":{{"focus_tag":"...","visual":["...","..."],"text":["...","..."],"reasoning":"..."}}{anti_hook_shape},
+"thumbnails":[{{"label":"Concept A","text":"...","prompt":"..."}},{{"label":"Concept B","text":"...","prompt":"..."}},{{"label":"Concept C","text":"...","prompt":"..."}}],
+"packaging_brief":{{"pairing":"...","stand_out":"..."}},
+"viral_angle":{{"concept":"...","triggers":["...","..."],"reasoning":"..."}}{evidence_shape},
 "full_script":[{{"time":"...","speaker":"VO","line":"...","visual":"..."}}],
 "shot_list":[{{"shot":"A1","type":"...","desc":"...","beat":"...","broll":false}}],
-"competitors":{{"rows":[{{"name":"...","angle":"...","gap":"..."}}],"gap":"..."}},
-"execution":{{"editing":"...","assets":"...","render":"...","reasoning":"..."}},
-"packaging":{{"framework":"..."}},
-"cta_options":[{{"label":"...","text":"...","timing":"..."}}],
-"risks":[{{"risk":"...","fix":"..."}},{{"risk":"...","fix":"..."}}],
-"publish_plan":{{"day":"...","time":"...","why":"...","first_hour":["...","...","..."]}},
-"series_next":[{{"title":"...","why":"..."}},{{"title":"...","why":"..."}}],
-"retention":{{"total_seconds":60,"phases":[{{"label":"...","end_pct":15,"desc":"..."}}]}}{seo_shape}{v4_shape}}}]}}{lang_line}"""
+"production_plan":{{"prep":"...","shoot":"...","edit":"...","location":"...","props":["..."],"gear":[],"checklist":["...","..."]}},
+"lite_version":{{"time":"...","keep":"...","cut":"..."}},
+"funnel":{{"clips":[{{"from":"...","hook":"..."}}],"link_to":"...","why":"..."}},
+"rehooks":[{{"time":"...","device":"Open loop","line":"... → answered at 0:00"}}],
+"style_guide":{{"music":"...","sfx":[{{"time":"...","cue":"..."}}]}},
+"retention":{{"total_seconds":60,"phases":[{{"label":"...","end_pct":15,"desc":"..."}}]}}{seo_shape}{caption_shape},
+"discovery":{{"search_queries":["...","..."],"suggested_beside":["...","..."],"browse_trigger":"...","spoken_keywords":["...","..."]}},
+"cta_options":[{{"label":"...","text":"...","timing":"..."}}],"pinned_comment":"...",
+"end_screen":{{"end_target":"...","line":"..."}},
+"risks":[{{"risk":"...","fix":"..."}}],
+"series_next":[{{"title":"...","why":"..."}}]}}]}}{lang_line}"""
 
     # v2 asks for a full script, a shot list and a competitor table on top of
     # what v1 wanted, so one blueprint is roughly twice the output it used to
@@ -1489,7 +1726,26 @@ exactly this shape, with exactly {n} objects in the "ideas" array:
     # v6 adds the why-now / discovery / delivery / end-screen / grow pack
     # (~800 tokens more per blueprint).
     # v7: four fields dropped, four added — roughly +400 per greenlight.
-    max_tokens = min(21000, 8000 * max(n, 1) + 1200) + (800 if is_long else 0)
+    # v8 (Essentials): ~3.5-5k tokens per greenlight (Persian costs more).
+    # v9 (Universal): +~700 tokens per greenlight (capture list, prep, promise,
+    # fast version, funnel).
+    # v10 (Masterplan): +~500 tokens per greenlight (target, stakes, raw
+    # anti-hook, packaging pairing, audio cues, discovery, end bridge).
+    max_tokens = min(16000, 7400 * max(n, 1) + 1500) + (1500 if is_long else 0)
     raw = client.generate(prompt, timeout=timeout, max_output_tokens=max_tokens)
     ideas = _content_lab_parse_ideas_response(raw, n_expected=n, format=format)
+    if ideas and ideas[0].get("parse_failed") and getattr(client, "api_mode", "") != "google_genai":
+        # One repair pass for providers without a JSON mode: hand the reply
+        # back and ask for the same content as valid JSON only. Cheap compared
+        # to the run the user already waited for, and it fixes the common
+        # failures (prose around the JSON, a stray quote, a missing bracket).
+        fix_prompt = ("The text below was supposed to be ONE valid minified JSON object of the form "
+                      '{"ideas":[...]} but it is not valid JSON (it may be cut off, wrapped in prose, '
+                      "or have a syntax error). Return the SAME content as valid minified JSON only, "
+                      "no code fences, no commentary. If an idea is cut off, keep what is there and "
+                      "close it properly.\n\n" + (raw or "")[:60000])
+        raw2 = client.generate(fix_prompt, timeout=timeout, max_output_tokens=max_tokens)
+        again = _content_lab_parse_ideas_response(raw2, n_expected=n, format=format)
+        if again and not again[0].get("parse_failed"):
+            ideas = again
     return _attach_refs(ideas, videos, csv_sources)

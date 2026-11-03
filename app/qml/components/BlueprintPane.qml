@@ -6,6 +6,14 @@ import "." as C
 import "../Utils.js" as U
 
 // ═══════════════════════════════════════════════════════════════════════════
+//  v1.0.14 "Masterplan" (schema v10): the Promise card also says what
+//  skipping it costs, who it is built for (Broad / Niche) and which traffic
+//  lane it is built to win (Browse / Search / Suggested), plus the Shorts
+//  loop. Four existing stages come back because the greenlight asks for
+//  their data again: Title + thumbnail (Packaging), Sound (Make: timed audio
+//  cues), Discovery (Publish: searches + words to say out loud) and the end
+//  screen bridge (Publish). The anti-hook is now a raw & honest opener.
+// ═══════════════════════════════════════════════════════════════════════════
 //  BlueprintPane — v14 (3.15): four acts + the v6 schema pack
 //
 //  v14 (on top of v13 below):
@@ -132,10 +140,10 @@ Item {
              : a === 2 ? Theme.secondary_container : growColor
     }
     readonly property var acts: [
-        { name: I18n.tr("Strategy"),   sub: I18n.tr("why it spreads and how it opens") },
-        { name: I18n.tr("Production"), sub: I18n.tr("what you say, shoot and cut") },
-        { name: I18n.tr("Launch"),     sub: I18n.tr("how it ships on day one") },
-        { name: I18n.tr("Grow"),       sub: I18n.tr("the first week, and what comes next") }
+        { name: I18n.tr("Idea"),      sub: I18n.tr("the promise, why it works and how it opens") },
+        { name: I18n.tr("Packaging"), sub: I18n.tr("the title and thumbnail that earn the click") },
+        { name: I18n.tr("Make"),      sub: I18n.tr("the script, what to capture, what to prep") },
+        { name: I18n.tr("Publish"),   sub: I18n.tr("caption, SEO, risks, the next video and Shorts") }
     ]
     property int activeAct: 0
     // The star on the cover. A plain binding when the pane is used on its
@@ -159,7 +167,8 @@ Item {
 
     // ── section presence ──
     readonly property bool hasAngle: (angle.concept || "") !== "" || (angle.triggers || []).length > 0
-    readonly property bool hasHook: (hookData.visual || []).length > 0 || (hookData.text || []).length > 0
+    readonly property bool hasHook: (hookData.spoken || []).length > 0
+                                    || (hookData.visual || []).length > 0 || (hookData.text || []).length > 0
                                     || idea.hasAntiHook === true
     readonly property bool hasThumbs: (idea.thumbnails || []).length > 0
     readonly property bool hasAudience: idea.hasAudience === true
@@ -208,6 +217,10 @@ Item {
     readonly property bool hasLite: idea.hasLite === true
     readonly property bool hasFacts: idea.hasFactCheck === true
     readonly property bool hasFunnel: idea.hasFunnel === true
+    // ── v10 pack (v1.0.14) ──
+    readonly property var target: idea.target || ({})
+    readonly property bool hasTarget: idea.hasTarget === true
+    readonly property bool isV10: (idea.schemaVersion || 0) >= 10
     // Pacing is drawn on the Timeline's own axis whenever there is a script,
     // so the separate Pacing section only shows when there is no Timeline.
     readonly property bool showPacing: hasRet && !hasScript
@@ -218,44 +231,36 @@ Item {
     // Every section that has data, in reading order, tagged with its act.
     // Drives the act tabs (counts), the jump chips and the "next act" card.
     readonly property var navModel: {
+        // v1.0.5 "Essentials": the greenlight keeps only what helps every
+        // channel type. v1.0.6 "Universal" adds back the make-it pack
+        // (Promise, Capture, Prep, Fast version, Shorts funnel), rewritten so
+        // it reads right for a cook, a vlogger, a walking tour or a faceless
+        // editor alike. The other v5-v7 stages stay in the file (old records
+        // still carry their data) but are switched off below with has: false.
         var all = [
-            { it: sPromise,  has: hasPromise,  act: 0, label: I18n.tr("Promise") },
-            { it: sWhyNow,   has: hasWhyNow,   act: 0, label: I18n.tr("Why now") },
-            { it: sAngle,    has: hasAngle,    act: 0, label: I18n.tr("Angle") },
-            { it: sHook,     has: hasHook,     act: 0, label: I18n.tr("Hook") },
-            { it: sThumbs,   has: hasThumbs,   act: 0, label: I18n.tr("Thumbnails") },
-            { it: sPack,     has: hasPackBrief, act: 0, label: I18n.tr("Packaging") },
-            { it: sAudience, has: hasAudience, act: 0, label: I18n.tr("Audience") },
-            { it: sDiscovery, has: hasDiscovery, act: 0, label: I18n.tr("Discovery") },
-            { it: sComp,     has: hasComp,     act: 0, label: I18n.tr("Competition") },
-            { it: sEvidence, has: hasEvidence, act: 0, label: I18n.tr("Evidence") },
-            { it: sPulse,    has: hasPulse,    act: 0, label: I18n.tr("Data pulse") },
-            { it: sBay,      has: hasScript,   act: 1, label: I18n.tr("Timeline") },
-            { it: sScript,   has: hasScript,   act: 1, label: I18n.tr("Script") },
-            { it: sDelivery, has: hasDelivery, act: 1, label: I18n.tr("Delivery") },
-            { it: sShots,    has: hasShots,    act: 1, label: I18n.tr("Shots") },
-            { it: sRehooks,  has: hasRehooks,  act: 1, label: I18n.tr("Re-hooks") },
-            { it: sOverlay,  has: hasOnScreen, act: 1, label: I18n.tr("On-screen text") },
-            { it: sExec,     has: hasExec,     act: 1, label: I18n.tr("Edit") },
-            { it: sStyle,    has: hasStyle,    act: 1, label: I18n.tr("Look & sound") },
-            { it: sRet,      has: showPacing,  act: 1, label: I18n.tr("Pacing") },
-            { it: sPrep,     has: hasProduction, act: 1, label: I18n.tr("Prep & gear") },
-            { it: sLite,     has: hasLite,     act: 1, label: I18n.tr("Fast version") },
-            { it: sFacts,    has: hasFacts,    act: 1, label: I18n.tr("Fact check") },
-            { it: sTitles,   has: hasTitles,   act: 2, label: I18n.tr("Titles") },
-            { it: sAb,       has: hasAbPlan,   act: 2, label: I18n.tr("Test plan") },
-            { it: sPlan,     has: hasPlan,     act: 2, label: I18n.tr("Publish") },
-            { it: sCaption,  has: hasCaption,  act: 2, label: I18n.tr("Caption & CTA") },
-            { it: sEndScreen, has: hasEndScreen, act: 2, label: I18n.tr("Cards & end screen") },
-            { it: sSeo,      has: hasSeo,      act: 2, label: I18n.tr("SEO") },
-            { it: sMoney,    has: hasMoney,    act: 2, label: I18n.tr("Monetization") },
-            { it: sRights,   has: hasRights,   act: 2, label: I18n.tr("Rights") },
-            { it: sRisks,    has: hasRisks,    act: 2, label: I18n.tr("Risks") },
-            { it: sCheckpoints, has: hasCheckpoints, act: 3, label: I18n.tr("Checkpoints") },
-            { it: sPlaybook, has: hasPlaybook, act: 3, label: I18n.tr("If it stalls") },
-            { it: sReplies,  has: hasReplies,  act: 3, label: I18n.tr("Reply bank") },
-            { it: sSeries,   has: hasSeries,   act: 3, label: I18n.tr("Series") },
-            { it: sFunnel,   has: hasFunnel,   act: 3, label: I18n.tr("Format funnel") }
+            { key: "sPromise",  has: hasPromise,  act: 0, label: I18n.tr("Promise") },
+            { key: "sAngle",    has: hasAngle,    act: 0, label: I18n.tr("Angle") },
+            { key: "sHook",     has: hasHook,     act: 0, label: I18n.tr("Hooks") },
+            { key: "sEvidence", has: hasEvidence, act: 0, label: I18n.tr("Evidence") },
+            { key: "sPulse",    has: hasPulse,    act: 0, label: I18n.tr("Data pulse") },
+            { key: "sTitles",   has: hasTitles,   act: 1, label: I18n.tr("Titles") },
+            { key: "sThumbs",   has: hasThumbs,   act: 1, label: I18n.tr("Thumbnails") },
+            // v1.0.14 (v10): back, because the greenlight asks for them again
+            { key: "sPack",     has: hasPackBrief, act: 1, label: I18n.tr("Title + thumbnail") },
+            { key: "sBay",      has: hasScript,   act: 2, label: I18n.tr("Timeline") },
+            { key: "sScript",   has: hasScript,   act: 2, label: I18n.tr("Script") },
+            { key: "sShots",    has: hasShots,    act: 2, label: I18n.tr("Capture") },
+            { key: "sStyle",    has: hasStyle,    act: 2, label: I18n.tr("Sound") },
+            { key: "sRet",      has: showPacing,  act: 2, label: I18n.tr("Pacing") },
+            { key: "sPrep",     has: hasProduction, act: 2, label: I18n.tr("Prep") },
+            { key: "sLite",     has: hasLite,     act: 2, label: I18n.tr("Fast version") },
+            { key: "sDiscovery", has: hasDiscovery, act: 3, label: I18n.tr("Discovery") },
+            { key: "sCaption",  has: hasCaption,  act: 3, label: I18n.tr("Caption & CTA") },
+            { key: "sEndScreen", has: hasEndScreen, act: 3, label: I18n.tr("End bridge") },
+            { key: "sSeo",      has: hasSeo,      act: 3, label: I18n.tr("SEO") },
+            { key: "sRisks",    has: hasRisks,    act: 3, label: I18n.tr("Risks") },
+            { key: "sSeries",   has: hasSeries,   act: 3, label: I18n.tr("Next video") },
+            { key: "sFunnel",   has: hasFunnel,   act: 3, label: I18n.tr("Shorts funnel") }
         ]
         var out = []
         for (var i = 0; i < all.length; i++) if (all[i].has) out.push(all[i])
@@ -291,6 +296,7 @@ Item {
     Component.onCompleted: _primeForIdea()
     function _primeForIdea() {
         var nid = (idea && idea.id) ? idea.id : 0
+        var again = _lastId !== -1
         if (nid !== _lastId) {
             _lastId = nid
             thumbPick = 0
@@ -305,33 +311,97 @@ Item {
             scoreIn.to = idea.score || 0
             scoreIn.restart()
             // the has-flags settle in the same pass; read them after it
-            Qt.callLater(function() { root.activeAct = root.firstAct() })
+            Qt.callLater(function() {
+                var a = root.firstAct()
+                root._armAct(a)
+                root.activeAct = a
+                // a rebound idea can fill an act the old one left empty
+                if (again) armTimer.restart()
+            })
         }
+    }
+
+    // ── lazy acts ──
+    // A dossier is four acts, but only the open one is needed for the first
+    // paint. Each act is a Loader that builds on demand; after the first one
+    // lands, the rest are armed one per idle beat, so a tab switch is instant
+    // without ever paying all four acts at open time.
+    property int _armedMask: 0
+    property var _stages: ({})
+    function _armAct(a) {
+        if (a < 0 || a >= acts.length) return
+        _armedMask = _armedMask | (1 << a)
+    }
+    function _loaderFor(a) {
+        return a === 0 ? act0Loader : a === 1 ? act1Loader : a === 2 ? act2Loader : act3Loader
+    }
+    function _armIdle() {
+        for (var a = 0; a < acts.length; a++) {
+            if (_armedMask & (1 << a)) continue
+            if (actCount(a) === 0) continue
+            _armAct(a)
+            var L = _loaderFor(a)
+            if (L && L.item !== null) continue   // already built: arm the next one now
+            return
+        }
+    }
+    function stageFor(key) {
+        var st = _stages[key]
+        return st !== undefined ? st : null
+    }
+    function _registerStage(key, st) {
+        _stages[key] = st
+    }
+    Timer {
+        id: armTimer
+        interval: 220
+        onTriggered: root._armIdle()
     }
 
     // ── act switching + jumping ──
     property var _pendingJump: null
+    property int _jumpTries: 0
     Timer {
         id: jumpTimer
         interval: 60
         onTriggered: {
-            if (root._pendingJump && root.scroller && root.scroller.scrollToItem)
-                root.scroller.scrollToItem(root._pendingJump, actBar.height + Tokens.space5)
-            root._pendingJump = null
+            if (!root._pendingJump) { root._jumpTries = 0; return }
+            if (!root.scroller || !root.scroller.scrollToItem) {
+                root._pendingJump = null
+                root._jumpTries = 0
+                return
+            }
+            // A jump can target an act whose Loader is still incubating:
+            // wait for its Stage to exist instead of dropping the jump.
+            var it = typeof root._pendingJump === "string"
+                     ? root.stageFor(root._pendingJump) : root._pendingJump
+            if (it) {
+                root.scroller.scrollToItem(it, actBar.height + Tokens.space5)
+                root._pendingJump = null
+                root._jumpTries = 0
+                return
+            }
+            if (root._jumpTries++ < 40) jumpTimer.restart()
+            else { root._pendingJump = null; root._jumpTries = 0 }
         }
     }
     function setAct(a) {
         if (a === activeAct) return
         var wasStuck = stickY > 0
         activeAct = a
+        _armAct(a)
         // If the bar is stuck, the reader is deep in the old act: bring them
         // to the top of the new one rather than the middle of it.
         if (wasStuck) { _pendingJump = actWrap; jumpTimer.restart() }
     }
     function jumpTo(entry) {
-        if (!entry || !entry.it) return
-        if (entry.act !== activeAct) activeAct = entry.act
-        _pendingJump = entry.it
+        if (!entry || !entry.key) return
+        if (entry.act !== activeAct) {
+            activeAct = entry.act
+            _armAct(entry.act)
+        }
+        _pendingJump = entry.key
+        _jumpTries = 0
         jumpTimer.restart()
     }
 
@@ -612,6 +682,7 @@ Item {
         property int act: 0
         property int order: 0
         property bool has: true
+        property string key: ""
         property string kicker: ""
         property string heading: ""
         default property alias content: stBody.data
@@ -621,6 +692,9 @@ Item {
         Layout.fillWidth: true
         visible: has && host !== null && host.activeAct === act
         spacing: Tokens.space5
+        // The act Loaders build asynchronously, so a jump chip can be clicked
+        // before its Stage exists: the pane finds stages by key on demand.
+        Component.onCompleted: if (host && key !== "") host._registerStage(key, st)
 
         readonly property int revealKey: host ? host.revealTick * 10 + host.activeAct : 0
         onRevealKeyChanged: stIn.restart()
@@ -750,6 +824,13 @@ Item {
                     Pill {
                         glyph: root.idea.isLong ? "fmt_long" : "fmt_short"
                         text: root.idea.isLong ? I18n.tr("Long-form") : I18n.tr("Short")
+                    }
+                    // v1.0.6: the format it was written for — check it at a glance
+                    Pill {
+                        visible: (root.idea.channelType || "") !== ""
+                        glyph: "video"
+                        text: root.idea.channelType || ""
+                        tint: Theme.tertiary
                     }
                     Pill {
                         visible: (root.idea.difficultyLabel || "") !== ""
@@ -1407,3232 +1488,53 @@ Item {
 
         Item { Layout.preferredHeight: Tokens.space3 }
 
-        // ══════════════════════════ ACT 1 · STRATEGY ══════════════════════════
+        // ══════════════════════════ ACT 1 · IDEA ══════════════════════════
 
-        // ── v5 · THE PROMISE ──
-        Stage {
-            id: sPromise
-            host: root; act: 0; order: 0
-            has: root.hasPromise
-            kicker: "THE PROMISE"
-            heading: I18n.tr("What it promises, and when it pays off")
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.wide ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Box {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 1
-                    visible: (root.promise.promise || "") !== ""
-                    color: U.withAlpha(Theme.tertiary, Theme.isDark ? 0.07 : 0.05)
-                    border.color: U.withAlpha(Theme.tertiary, 0.26)
-                    Caption { text: I18n.tr("Title, thumbnail and hook all promise"); color: Theme.tertiary }
-                    Body {
-                        text: root.promise.promise || ""
-                        weight: Tokens.weightBold
-                        font.pixelSize: root.mid ? 22 : 19
-                        color: Theme.text_strong
-                    }
-                }
-                Box {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 1
-                    visible: (root.promise.payoff || "") !== "" || (root.promise.differentiator || "") !== ""
-                    RowLayout {
-                        Layout.fillWidth: true
-                        visible: (root.promise.payoff || "") !== ""
-                        Caption { text: I18n.tr("The payoff") }
-                        Pill {
-                            visible: (root.promise.payoffTime || "") !== ""
-                            glyph: "schedule"
-                            mono: true
-                            text: root.promise.payoffTime || ""
-                            tint: Theme.tertiary
-                        }
-                    }
-                    Body { visible: text !== ""; text: root.promise.payoff || ""; font.pixelSize: Tokens.fontLabel + 1; color: Theme.text_strong }
-                    Caption { visible: (root.promise.differentiator || "") !== ""; text: I18n.tr("Only this version has"); Layout.topMargin: Tokens.space2 }
-                    Body { visible: text !== ""; text: root.promise.differentiator || ""; font.pixelSize: Tokens.fontLabel }
-                }
-            }
+        Loader {
+            id: act0Loader
+            Layout.fillWidth: true
+            asynchronous: true
+            sourceComponent: act0Comp
+            active: (root._armedMask & 1) !== 0
+            visible: root.activeAct === 0
+            onLoaded: armTimer.restart()
         }
 
-        // ── v6 · WHY NOW ──
-        // A three-stop shelf-life gauge (Evergreen · Seasonal · Trending) with
-        // the idea's stop lit, the window as a pill and the reason beside it.
-        Stage {
-            id: sWhyNow
-            host: root; act: 0; order: 1
-            has: root.hasWhyNow
-            kicker: "WHY NOW"
-            heading: I18n.tr("How long this idea stays worth making")
-            aside: [ Pill {
-                visible: (root.whyNow.window || "") !== ""
-                glyph: "schedule"
-                text: root.whyNow.window || ""
-                tint: root.shelfColor
-                strong: true
-                maxTextWidth: 260
-            } ]
+        // ══════════════════════════ ACT 2 · PACKAGING ══════════════════════════
 
-            Box {
-                Layout.fillWidth: true
-                RowLayout {
-                    Layout.fillWidth: true
-                    visible: (root.whyNow.shelfLife || "") !== ""
-                    spacing: Tokens.space2
-                    Repeater {
-                        model: [
-                            { key: "Evergreen", label: I18n.tr("Evergreen"), glyph: "autorenew",     tint: Theme.secondary_container, sub: I18n.tr("works any month") },
-                            { key: "Seasonal",  label: I18n.tr("Seasonal"),  glyph: "schedule",       tint: Theme.warn,               sub: I18n.tr("has a season") },
-                            { key: "Trending",  label: I18n.tr("Trending"),  glyph: "bolt",           tint: Theme.error,              sub: I18n.tr("make it this week") }
-                        ]
-                        Rectangle {
-                            id: shelf
-                            readonly property bool isOn: root.whyNow.shelfLife === modelData.key
-                            Layout.fillWidth: true
-                            Layout.preferredWidth: 1
-                            implicitHeight: 64
-                            radius: Tokens.radiusLg
-                            color: isOn ? U.withAlpha(modelData.tint, Theme.isDark ? 0.16 : 0.11) : "transparent"
-                            border.width: 1
-                            border.color: isOn ? U.withAlpha(modelData.tint, 0.5) : Theme.border
-                            opacity: isOn ? 1 : 0.55
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.leftMargin: Tokens.space4
-                                anchors.rightMargin: Tokens.space4
-                                spacing: Tokens.space3
-                                Rectangle {
-                                    width: 32; height: 32; radius: 10
-                                    color: shelf.isOn ? modelData.tint : Theme.surface_highest
-                                    C.IconGlyph {
-                                        anchors.centerIn: parent
-                                        name: modelData.glyph
-                                        size: 17
-                                        glyphColor: shelf.isOn ? (Theme.isDark ? "#0F0D12" : "#FFFFFF") : Theme.outline
-                                    }
-                                }
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 0
-                                    C.AppText { text: modelData.label; weight: Tokens.weightBold; font.pixelSize: Tokens.fontLabel; color: shelf.isOn ? Theme.text_strong : Theme.on_surface_var; elide: Text.ElideRight; Layout.fillWidth: true }
-                                    C.AppText { visible: root.mid; text: modelData.sub; font.pixelSize: Tokens.fontCaption; color: Theme.outline; elide: Text.ElideRight; Layout.fillWidth: true }
-                                }
-                            }
-                        }
-                    }
-                }
-                Body {
-                    visible: text !== ""
-                    Layout.topMargin: (root.whyNow.shelfLife || "") !== "" ? Tokens.space2 : 0
-                    text: root.whyNow.why || ""
-                    font.pixelSize: Tokens.fontLabel + 1
-                    color: Theme.text_strong
-                }
-            }
+        Loader {
+            id: act1Loader
+            Layout.fillWidth: true
+            asynchronous: true
+            sourceComponent: act1Comp
+            active: (root._armedMask & 2) !== 0
+            visible: root.activeAct === 1
+            onLoaded: armTimer.restart()
         }
 
-        Stage {
-            id: sAngle
-            host: root; act: 0; order: 0
-            has: root.hasAngle
-            kicker: "VIRAL ANGLE"
-            heading: I18n.tr("Viral angle")
+        // ══════════════════════════ ACT 3 · MAKE ══════════════════════════
 
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.wide && (root.angle.triggers || []).length > 0 ? 2 : 1
-                columnSpacing: Tokens.space7
-                rowSpacing: Tokens.space5
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    Layout.preferredWidth: 3
-                    Layout.alignment: Qt.AlignTop
-                    spacing: Tokens.space4
-                    Body {
-                        text: root.angle.concept || ""
-                        visible: text !== ""
-                        weight: Tokens.weightBold
-                        font.pixelSize: root.mid ? 26 : 21
-                        color: Theme.text_strong
-                    }
-                    WhyNote { text_: root.angle.reasoning || ""; accent: Theme.tertiary }
-                }
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    Layout.preferredWidth: 1
-                    Layout.alignment: Qt.AlignTop
-                    visible: (root.angle.triggers || []).length > 0
-                    spacing: Tokens.space2
-                    Caption { text: I18n.tr("Psychological triggers") }
-                    Repeater {
-                        model: root.angle.triggers || []
-                        Rectangle {
-                            Layout.fillWidth: true
-                            radius: Tokens.radiusMd
-                            color: index % 2 ? Theme.surface_low : Theme.surface_high
-                            border.width: 1
-                            border.color: Theme.border
-                            implicitHeight: trRow.implicitHeight + Tokens.space3 * 2
-                            RowLayout {
-                                id: trRow
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.margins: Tokens.space4
-                                spacing: Tokens.space3
-                                Rectangle {
-                                    width: 8; height: 8; radius: 4
-                                    color: Theme.tertiary
-                                    opacity: 1 - index * 0.15
-                                    Layout.alignment: Qt.AlignVCenter
-                                }
-                                Body { text: modelData; selectable: false; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
-                            }
-                        }
-                    }
-                }
-            }
+        Loader {
+            id: act2Loader
+            Layout.fillWidth: true
+            asynchronous: true
+            sourceComponent: act2Comp
+            active: (root._armedMask & 4) !== 0
+            visible: root.activeAct === 2
+            onLoaded: armTimer.restart()
         }
 
-        Stage {
-            id: sHook
-            host: root; act: 0; order: 1
-            has: root.hasHook
-            kicker: "HOOK ANATOMY"
-            heading: I18n.tr("Hook anatomy")
-            aside: [
-                Pill {
-                    visible: (root.hookData.focusTag || "") !== ""
-                    text: root.hookData.focusTag || ""
-                    tint: Theme.tertiary
-                    strong: true
-                }
-            ]
+        // ══════════════════════════ ACT 4 · PUBLISH ══════════════════════════
 
-            GridLayout {
-                id: hookGrid
-                Layout.fillWidth: true
-                readonly property var cols: {
-                    var c = []
-                    if ((root.hookData.visual || []).length > 0)
-                        c.push({ g: "visibility", n: I18n.tr("Visual hook"), s: I18n.tr("the first frame they see"), items: root.hookData.visual, big: false, verbatim: false })
-                    if ((root.hookData.text || []).length > 0)
-                        c.push({ g: "text", n: I18n.tr("On-screen text"), s: I18n.tr("read with the sound off"), items: root.hookData.text, big: true, verbatim: false })
-                    if (root.idea.hasAntiHook === true)
-                        c.push({ g: "cancel", n: I18n.tr("Anti-hook"), s: I18n.tr("pushes the wrong viewer away"), items: root.antiHookData.options || [], big: false, verbatim: false })
-                    return c
-                }
-                columns: root.wide ? Math.max(1, cols.length) : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-
-                Repeater {
-                    model: hookGrid.cols
-                    Box {
-                        id: hookCol
-                        readonly property var cd: modelData
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.preferredWidth: 1
-                        Layout.alignment: Qt.AlignTop
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Layout.bottomMargin: Tokens.space2
-                            spacing: Tokens.space3
-                            Rectangle {
-                                width: 40; height: 40; radius: Tokens.radiusMd
-                                color: U.withAlpha(Theme.tertiary, 0.14)
-                                C.IconGlyph { anchors.centerIn: parent; name: modelData.g; size: 18; glyphColor: Theme.tertiary }
-                            }
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 0
-                                C.AppText { text: modelData.n; weight: Tokens.weightBold; font.pixelSize: Tokens.fontSubtitle; color: Theme.text_strong; Layout.fillWidth: true; elide: Text.ElideRight }
-                                C.AppText { text: modelData.s; font.pixelSize: Tokens.fontCaption; color: Theme.outline; Layout.fillWidth: true; elide: Text.ElideRight }
-                            }
-                        }
-                        Repeater {
-                            model: modelData.items
-                            Option {
-                                letter: String.fromCharCode(65 + index)
-                                body: modelData
-                                big: hookCol.cd.big === true
-                                tint: Theme.tertiary
-                                onCopyClicked: (t) => root.copyRequested(t)
-                            }
-                        }
-                    }
-                }
-            }
-            WhyNote { text_: root.hookData.reasoning || ""; accent: Theme.tertiary }
-            WhyNote {
-                text_: root.idea.hasAntiHook === true ? (root.antiHookData.reasoning || "") : ""
-                accent: Theme.tertiary
-            }
+        Loader {
+            id: act3Loader
+            Layout.fillWidth: true
+            asynchronous: true
+            sourceComponent: act3Comp
+            active: (root._armedMask & 8) !== 0
+            visible: root.activeAct === 3
+            onLoaded: armTimer.restart()
         }
-
-        Stage {
-            id: sThumbs
-            host: root; act: 0; order: 2
-            has: root.hasThumbs
-            kicker: "THUMBNAIL CONCEPTS"
-            heading: I18n.tr("Thumbnails to test against each other")
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.mid ? 2 : 1
-                columnSpacing: Tokens.space5
-                rowSpacing: Tokens.space4
-
-                // picker tiles — a 9:16 slot per concept
-                Row {
-                    Layout.alignment: Qt.AlignTop
-                    spacing: Tokens.space3
-                    Repeater {
-                        model: root.idea.thumbnails || []
-                        AbstractButton {
-                            id: tile
-                            readonly property bool isOn: root.thumbPick === index
-                            readonly property color tint: index === 0 ? Theme.tertiary : index === 1 ? Theme.warn : Theme.secondary_container
-                            width: root.wide ? 128 : 104
-                            height: Math.round(width * 16 / 9)
-                            onClicked: root.thumbPick = index
-                            HoverHandler { id: tileHover; cursorShape: Qt.PointingHandCursor }
-                            transform: Translate {
-                                y: tile.isOn ? -6 : 0
-                                Behavior on y { NumberAnimation { duration: Tokens.durMed; easing.type: Easing.OutCubic } }
-                            }
-                            opacity: tile.isOn || tileHover.hovered ? 1 : 0.6
-                            Behavior on opacity { NumberAnimation { duration: Tokens.durMed } }
-                            background: Rectangle {
-                                radius: Tokens.radiusLg + 2
-                                antialiasing: true
-                                gradient: Gradient {
-                                    GradientStop { position: 0.0; color: U.mix(root.inkDeep, tile.tint, 0.55) }
-                                    GradientStop { position: 0.6; color: U.mix(root.inkDeep, tile.tint, 0.16) }
-                                    GradientStop { position: 1.0; color: "#0B0910" }
-                                }
-                                border.width: tile.isOn ? 2 : 1
-                                border.color: tile.isOn ? tile.tint : Qt.rgba(1, 1, 1, 0.10)
-                            }
-                            contentItem: Item {
-                                C.AppText {
-                                    anchors.centerIn: parent
-                                    text: String.fromCharCode(65 + index)
-                                    weight: Tokens.weightExtraBold
-                                    font.pixelSize: 54
-                                    color: Qt.rgba(1, 1, 1, tile.isOn ? 0.95 : 0.7)
-                                }
-                                C.AppText {
-                                    anchors.bottom: parent.bottom
-                                    anchors.bottomMargin: Tokens.space3
-                                    anchors.horizontalCenter: parent.horizontalCenter
-                                    width: parent.width - Tokens.space3 * 2
-                                    text: modelData.label || ""
-                                    font.pixelSize: Tokens.fontCaption
-                                    weight: Tokens.weightDemiBold
-                                    color: Qt.rgba(1, 1, 1, 0.8)
-                                    horizontalAlignment: Text.AlignHCenter
-                                    elide: Text.ElideRight
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Box {
-                    id: thumbBox
-                    Layout.fillWidth: true
-                    Layout.alignment: Qt.AlignTop
-                    readonly property var cur: (root.idea.thumbnails || [])[root.thumbPick] || ({})
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Tokens.space2
-                        C.AppText {
-                            text: (thumbBox.cur.label || "") + " · prompt"
-                            weight: Tokens.weightBold
-                            font.pixelSize: Tokens.fontBody
-                            color: Theme.tertiary
-                            Layout.fillWidth: true
-                            elide: Text.ElideRight
-                        }
-                        C.IconButton {
-                            iconName: "content_copy"
-                            tip: I18n.tr("Copy")
-                            accent: Theme.primary
-                            onClicked: root.copyRequested(thumbBox.cur.prompt || "")
-                        }
-                    }
-                    Body {
-                        text: thumbBox.cur.prompt || ""
-                        font.pixelSize: Tokens.fontLabel
-                        color: Theme.on_surface
-                    }
-                    C.AppText {
-                        Layout.fillWidth: true
-                        Layout.topMargin: Tokens.space2
-                        text: I18n.tr("Test these against each other rather than picking the first — thumbnail is the single biggest lever on click-through.")
-                        font.pixelSize: Tokens.fontBody
-                        color: Theme.outline
-                        wrapMode: Text.Wrap
-                    }
-                }
-            }
-        }
-
-        // ── v7 · PACKAGING BRIEF (v1.0.3) ──
-        // The words ON the thumbnail, the one thing the eye lands on, and how
-        // title and thumbnail split the job instead of repeating each other.
-        Stage {
-            id: sPack
-            host: root; act: 0; order: 3
-            has: root.hasPackBrief
-            kicker: "PACKAGING"
-            heading: I18n.tr("Title + thumbnail, working as one")
-
-            GridLayout {
-                Layout.fillWidth: true
-                visible: (root.packBrief.thumbText || []).length > 0
-                columns: root.mid ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Repeater {
-                    model: root.packBrief.thumbText || []
-                    Option {
-                        Layout.preferredWidth: 1
-                        letter: index === 0 ? "A" : index === 1 ? "B" : "C"
-                        body: modelData
-                        big: true
-                        tint: Theme.tertiary
-                        onCopyClicked: (t) => root.copyRequested(t)
-                    }
-                }
-            }
-            C.AppText {
-                visible: (root.packBrief.thumbText || []).length > 0
-                text: I18n.tr("Words on the thumbnail: 4 or fewer, never the title again.")
-                font.pixelSize: Tokens.fontCaption
-                color: Theme.outline
-                Layout.fillWidth: true
-            }
-            GridLayout {
-                Layout.fillWidth: true
-                Layout.topMargin: Tokens.space2
-                columns: root.wide ? 3 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Repeater {
-                    model: [
-                        { c: I18n.tr("THE EYE LANDS ON"), g: "visibility", v: root.packBrief.focal || "" },
-                        { c: I18n.tr("TITLE VS. THUMBNAIL"), g: "filter_none", v: root.packBrief.pairing || "" },
-                        { c: I18n.tr("STANDS OUT IN THE FEED"), g: "sparkling", v: root.packBrief.standOut || "" }
-                    ]
-                    Box {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.preferredWidth: 1
-                        Layout.alignment: Qt.AlignTop
-                        visible: modelData.v !== ""
-                        RowLayout {
-                            spacing: 6
-                            C.IconGlyph { name: modelData.g; size: 14; glyphColor: Theme.tertiary }
-                            Caption { text: modelData.c; color: Theme.tertiary }
-                        }
-                        Body { text: modelData.v }
-                    }
-                }
-            }
-        }
-
-
-        Stage {
-            id: sAudience
-            host: root; act: 0; order: 3
-            has: root.hasAudience
-            kicker: "AUDIENCE"
-            heading: I18n.tr("Who this is for")
-            aside: [
-                Pill {
-                    visible: (root.audience.watchContext || "") !== "" && root.mid
-                    glyph: "smart_display"
-                    text: root.audience.watchContext || ""
-                    maxTextWidth: 300
-                }
-            ]
-
-            Body {
-                visible: text !== ""
-                text: root.audience.persona || ""
-                weight: Tokens.weightMedium
-                font.pixelSize: Tokens.fontTitle - 1
-                color: Theme.text_strong
-                Layout.bottomMargin: Tokens.space2
-            }
-            GridLayout {
-                id: audGrid
-                Layout.fillWidth: true
-                readonly property var cols: {
-                    var c = []
-                    if ((root.audience.painPoints || []).length) c.push({ n: I18n.tr("Pain points"), items: root.audience.painPoints, tint: Theme.error })
-                    if ((root.audience.desires || []).length) c.push({ n: I18n.tr("Desires"), items: root.audience.desires, tint: Theme.secondary_container })
-                    if ((root.audience.objections || []).length) c.push({ n: I18n.tr("Objections"), items: root.audience.objections, tint: Theme.warn })
-                    return c
-                }
-                columns: root.mid ? Math.max(1, cols.length) : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Repeater {
-                    model: audGrid.cols
-                    Box {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.preferredWidth: 1
-                        color: Theme.surface_low
-                        Rectangle {
-                            Layout.preferredWidth: 28
-                            Layout.preferredHeight: 3
-                            radius: 1.5
-                            color: modelData.tint
-                        }
-                        C.AppText { text: modelData.n; weight: Tokens.weightBold; font.pixelSize: Tokens.fontLabel; color: modelData.tint }
-                        Repeater {
-                            model: modelData.items
-                            Body { text: modelData; font.pixelSize: Tokens.fontLabel }
-                        }
-                    }
-                }
-            }
-            C.AppText {
-                visible: !root.mid && (root.audience.watchContext || "") !== ""
-                text: root.audience.watchContext || ""
-                font.pixelSize: Tokens.fontBody
-                color: Theme.on_surface_var
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-            }
-        }
-
-        // ── v6 · DISCOVERY ──
-        // How people find it: searches drawn as YouTube search bars you can
-        // copy (or open), what it should be suggested beside, why it gets
-        // clicked on Home / the feed.
-        Stage {
-            id: sDiscovery
-            host: root; act: 0; order: 4
-            has: root.hasDiscovery
-            kicker: "DISCOVERY"
-            heading: I18n.tr("How viewers will find it")
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.wide && (root.disc.searchQueries || []).length > 0
-                         && ((root.disc.suggestedBeside || []).length > 0 || (root.disc.browseTrigger || "") !== "") ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-
-                Box {
-                    visible: (root.disc.searchQueries || []).length > 0
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 3
-                    Layout.alignment: Qt.AlignTop
-                    Caption { text: I18n.tr("What they type into search") }
-                    Repeater {
-                        model: root.disc.searchQueries || []
-                        AbstractButton {
-                            id: sq
-                            Layout.fillWidth: true
-                            implicitHeight: 42
-                            hoverEnabled: true
-                            onClicked: Qt.openUrlExternally("https://www.youtube.com/results?search_query=" + encodeURIComponent(modelData))
-                            HoverHandler { cursorShape: Qt.PointingHandCursor }
-                            background: Rectangle {
-                                radius: Tokens.radiusPill
-                                color: sq.hovered ? U.hoverTint(Theme.input_bg, Theme.isDark) : Theme.input_bg
-                                border.width: 1
-                                border.color: sq.hovered ? U.withAlpha(Theme.tertiary, 0.45) : Theme.border
-                                Behavior on border.color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
-                            }
-                            contentItem: RowLayout {
-                                spacing: Tokens.space3
-                                C.IconGlyph { Layout.leftMargin: Tokens.space4; name: "search"; size: 16; glyphColor: sq.hovered ? Theme.tertiary : Theme.outline }
-                                Body { text: modelData; selectable: false; maximumLineCount: 1; elide: Text.ElideRight; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
-                                C.IconButton {
-                                    Layout.rightMargin: Tokens.space2
-                                    iconName: "content_copy"
-                                    tip: I18n.tr("Copy")
-                                    accent: Theme.primary
-                                    implicitWidth: 28; implicitHeight: 28
-                                    opacity: sq.hovered ? 1 : 0.4
-                                    onClicked: root.copyRequested(modelData)
-                                }
-                            }
-                        }
-                    }
-                }
-                Box {
-                    visible: (root.disc.suggestedBeside || []).length > 0 || (root.disc.browseTrigger || "") !== ""
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 2
-                    Layout.alignment: Qt.AlignTop
-                    Caption { visible: (root.disc.suggestedBeside || []).length > 0; text: I18n.tr("Suggested next to") }
-                    Flow {
-                        Layout.fillWidth: true
-                        visible: (root.disc.suggestedBeside || []).length > 0
-                        spacing: Tokens.space2
-                        Repeater {
-                            model: root.disc.suggestedBeside || []
-                            Pill { text: modelData; glyph: "smart_display"; tint: Theme.tertiary; maxTextWidth: 300 }
-                        }
-                    }
-                    Caption {
-                        visible: (root.disc.browseTrigger || "") !== ""
-                        Layout.topMargin: (root.disc.suggestedBeside || []).length > 0 ? Tokens.space2 : 0
-                        text: I18n.tr("Why they stop scrolling")
-                    }
-                    Body { visible: text !== ""; text: root.disc.browseTrigger || ""; font.pixelSize: Tokens.fontLabel }
-                }
-            }
-        }
-
-        Stage {
-            id: sComp
-            host: root; act: 0; order: 4
-            has: root.hasComp
-            kicker: "COMPETITION"
-            heading: I18n.tr("What others made, and where you stand")
-
-            // the conclusion first — it is the one thing here you act on
-            Rectangle {
-                Layout.fillWidth: true
-                visible: (root.comp.gap || "") !== ""
-                radius: Tokens.radiusXl
-                gradient: Gradient {
-                    orientation: Gradient.Horizontal
-                    GradientStop { position: 0.0; color: U.withAlpha(Theme.tertiary, Theme.isDark ? 0.20 : 0.12) }
-                    GradientStop { position: 1.0; color: U.withAlpha(Theme.tertiary, 0.03) }
-                }
-                border.width: 1
-                border.color: U.withAlpha(Theme.tertiary, 0.30)
-                implicitHeight: gapCol.implicitHeight + Tokens.space6 * 2
-                ColumnLayout {
-                    id: gapCol
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.margins: Tokens.space6
-                    spacing: Tokens.space2
-                    Caption { text: I18n.tr("Your opening"); color: Theme.tertiary }
-                    Body {
-                        text: root.comp.gap || ""
-                        weight: Tokens.weightBold
-                        font.pixelSize: Tokens.fontTitle - 1
-                        color: Theme.text_strong
-                    }
-                }
-            }
-
-            // v3.15 competitor reel: a real 16:9 thumbnail on the reading-start
-            // side, the title as a link, then their angle and what they miss as
-            // two labelled columns. The whole card opens the video (or, for a
-            // row with no known video, a YouTube search for its title). It is
-            // mirrored with the UI now — the old grid pinned the thumbnail and
-            // title to the top-left corner even in Persian.
-            Repeater {
-                model: root.comp.rows || []
-                AbstractButton {
-                    id: cRow
-                    Layout.fillWidth: true
-                    readonly property bool linked: (modelData.openUrl || "") !== ""
-                    readonly property bool hasThumb: cThumb.status === Image.Ready
-                    readonly property bool hot: cHover.hovered && linked
-                    enabled: linked
-                    hoverEnabled: true
-                    implicitHeight: cLay.implicitHeight + Tokens.space4 * 2
-                    onClicked: Qt.openUrlExternally(modelData.openUrl)
-                    HoverHandler { id: cHover; cursorShape: cRow.linked ? Qt.PointingHandCursor : Qt.ArrowCursor }
-                    C.AppTooltip {
-                        visible: cRow.hot
-                        text: modelData.isSearch ? I18n.tr("Search this on YouTube") : I18n.tr("Open on YouTube")
-                    }
-                    background: Rectangle {
-                        radius: Tokens.radiusXl
-                        color: cRow.hot ? U.hoverTint(Theme.surface_high, Theme.isDark) : Theme.surface_high
-                        border.width: 1
-                        border.color: cRow.hot ? U.withAlpha(Theme.tertiary, 0.42) : Theme.border
-                        Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
-                        Behavior on border.color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
-                        // a thin act-coloured edge on the reading-start side
-                        Rectangle {
-                            width: 3
-                            radius: 2
-                            anchors.top: parent.top; anchors.bottom: parent.bottom
-                            anchors.topMargin: Tokens.space4; anchors.bottomMargin: Tokens.space4
-                            x: I18n.rtl ? parent.width - width : 0
-                            color: Theme.tertiary
-                            opacity: cRow.hot ? 0.9 : 0
-                            Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
-                        }
-                    }
-                    contentItem: Item {
-                        implicitHeight: cLay.implicitHeight
-                        RowLayout {
-                            id: cLay
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            anchors.leftMargin: Tokens.space4
-                            anchors.rightMargin: Tokens.space4
-                            anchors.topMargin: Tokens.space4
-                            LayoutMirroring.enabled: I18n.rtl
-                            LayoutMirroring.childrenInherit: true
-                            spacing: Tokens.space4
-
-                            // ── thumbnail ──
-                            Rectangle {
-                                id: cThumbBox
-                                Layout.alignment: Qt.AlignTop
-                                Layout.preferredWidth: root.mid ? 176 : 128
-                                Layout.preferredHeight: root.mid ? 99 : 72
-                                radius: Tokens.radiusMd
-                                color: Theme.surface_highest
-                                clip: true
-                                Image {
-                                    id: cThumb
-                                    anchors.fill: parent
-                                    visible: status === Image.Ready
-                                    source: (modelData.thumbId || "") !== "" ? "image://thumbs/" + modelData.thumbId : ""
-                                    sourceSize: Qt.size(352, 198)
-                                    fillMode: Image.PreserveAspectCrop
-                                    asynchronous: true
-                                    scale: cRow.hot ? 1.05 : 1
-                                    Behavior on scale { NumberAnimation { duration: Tokens.durMed; easing.type: Easing.OutCubic } }
-                                }
-                                // no video id: a quiet placeholder, never an empty box
-                                Column {
-                                    anchors.centerIn: parent
-                                    visible: !cRow.hasThumb
-                                    spacing: 4
-                                    C.IconGlyph {
-                                        anchors.horizontalCenter: parent.horizontalCenter
-                                        name: modelData.isSearch ? "search" : "smart_display"
-                                        size: 22
-                                        glyphColor: Theme.outline
-                                    }
-                                    C.AppText {
-                                        anchors.horizontalCenter: parent.horizontalCenter
-                                        text: modelData.isSearch ? I18n.tr("Find it") : (modelData.ref || "—")
-                                        font.pixelSize: Tokens.fontCaption
-                                        color: Theme.on_surface_var
-                                    }
-                                }
-                                // dark scrim + play disc on hover
-                                Rectangle {
-                                    anchors.fill: parent
-                                    visible: cRow.hasThumb
-                                    color: "#000000"
-                                    opacity: cRow.hot ? 0.28 : 0
-                                    Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
-                                }
-                                Rectangle {
-                                    visible: cRow.hasThumb
-                                    anchors.centerIn: parent
-                                    width: 36; height: 36; radius: 18
-                                    color: U.withAlpha("#000000", 0.62)
-                                    opacity: cRow.hot ? 1 : 0.0
-                                    scale: cRow.hot ? 1 : 0.8
-                                    Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
-                                    Behavior on scale { NumberAnimation { duration: Tokens.durMed; easing.type: Easing.OutBack } }
-                                    C.IconGlyph { anchors.centerIn: parent; name: "play_arrow"; size: 20; glyphColor: "#FFFFFF" }
-                                }
-                                // ref tag (V1, C2 …) top-start
-                                Rectangle {
-                                    visible: (modelData.ref || "") !== "" && cRow.hasThumb
-                                    x: I18n.rtl ? parent.width - width - 6 : 6
-                                    y: 6
-                                    width: cRefTxt.implicitWidth + 10; height: 18; radius: 5
-                                    color: U.withAlpha("#000000", 0.66)
-                                    C.AppText { id: cRefTxt; anchors.centerIn: parent; text: modelData.ref || ""; mono: true; font.pixelSize: 11; weight: Tokens.weightBold; color: "#FFFFFF" }
-                                }
-                                // views, bottom-end
-                                Rectangle {
-                                    visible: (modelData.views || "") !== "" && cRow.hasThumb
-                                    x: I18n.rtl ? 6 : parent.width - width - 6
-                                    y: parent.height - height - 6
-                                    width: cViewsTxt.implicitWidth + 10; height: 18; radius: 5
-                                    color: U.withAlpha("#000000", 0.66)
-                                    C.AppText { id: cViewsTxt; anchors.centerIn: parent; text: modelData.views || ""; mono: true; font.pixelSize: 11; weight: Tokens.weightBold; color: "#FFFFFF" }
-                                }
-                            }
-
-                            // ── words ──
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                Layout.alignment: Qt.AlignTop
-                                spacing: Tokens.space2
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: Tokens.space2
-                                    Body {
-                                        text: modelData.name || ""
-                                        selectable: false
-                                        weight: Tokens.weightBold
-                                        font.pixelSize: Tokens.fontLabel + 1
-                                        font.underline: cRow.hot
-                                        color: cRow.hot ? Theme.tertiary : Theme.text_strong
-                                        textFormat: Text.PlainText
-                                        maximumLineCount: 2
-                                        elide: Text.ElideRight
-                                    }
-                                    C.IconGlyph {
-                                        visible: cRow.linked
-                                        Layout.alignment: Qt.AlignTop
-                                        Layout.topMargin: 3
-                                        name: modelData.isSearch ? "search" : "open_in_new"
-                                        size: 15
-                                        glyphColor: cRow.hot ? Theme.tertiary : Theme.outline
-                                    }
-                                }
-                                Flow {
-                                    Layout.fillWidth: true
-                                    spacing: 6
-                                    visible: (modelData.channel || "") !== "" || (modelData.views || "") !== "" || modelData.isSearch === true
-                                    C.AppText { visible: text !== ""; text: modelData.channel || ""; weight: Tokens.weightDemiBold; font.pixelSize: Tokens.fontCaption + 1; color: Theme.on_surface_var }
-                                    C.AppText { visible: (modelData.views || "") !== ""; text: ((modelData.channel || "") !== "" ? "· " : "") + (modelData.views || "") + " " + I18n.tr("views"); mono: true; font.pixelSize: Tokens.fontCaption + 1; color: Theme.outline }
-                                    C.AppText { visible: modelData.isSearch === true; text: I18n.tr("no video link — opens a YouTube search"); font.pixelSize: Tokens.fontCaption + 1; color: Theme.outline }
-                                }
-
-                                GridLayout {
-                                    Layout.fillWidth: true
-                                    Layout.topMargin: Tokens.space1
-                                    visible: (modelData.angle || "") !== "" || (modelData.gap || "") !== ""
-                                    columns: root.wide ? 2 : 1
-                                    columnSpacing: Tokens.space4
-                                    rowSpacing: Tokens.space2
-                                    ColumnLayout {
-                                        visible: (modelData.angle || "") !== ""
-                                        Layout.fillWidth: true
-                                        Layout.preferredWidth: 1
-                                        Layout.alignment: Qt.AlignTop
-                                        spacing: 2
-                                        Caption { text: I18n.tr("Their angle") }
-                                        Body { text: modelData.angle || ""; selectable: false; font.pixelSize: Tokens.fontBody; color: Theme.on_surface }
-                                    }
-                                    ColumnLayout {
-                                        visible: (modelData.gap || "") !== ""
-                                        Layout.fillWidth: true
-                                        Layout.preferredWidth: 1
-                                        Layout.alignment: Qt.AlignTop
-                                        spacing: 2
-                                        Caption { text: I18n.tr("What they miss"); color: Theme.tertiary }
-                                        Body { text: modelData.gap || ""; selectable: false; font.pixelSize: Tokens.fontBody; color: Theme.text_strong }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Stage {
-            id: sEvidence
-            host: root; act: 0; order: 5
-            has: root.hasEvidence
-            kicker: "EVIDENCE"
-            heading: I18n.tr("Why the data backs it")
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.mid ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Repeater {
-                    model: root.idea.evidence || []
-                    Rectangle {
-                        id: evCard
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.preferredWidth: 1
-                        readonly property bool linked: (modelData.url || "") !== ""
-                        radius: Tokens.radiusXl
-                        color: Theme.surface_low
-                        border.width: 1
-                        border.color: Theme.border
-                        implicitHeight: evRow.implicitHeight + Tokens.space5 * 2
-                        HoverHandler { cursorShape: evCard.linked ? Qt.PointingHandCursor : Qt.ArrowCursor }
-                        TapHandler { enabled: evCard.linked; onTapped: Qt.openUrlExternally(modelData.url) }
-                        RowLayout {
-                            id: evRow
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            anchors.margins: Tokens.space5
-                            spacing: Tokens.space4
-                            Rectangle {
-                                Layout.alignment: Qt.AlignTop
-                                implicitWidth: Math.max(40, evRef.implicitWidth + Tokens.space3)
-                                implicitHeight: 32
-                                radius: Tokens.radiusSm
-                                color: U.withAlpha(Theme.secondary_container, 0.14)
-                                C.AppText { id: evRef; anchors.centerIn: parent; text: modelData.ref || "DATA"; mono: true; font.pixelSize: Tokens.fontCaption; color: Theme.secondary_container }
-                            }
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: Tokens.space1
-                                Body { text: modelData.claim || ""; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
-                                Body {
-                                    visible: text !== ""
-                                    text: (modelData.title || "") + (modelData.views ? "  ·  " + modelData.views : "")
-                                    selectable: false
-                                    font.pixelSize: Tokens.fontBody - 1
-                                    color: Theme.outline
-                                }
-                            }
-                            C.IconGlyph { visible: evCard.linked; name: "open_in_new"; size: 16; glyphColor: Theme.outline; Layout.alignment: Qt.AlignTop }
-                        }
-                    }
-                }
-            }
-        }
-
-        Stage {
-            id: sPulse
-            host: root; act: 0; order: 6
-            has: root.hasPulse
-            kicker: "DATA PULSE"
-            heading: I18n.tr("The numbers it was built from")
-
-            Flow {
-                Layout.fillWidth: true
-                spacing: Tokens.space3
-                Repeater {
-                    model: (root.idea.pulse || {}).tiles || []
-                    Rectangle {
-                        radius: Tokens.radiusLg
-                        color: Theme.surface_high
-                        border.width: 1
-                        border.color: Theme.border
-                        width: Math.max(170, pCol.implicitWidth + Tokens.space5 * 2)
-                        implicitHeight: pCol.implicitHeight + Tokens.space4 * 2
-                        height: implicitHeight
-                        ColumnLayout {
-                            id: pCol
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            anchors.margins: Tokens.space4
-                            anchors.leftMargin: Tokens.space5
-                            anchors.rightMargin: Tokens.space5
-                            spacing: 2
-                            C.AppText { text: modelData.label || ""; font.pixelSize: Tokens.fontCaption; color: Theme.outline }
-                            C.AppText { text: modelData.value || ""; weight: Tokens.weightBold; font.pixelSize: 28; color: Theme.text_strong; LayoutMirroring.enabled: false }
-                            C.AppText { text: modelData.sub || ""; font.pixelSize: Tokens.fontCaption; color: Theme.on_surface_var; elide: Text.ElideRight; Layout.maximumWidth: 240 }
-                        }
-                    }
-                }
-            }
-            Repeater {
-                model: (root.idea.pulse || {}).csv || []
-                Box {
-                    Layout.fillWidth: true
-                    color: U.withAlpha(Theme.secondary_container, 0.05)
-                    border.color: U.withAlpha(Theme.secondary_container, 0.22)
-                    pad: Tokens.space4
-                    C.AppText { text: modelData.name || ""; weight: Tokens.weightBold; color: Theme.secondary_container; Layout.fillWidth: true; elide: Text.ElideMiddle }
-                    Flow {
-                        Layout.fillWidth: true
-                        spacing: Tokens.space5
-                        Repeater {
-                            model: [
-                                { l: I18n.tr("Videos"), v: modelData.videos },
-                                { l: I18n.tr("Median"), v: modelData.median },
-                                { l: I18n.tr("Top"), v: modelData.top },
-                                { l: I18n.tr("Best length"), v: modelData.bestLength },
-                                { l: I18n.tr("Best day"), v: modelData.bestDay }
-                            ]
-                            Column {
-                                spacing: 0
-                                C.AppText { text: modelData.l; font.pixelSize: Tokens.fontCaption; color: Theme.outline }
-                                C.AppText { text: modelData.v || "—"; weight: Tokens.weightBold; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ══════════════════════════ ACT 2 · PRODUCTION ══════════════════════════
-
-        // The edit bay: script, re-hooks and pacing on one time axis, with the
-        // cover preview's playhead. Time always runs left → right, like every
-        // editing app, so this block is never mirrored.
-        Stage {
-            id: sBay
-            host: root; act: 1; order: 0
-            has: root.hasScript
-            kicker: "EDIT BAY"
-            heading: I18n.tr("The whole video on one timeline")
-            aside: [
-                C.AppText {
-                    text: root.fmt(root.playT) + " / " + (root.idea.totalLabel || root.fmt(root.total))
-                    mono: true
-                    font.pixelSize: Tokens.fontBody
-                    color: Theme.on_surface_var
-                    Layout.alignment: Qt.AlignVCenter
-                    LayoutMirroring.enabled: false
-                },
-                C.PrimaryButton {
-                    variant: "ghost"
-                    iconName: root.playing ? "pause" : "play_arrow"
-                    text: root.playing ? I18n.tr("Pause") : I18n.tr("Play")
-                    implicitHeight: 38
-                    onClicked: root.playing = !root.playing
-                }
-            ]
-
-            Box {
-                Layout.fillWidth: true
-                pad: Tokens.space5
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Tokens.space4
-                    LayoutMirroring.enabled: false
-                    LayoutMirroring.childrenInherit: true
-
-                    // lane names
-                    Column {
-                        Layout.alignment: Qt.AlignTop
-                        Layout.preferredWidth: root.mid ? 104 : 72
-                        spacing: 0
-                        Item { width: 1; height: 30 }
-                        Repeater {
-                            model: [
-                                { n: I18n.tr("Script"), h: 58 },
-                                { n: I18n.tr("Re-hooks"), h: 40 },
-                                { n: I18n.tr("Pacing"), h: 40 }
-                            ]
-                            Item {
-                                width: parent.width
-                                height: modelData.h + Tokens.space2
-                                C.AppText {
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    anchors.verticalCenterOffset: -Tokens.space1
-                                    width: parent.width
-                                    text: modelData.n
-                                    font.pixelSize: Tokens.fontCaption
-                                    weight: Tokens.weightDemiBold
-                                    color: Theme.outline
-                                    elide: Text.ElideRight
-                                    horizontalAlignment: I18n.rtl ? Text.AlignRight : Text.AlignLeft
-                                }
-                            }
-                        }
-                    }
-
-                    // the track
-                    Item {
-                        id: track
-                        Layout.fillWidth: true
-                        implicitHeight: 30 + 58 + 40 + 40 + Tokens.space2 * 3
-                        function xOf(s) { return width * Math.max(0, Math.min(1, s / root.total)) }
-                        readonly property real step: root.total <= 40 ? 5 : root.total <= 120 ? 15
-                                                   : root.total <= 600 ? 60 : root.total <= 1800 ? 120 : 300
-
-                        // ruler
-                        Repeater {
-                            model: Math.floor(root.total / track.step) + 1
-                            Item {
-                                x: track.xOf(index * track.step)
-                                y: 0
-                                C.AppText {
-                                    x: index === 0 ? 0 : -implicitWidth / 2
-                                    y: 0
-                                    text: root.fmt(index * track.step)
-                                    mono: true
-                                    font.pixelSize: Tokens.fontCaption
-                                    color: Theme.outline
-                                    visible: track.xOf(index * track.step) <= track.width - 18
-                                }
-                                Rectangle { x: 0; y: 22; width: 1; height: track.height - 22; color: U.withAlpha(Theme.outline, 0.12) }
-                            }
-                        }
-
-                        // script lane
-                        Repeater {
-                            model: root.script
-                            Rectangle {
-                                readonly property bool isOn: index === root.beat
-                                readonly property color tone: root.speakerColor(modelData.speaker)
-                                x: track.xOf(modelData.startSec || 0) + 1
-                                y: 30
-                                width: Math.max(6, track.xOf(modelData.endSec || 0) - track.xOf(modelData.startSec || 0) - 2)
-                                height: 58
-                                radius: Tokens.radiusSm
-                                clip: true
-                                color: U.withAlpha(tone, isOn ? 0.24 : 0.09)
-                                border.width: 1
-                                border.color: U.withAlpha(tone, isOn ? 0.65 : 0.22)
-                                Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durMed } }
-                                Column {
-                                    anchors.fill: parent
-                                    anchors.margins: Tokens.space2
-                                    spacing: 2
-                                    C.AppText {
-                                        width: parent.width
-                                        text: modelData.speaker || ""
-                                        weight: Tokens.weightBold
-                                        font.pixelSize: Tokens.fontMicro + 1
-                                        color: parent.parent.tone
-                                        elide: Text.ElideRight
-                                    }
-                                    C.AppText {
-                                        width: parent.width
-                                        text: modelData.line || modelData.visual || ""
-                                        font.pixelSize: Tokens.fontCaption
-                                        color: Theme.on_surface_var
-                                        elide: Text.ElideRight
-                                        horizontalAlignment: /[\u0590-\u08FF]/.test(text) ? Text.AlignRight : Text.AlignLeft
-                                    }
-                                }
-                            }
-                        }
-
-                        // re-hook lane
-                        Rectangle { x: 0; y: 30 + 58 + Tokens.space2 + 20; width: track.width; height: 1; color: Theme.border }
-                        Repeater {
-                            model: root.idea.rehooks || []
-                            Rectangle {
-                                visible: modelData.atSec !== undefined && modelData.atSec >= 0
-                                x: track.xOf(modelData.atSec || 0) - width / 2
-                                y: 30 + 58 + Tokens.space2 + 6
-                                width: 28; height: 28; radius: 14
-                                color: Theme.warn
-                                C.IconGlyph { anchors.centerIn: parent; name: "bolt"; fill: true; size: 15; glyphColor: "#1D1305" }
-                                HoverHandler { id: rhHover }
-                                C.AppTooltip {
-                                    visible: rhHover.hovered
-                                    text: (modelData.device || "") + (modelData.line ? " · " + modelData.line : "")
-                                }
-                            }
-                        }
-
-                        // pacing lane
-                        Repeater {
-                            model: root.ret.phases || []
-                            Rectangle {
-                                readonly property real p0: (index > 0 ? (root.ret.phases[index - 1].endPct || 0) : 0) / 100
-                                readonly property real p1: (modelData.endPct || 0) / 100
-                                x: track.width * p0 + (index > 0 ? 1 : 0)
-                                y: 30 + 58 + 40 + Tokens.space2 * 2
-                                width: Math.max(0, track.width * (p1 - p0) - (index > 0 ? 1 : 0))
-                                height: 40
-                                radius: Tokens.radiusSm
-                                color: U.withAlpha(Theme.warn, [0.34, 0.12, 0.26, 0.18, 0.09, 0.22, 0.14, 0.3][index % 8])
-                                C.AppText {
-                                    anchors.centerIn: parent
-                                    width: parent.width - Tokens.space2
-                                    text: modelData.label || ""
-                                    font.pixelSize: Tokens.fontCaption
-                                    weight: Tokens.weightDemiBold
-                                    color: Theme.text_strong
-                                    horizontalAlignment: Text.AlignHCenter
-                                    elide: Text.ElideRight
-                                }
-                            }
-                        }
-
-                        // playhead
-                        Item {
-                            x: track.xOf(root.playT)
-                            y: 18
-                            height: track.height - 18
-                            Rectangle { x: -5; y: 0; width: 10; height: 10; radius: 3; color: Theme.warn }
-                            Rectangle { x: -1; y: 0; width: 2; height: parent.height; color: Theme.warn }
-                        }
-
-                        // scrub
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            preventStealing: true
-                            onPressed: (m) => root.seek(m.x / track.width * root.total)
-                            onPositionChanged: (m) => { if (pressed) root.seek(m.x / track.width * root.total) }
-                        }
-                    }
-                }
-            }
-
-            // now playing
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.topMargin: Tokens.space2
-                spacing: Tokens.space4
-                C.AppText {
-                    Layout.alignment: Qt.AlignTop
-                    Layout.topMargin: 4
-                    text: root.beatRow.time || ""
-                    mono: true
-                    font.pixelSize: Tokens.fontBody
-                    color: Theme.warn
-                    LayoutMirroring.enabled: false
-                }
-                Body {
-                    text: root.beatRow.line || ""
-                    selectable: false
-                    weight: root.isScene(root.beatRow.speaker) ? Tokens.weightRegular : Tokens.weightBold
-                    font.pixelSize: Tokens.fontTitle - 2
-                    color: root.isScene(root.beatRow.speaker) ? Theme.on_surface_var : Theme.text_strong
-                }
-            }
-            C.AppText {
-                visible: root.idea.timelineExact === false
-                text: I18n.tr("Timing estimated from line length")
-                font.pixelSize: Tokens.fontCaption
-                color: Theme.outline
-            }
-        }
-
-        Stage {
-            id: sScript
-            host: root; act: 1; order: 1
-            has: root.hasScript
-            kicker: "FULL SCRIPT"
-            heading: I18n.tr("Word for word, second by second")
-            aside: [
-                C.PrimaryButton {
-                    variant: "ghost"
-                    iconName: "content_copy"
-                    text: root.mid ? I18n.tr("Copy whole script") : ""
-                    implicitHeight: 40
-                    onClicked: root.copyRequested(root.idea.scriptCopyText || "")
-                },
-                C.PrimaryButton {
-                    iconName: "play_circle"
-                    text: I18n.tr("Read on camera")
-                    implicitHeight: 40
-                    onClicked: root.prompterRequested(root.idea.id || 0)
-                }
-            ]
-
-            Repeater {
-                model: root.script
-                Rectangle {
-                    id: sRow
-                    Layout.fillWidth: true
-                    readonly property bool isOn: index === root.beat
-                    readonly property bool scene: root.isScene(modelData.speaker)
-                    radius: Tokens.radiusLg
-                    color: isOn ? U.withAlpha(Theme.warn, Theme.isDark ? 0.08 : 0.10)
-                         : srHover.hovered ? U.withAlpha(Theme.on_surface, 0.03) : U.withAlpha(Theme.on_surface, 0)
-                    Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durMed } }
-                    implicitHeight: srRow.implicitHeight + Tokens.space4 * 2
-                    HoverHandler { id: srHover }
-                    RowLayout {
-                        id: srRow
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: Tokens.space4
-                        spacing: Tokens.space5
-                        // the timecode doubles as a seek button
-                        AbstractButton {
-                            Layout.alignment: Qt.AlignTop
-                            Layout.preferredWidth: 100
-                            implicitHeight: tcCol.implicitHeight
-                            onClicked: root.seek(modelData.startSec || 0)
-                            HoverHandler { cursorShape: Qt.PointingHandCursor }
-                            background: Item {}
-                            contentItem: Column {
-                                id: tcCol
-                                spacing: 2
-                                C.AppText {
-                                    text: modelData.time || ""
-                                    mono: true
-                                    font.pixelSize: Tokens.fontBody - 1
-                                    color: sRow.isOn ? Theme.warn : Theme.outline
-                                    LayoutMirroring.enabled: false
-                                }
-                                C.AppText {
-                                    text: root.speakerLabel(modelData.speaker)
-                                    font.pixelSize: Tokens.fontCaption
-                                    color: sRow.scene ? Theme.tertiary : modelData.speaker === "On-screen" ? Theme.warn : Theme.on_surface_var
-                                }
-                            }
-                        }
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: Tokens.space2
-                            Body {
-                                visible: text !== ""
-                                text: modelData.line || ""
-                                weight: sRow.scene ? Tokens.weightRegular : Tokens.weightBold
-                                font.pixelSize: sRow.scene ? Tokens.fontLabel + 1 : Tokens.fontTitle - 2
-                                color: sRow.scene ? Theme.on_surface_var
-                                     : modelData.speaker === "On-screen" ? Theme.warn : Theme.text_strong
-                            }
-                            // v5: what is on screen while it is said
-                            RowLayout {
-                                Layout.fillWidth: true
-                                visible: (modelData.visual || "") !== ""
-                                spacing: Tokens.space2
-                                C.IconGlyph { name: "visibility"; size: 14; glyphColor: Theme.outline; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
-                                Body {
-                                    text: modelData.visual || ""
-                                    font.pixelSize: Tokens.fontBody
-                                    color: Theme.on_surface_var
-                                }
-                            }
-                        }
-                        C.IconButton {
-                            Layout.alignment: Qt.AlignTop
-                            iconName: "content_copy"
-                            tip: I18n.tr("Copy")
-                            accent: Theme.primary
-                            implicitWidth: 30
-                            implicitHeight: 30
-                            opacity: srHover.hovered ? 1 : 0.35
-                            Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
-                            onClicked: root.copyRequested(modelData.line || "")
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── v6 · DELIVERY ──
-        // How to SAY the script: three dials (tone · pace · energy), the
-        // words to punch as bold chips, and the delivery mistakes to avoid.
-        Stage {
-            id: sDelivery
-            host: root; act: 1; order: 2
-            has: root.hasDelivery
-            kicker: "DELIVERY"
-            heading: I18n.tr("How to say it on camera")
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.mid ? 3 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Repeater {
-                    model: [
-                        { label: I18n.tr("Tone"),   glyph: "user",       value: root.deliv.tone || "" },
-                        { label: I18n.tr("Pace"),   glyph: "speed",      value: root.deliv.pace || "" },
-                        { label: I18n.tr("Energy"), glyph: "trending_up", value: root.deliv.energy || "" }
-                    ]
-                    Box {
-                        visible: modelData.value !== ""
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.preferredWidth: 1
-                        Layout.alignment: Qt.AlignTop
-                        pad: Tokens.space4
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: Tokens.space2
-                            C.IconGlyph { name: modelData.glyph; size: 15; glyphColor: Theme.warn }
-                            Caption { text: modelData.label; color: Theme.warn }
-                        }
-                        Body { text: modelData.value; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
-                    }
-                }
-            }
-
-            GridLayout {
-                Layout.fillWidth: true
-                visible: (root.deliv.emphasis || []).length > 0 || (root.deliv.avoid || []).length > 0
-                columns: root.mid && (root.deliv.emphasis || []).length > 0 && (root.deliv.avoid || []).length > 0 ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Box {
-                    visible: (root.deliv.emphasis || []).length > 0
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 1
-                    Layout.alignment: Qt.AlignTop
-                    Caption { text: I18n.tr("Punch these words") }
-                    Flow {
-                        Layout.fillWidth: true
-                        spacing: Tokens.space2
-                        Repeater {
-                            model: root.deliv.emphasis || []
-                            Pill { text: modelData; glyph: "bolt"; tint: Theme.warn; strong: true; maxTextWidth: 320 }
-                        }
-                    }
-                }
-                Box {
-                    visible: (root.deliv.avoid || []).length > 0
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 1
-                    Layout.alignment: Qt.AlignTop
-                    Caption { text: I18n.tr("Don't") }
-                    Repeater {
-                        model: root.deliv.avoid || []
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: Tokens.space3
-                            C.IconGlyph { name: "close"; size: 15; glyphColor: Theme.error; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
-                            Body { text: modelData; font.pixelSize: Tokens.fontLabel }
-                        }
-                    }
-                }
-            }
-        }
-
-        Stage {
-            id: sShots
-            host: root; act: 1; order: 2
-            has: root.hasShots
-            kicker: "SHOT LIST"
-            heading: I18n.tr("What goes in front of the camera")
-            aside: [ Pill { visible: root.mid; glyph: "movie"; text: I18n.tr("Shoot the essentials first, B-roll last") } ]
-
-            GridLayout {
-                id: shotGrid
-                Layout.fillWidth: true
-                readonly property int n: (root.idea.shotList || []).length
-                columns: Math.max(1, Math.min(n, Math.floor(width / 190)))
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Repeater {
-                    model: root.idea.shotList || []
-                    Rectangle {
-                        id: shot
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.preferredWidth: 1
-                        readonly property bool isB: modelData.broll === true
-                        radius: Tokens.radiusXl
-                        color: isB ? "transparent" : Theme.surface_high
-                        border.width: 1
-                        border.color: isB ? U.withAlpha(Theme.outline, 0.45) : Theme.border
-                        implicitHeight: shotCol.implicitHeight + Tokens.space5 * 2
-                        ColumnLayout {
-                            id: shotCol
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            anchors.margins: Tokens.space5
-                            spacing: Tokens.space2
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Layout.bottomMargin: Tokens.space3
-                                C.AppText {
-                                    text: String(modelData.shot || (index + 1))
-                                    weight: Tokens.weightRegular
-                                    font.pixelSize: 36
-                                    color: shot.isB ? Theme.outline : Theme.warn
-                                    LayoutMirroring.enabled: false
-                                    Layout.fillWidth: true
-                                }
-                                Pill { visible: shot.isB; text: "B-roll"; mono: true }
-                            }
-                            C.AppText {
-                                text: modelData.type || ""
-                                weight: Tokens.weightBold
-                                font.pixelSize: Tokens.fontBody
-                                color: Theme.on_surface_var
-                                Layout.fillWidth: true
-                                wrapMode: Text.Wrap
-                            }
-                            Body { text: modelData.desc || ""; font.pixelSize: Tokens.fontLabel }
-                            C.AppText {
-                                visible: (modelData.beat || "") !== ""
-                                text: I18n.tr("Covers {t}").replace("{t}", modelData.beat || "")
-                                mono: true
-                                font.pixelSize: Tokens.fontCaption
-                                color: Theme.outline
-                                Layout.fillWidth: true
-                                elide: Text.ElideRight
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Stage {
-            id: sRehooks
-            host: root; act: 1; order: 3
-            has: root.hasRehooks
-            kicker: "RE-HOOKS"
-            heading: I18n.tr("Where viewers want to leave")
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.mid ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Repeater {
-                    model: root.idea.rehooks || []
-                    Rectangle {
-                        id: rh
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.preferredWidth: 1
-                        radius: Tokens.radiusXl
-                        color: Theme.surface_low
-                        border.width: 1
-                        border.color: Theme.border
-                        implicitHeight: rhRow.implicitHeight + Tokens.space5 * 2
-                        HoverHandler { id: rhCardHover }
-                        RowLayout {
-                            id: rhRow
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            anchors.margins: Tokens.space5
-                            spacing: Tokens.space5
-                            AbstractButton {
-                                Layout.alignment: Qt.AlignTop
-                                implicitWidth: rhTime.implicitWidth
-                                implicitHeight: rhTime.implicitHeight
-                                enabled: modelData.atSec !== undefined && modelData.atSec >= 0
-                                onClicked: { root.seek(modelData.atSec); }
-                                HoverHandler { cursorShape: Qt.PointingHandCursor }
-                                background: Item {}
-                                contentItem: Column {
-                                    id: rhTime
-                                    spacing: 2
-                                    C.AppText { text: modelData.time || ""; mono: true; font.pixelSize: Tokens.fontTitle; color: Theme.warn; LayoutMirroring.enabled: false }
-                                    C.AppText { text: modelData.device || ""; font.pixelSize: Tokens.fontCaption; color: Theme.outline; width: Math.min(implicitWidth, 120); elide: Text.ElideRight }
-                                }
-                            }
-                            Body { text: modelData.line || ""; weight: Tokens.weightBold; font.pixelSize: Tokens.fontSubtitle + 1; color: Theme.text_strong }
-                            C.IconButton {
-                                Layout.alignment: Qt.AlignTop
-                                iconName: "content_copy"
-                                tip: I18n.tr("Copy")
-                                accent: Theme.primary
-                                implicitWidth: 30
-                                implicitHeight: 30
-                                opacity: rhCardHover.hovered ? 1 : 0.35
-                                onClicked: root.copyRequested(modelData.line || "")
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── v5 · ON-SCREEN TEXT ──
-        Stage {
-            id: sOverlay
-            host: root; act: 1; order: 4
-            has: root.hasOnScreen
-            kicker: "ON-SCREEN TEXT"
-            heading: I18n.tr("Every overlay, timed")
-            aside: [
-                C.PrimaryButton {
-                    visible: root.mid
-                    variant: "ghost"
-                    iconName: "content_copy"
-                    text: I18n.tr("Copy all")
-                    implicitHeight: 38
-                    onClicked: {
-                        var a = root.idea.onScreenText || [], out = []
-                        for (var i = 0; i < a.length; i++) out.push("[" + (a[i].time || "") + "] " + (a[i].text || "") + (a[i].style ? "  (" + a[i].style + ")" : ""))
-                        root.copyRequested(out.join("\n"))
-                    }
-                }
-            ]
-            Repeater {
-                model: root.idea.onScreenText || []
-                Rectangle {
-                    id: ov
-                    Layout.fillWidth: true
-                    radius: Tokens.radiusLg
-                    color: index % 2 ? Theme.surface_low : Theme.surface_high
-                    border.width: 1
-                    border.color: ovHover.hovered ? U.withAlpha(Theme.warn, 0.35) : Theme.border
-                    implicitHeight: ovRow.implicitHeight + Tokens.space4 * 2
-                    HoverHandler { id: ovHover }
-                    RowLayout {
-                        id: ovRow
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        anchors.margins: Tokens.space4
-                        spacing: Tokens.space4
-                        Rectangle {
-                            Layout.preferredWidth: 64
-                            Layout.preferredHeight: 28
-                            radius: Tokens.radiusXs + 2
-                            color: U.withAlpha(Theme.warn, 0.12)
-                            C.AppText {
-                                anchors.centerIn: parent
-                                text: modelData.time || "—"
-                                mono: true
-                                font.pixelSize: Tokens.fontCaption
-                                color: Theme.warn
-                                LayoutMirroring.enabled: false
-                            }
-                        }
-                        Body {
-                            text: modelData.text || ""
-                            weight: Tokens.weightExtraBold
-                            font.pixelSize: Tokens.fontSubtitle + 1
-                            color: Theme.text_strong
-                        }
-                        Pill {
-                            visible: root.mid && (modelData.style || "") !== ""
-                            text: modelData.style || ""
-                            maxTextWidth: 180
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-                        C.IconButton {
-                            iconName: "content_copy"
-                            tip: I18n.tr("Copy")
-                            accent: Theme.primary
-                            implicitWidth: 30; implicitHeight: 30
-                            opacity: ovHover.hovered ? 1 : 0.4
-                            onClicked: root.copyRequested(modelData.text || "")
-                        }
-                    }
-                }
-            }
-        }
-
-        Stage {
-            id: sExec
-            host: root; act: 1; order: 4
-            has: root.hasExec
-            kicker: "EDIT NOTES"
-            heading: I18n.tr("The editor's brief")
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.mid ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Repeater {
-                    model: [
-                        { g: "scissors",      n: I18n.tr("Editing & pace"),  v: root.exec.editing || "" },
-                        { g: "music_note",    n: I18n.tr("Audio & music"),   v: root.exec.audio || "" },
-                        { g: "inventory_2",   n: I18n.tr("Assets needed"),   v: root.exec.assets || "" },
-                        { g: "smart_display", n: I18n.tr("Render & export"), v: root.exec.render || "" }
-                    ]
-                    Box {
-                        visible: modelData.v !== ""
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.preferredWidth: 1
-                        Row {
-                            spacing: Tokens.space2
-                            C.IconGlyph { name: modelData.g; size: 16; glyphColor: Theme.warn; anchors.verticalCenter: parent.verticalCenter }
-                            C.AppText { text: modelData.n; weight: Tokens.weightBold; font.pixelSize: Tokens.fontBody; color: Theme.warn; anchors.verticalCenter: parent.verticalCenter }
-                        }
-                        Body { text: modelData.v; font.pixelSize: Tokens.fontLabel + 1 }
-                    }
-                }
-            }
-            WhyNote { text_: root.exec.reasoning || ""; accent: Theme.warn }
-        }
-
-        // ── v5 · LOOK & SOUND ──
-        Stage {
-            id: sStyle
-            host: root; act: 1; order: 6
-            has: root.hasStyle
-            kicker: "LOOK & SOUND"
-            heading: I18n.tr("How it looks, reads and sounds")
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.wide ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-
-                Box {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 1
-                    visible: (root.styleG.look || "") !== "" || (root.styleG.palette || []).length > 0
-                             || (root.styleG.typography || "") !== "" || (root.styleG.captions || "") !== ""
-                    // palette: real swatches, click to copy the hex
-                    Flow {
-                        Layout.fillWidth: true
-                        visible: (root.styleG.palette || []).length > 0
-                        spacing: Tokens.space2
-                        Repeater {
-                            model: root.styleG.palette || []
-                            AbstractButton {
-                                id: sw
-                                implicitWidth: swRow.implicitWidth + Tokens.space4
-                                implicitHeight: 36
-                                onClicked: root.copyRequested(modelData)
-                                HoverHandler { id: swHover; cursorShape: Qt.PointingHandCursor }
-                                background: Rectangle {
-                                    radius: Tokens.radiusPill
-                                    color: swHover.hovered ? Theme.surface_highest : Theme.surface_low
-                                    border.width: 1
-                                    border.color: Theme.border
-                                }
-                                contentItem: Item {
-                                    implicitWidth: swRow.implicitWidth
-                                    Row {
-                                        id: swRow
-                                        anchors.centerIn: parent
-                                        spacing: 7
-                                        Rectangle {
-                                            width: 20; height: 20; radius: 10
-                                            color: modelData
-                                            border.width: 1
-                                            border.color: U.withAlpha(Theme.on_surface, 0.2)
-                                            anchors.verticalCenter: parent.verticalCenter
-                                        }
-                                        C.AppText {
-                                            text: String(modelData).toUpperCase()
-                                            mono: true
-                                            font.pixelSize: Tokens.fontCaption + 1
-                                            color: Theme.on_surface
-                                            anchors.verticalCenter: parent.verticalCenter
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Repeater {
-                        model: {
-                            var a = []
-                            if (root.styleG.look) a.push({ g: "visibility", n: I18n.tr("Look"), v: root.styleG.look })
-                            if (root.styleG.typography) a.push({ g: "text", n: I18n.tr("Type"), v: root.styleG.typography })
-                            if (root.styleG.captions) a.push({ g: "subject", n: I18n.tr("Captions"), v: root.styleG.captions })
-                            return a
-                        }
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: Tokens.space3
-                            C.IconGlyph { name: modelData.g; size: 16; glyphColor: Theme.warn; Layout.alignment: Qt.AlignTop; Layout.topMargin: 2 }
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 1
-                                Caption { text: modelData.n }
-                                Body { text: modelData.v }
-                            }
-                        }
-                    }
-                }
-
-                Box {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 1
-                    visible: (root.styleG.music || "") !== "" || (root.styleG.sfx || []).length > 0
-                    RowLayout {
-                        Layout.fillWidth: true
-                        visible: (root.styleG.music || "") !== ""
-                        spacing: Tokens.space3
-                        C.IconGlyph { name: "music_note"; size: 16; glyphColor: Theme.tertiary; Layout.alignment: Qt.AlignTop; Layout.topMargin: 2 }
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 1
-                            Caption { text: I18n.tr("Music") }
-                            Body { text: root.styleG.music || "" }
-                        }
-                    }
-                    Caption {
-                        visible: (root.styleG.sfx || []).length > 0
-                        text: I18n.tr("Sound effects, where they hit")
-                        Layout.topMargin: Tokens.space2
-                    }
-                    Repeater {
-                        model: root.styleG.sfx || []
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: Tokens.space3
-                            C.AppText {
-                                text: modelData.time || ""
-                                mono: true
-                                font.pixelSize: Tokens.fontCaption + 1
-                                color: Theme.tertiary
-                                Layout.preferredWidth: 56
-                                Layout.alignment: Qt.AlignTop
-                                LayoutMirroring.enabled: false
-                            }
-                            Body { text: modelData.cue || ""; font.pixelSize: Tokens.fontBody + 1 }
-                        }
-                    }
-                }
-            }
-        }
-
-        Stage {
-            id: sRet
-            host: root; act: 1; order: 5
-            has: root.showPacing
-            kicker: "RETENTION PACING"
-            heading: I18n.tr("The rhythm that keeps them watching")
-            aside: [ Pill { text: root.ret.totalLabel || ""; mono: true; visible: (root.ret.totalLabel || "") !== "" } ]
-
-            Item {
-                Layout.fillWidth: true
-                implicitHeight: 12
-                Row {
-                    id: paceBar
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    height: 12
-                    spacing: 3
-                    LayoutMirroring.enabled: false
-                    readonly property int phaseCount: (root.ret.phases || []).length
-                    Repeater {
-                        model: root.ret.phases || []
-                        Rectangle {
-                            width: (paceBar.width - (paceBar.phaseCount - 1) * 3) * Math.max(0, modelData.spanPct || 0) / 100
-                            height: paceBar.height
-                            radius: 6
-                            color: U.withAlpha(Theme.warn, 1.0 - index * (0.6 / Math.max(1, paceBar.phaseCount)))
-                        }
-                    }
-                }
-            }
-            GridLayout {
-                Layout.fillWidth: true
-                Layout.topMargin: Tokens.space2
-                columns: root.wide ? Math.max(1, Math.min(5, (root.ret.phases || []).length)) : 1
-                columnSpacing: Tokens.space4
-                rowSpacing: Tokens.space4
-                Repeater {
-                    model: root.ret.phases || []
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        Layout.preferredWidth: 1
-                        Layout.alignment: Qt.AlignTop
-                        spacing: 2
-                        C.AppText { text: modelData.endTime || ""; mono: true; font.pixelSize: Tokens.fontBody; color: Theme.warn; LayoutMirroring.enabled: false }
-                        C.AppText { text: modelData.label || ""; weight: Tokens.weightBold; font.pixelSize: Tokens.fontLabel + 1; color: Theme.text_strong; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                        Body { visible: text !== ""; text: modelData.desc || ""; font.pixelSize: Tokens.fontBody; color: Theme.on_surface_var }
-                    }
-                }
-            }
-        }
-
-        // ══════════════════════════ ACT 3 · LAUNCH ══════════════════════════
-
-        // ── v5 · PREP & GEAR ──
-        Stage {
-            id: sPrep
-            host: root; act: 1; order: 7
-            has: root.hasProduction
-            kicker: "PREP & GEAR"
-            heading: I18n.tr("What you need before you hit record")
-
-            // time estimates: prep → shoot → edit
-            Flow {
-                Layout.fillWidth: true
-                spacing: Tokens.space3
-                Repeater {
-                    model: {
-                        var a = []
-                        if (root.prod.prep) a.push({ g: "checklist", n: I18n.tr("Prep"), v: root.prod.prep })
-                        if (root.prod.shoot) a.push({ g: "movie", n: I18n.tr("Shoot"), v: root.prod.shoot })
-                        if (root.prod.edit) a.push({ g: "scissors", n: I18n.tr("Edit"), v: root.prod.edit })
-                        if (root.prod.location) a.push({ g: "compass", n: I18n.tr("Location"), v: root.prod.location })
-                        return a
-                    }
-                    Rectangle {
-                        radius: Tokens.radiusLg
-                        color: Theme.surface_high
-                        border.width: 1
-                        border.color: Theme.border
-                        implicitWidth: Math.min(360, tCol.implicitWidth + Tokens.space5 * 2)
-                        implicitHeight: tCol.implicitHeight + Tokens.space4 * 2
-                        Column {
-                            id: tCol
-                            anchors.left: parent.left
-                            anchors.verticalCenter: parent.verticalCenter
-                            anchors.leftMargin: Tokens.space5
-                            width: Math.min(implicitWidth, 360 - Tokens.space5 * 2)
-                            spacing: 2
-                            Row {
-                                spacing: 6
-                                C.IconGlyph { name: modelData.g; size: 14; glyphColor: Theme.warn; anchors.verticalCenter: parent.verticalCenter }
-                                C.AppText { text: modelData.n; font.pixelSize: Tokens.fontCaption; weight: Tokens.weightDemiBold; color: Theme.outline; anchors.verticalCenter: parent.verticalCenter }
-                            }
-                            C.AppText {
-                                width: Math.min(implicitWidth, 320)
-                                text: modelData.v
-                                weight: Tokens.weightBold
-                                font.pixelSize: Tokens.fontSubtitle
-                                color: Theme.text_strong
-                                elide: Text.ElideRight
-                            }
-                        }
-                    }
-                }
-            }
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.wide ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-
-                Box {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 1
-                    visible: (root.prod.gear || []).length > 0 || (root.prod.props || []).length > 0
-                    Caption { visible: (root.prod.gear || []).length > 0; text: I18n.tr("Gear") }
-                    Flow {
-                        Layout.fillWidth: true
-                        visible: (root.prod.gear || []).length > 0
-                        spacing: Tokens.space2
-                        Repeater { model: root.prod.gear || []; Pill { text: modelData; glyph: "inventory_2"; tint: Theme.warn } }
-                    }
-                    Caption { visible: (root.prod.props || []).length > 0; text: I18n.tr("Props"); Layout.topMargin: Tokens.space2 }
-                    Flow {
-                        Layout.fillWidth: true
-                        visible: (root.prod.props || []).length > 0
-                        spacing: Tokens.space2
-                        Repeater { model: root.prod.props || []; Pill { text: modelData } }
-                    }
-                }
-
-                Box {
-                    id: prepBox
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 1
-                    visible: (root.prod.checklist || []).length > 0
-                    readonly property int doneCount: {
-                        var n = 0, d = root.prepDone
-                        for (var k in d) if (d[k]) n++
-                        return n
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        C.AppText { text: I18n.tr("Before you record"); weight: Tokens.weightBold; font.pixelSize: Tokens.fontSubtitle; color: Theme.text_strong; Layout.fillWidth: true; elide: Text.ElideRight }
-                        C.AppText {
-                            text: prepBox.doneCount + "/" + (root.prod.checklist || []).length
-                            mono: true
-                            font.pixelSize: Tokens.fontBody
-                            color: Theme.warn
-                            LayoutMirroring.enabled: false
-                        }
-                    }
-                    Repeater {
-                        model: root.prod.checklist || []
-                        AbstractButton {
-                            id: pchk
-                            readonly property bool done: root.prepDone[index] === true
-                            Layout.fillWidth: true
-                            implicitHeight: pchkRow.implicitHeight + Tokens.space3 * 2
-                            onClicked: {
-                                var d = Object.assign({}, root.prepDone)
-                                d[index] = !pchk.done
-                                root.prepDone = d
-                            }
-                            HoverHandler { id: pchkHover; cursorShape: Qt.PointingHandCursor }
-                            background: Rectangle {
-                                radius: Tokens.radiusLg
-                                color: pchk.done ? U.withAlpha(Theme.warn, 0.07)
-                                     : pchkHover.hovered ? U.withAlpha(Theme.on_surface, 0.04) : "transparent"
-                            }
-                            contentItem: RowLayout {
-                                id: pchkRow
-                                spacing: Tokens.space3
-                                Rectangle {
-                                    Layout.leftMargin: Tokens.space3
-                                    Layout.alignment: Qt.AlignVCenter
-                                    width: 22; height: 22; radius: Tokens.radiusXs + 1
-                                    color: pchk.done ? Theme.warn : "transparent"
-                                    border.width: pchk.done ? 0 : 1.5
-                                    border.color: Theme.outline
-                                    C.IconGlyph { anchors.centerIn: parent; visible: pchk.done; name: "check"; size: 15; glyphColor: Theme.isDark ? "#0F0D12" : "#FFFFFF" }
-                                }
-                                Body {
-                                    Layout.rightMargin: Tokens.space3
-                                    text: modelData
-                                    selectable: false
-                                    font.pixelSize: Tokens.fontLabel
-                                    font.strikeout: pchk.done
-                                    color: pchk.done ? Theme.outline : Theme.on_surface
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── v7 · SHORT ON TIME (v1.0.3) ──
-        // The version that ships when there's an hour, not a day: what must
-        // stay (the video fails without it) and what can go.
-        Stage {
-            id: sLite
-            host: root; act: 1; order: 7
-            has: root.hasLite
-            kicker: "SHORT ON TIME"
-            heading: I18n.tr("The fast version")
-            aside: [ Pill { text: root.liteV.time || ""; glyph: "schedule"; tint: Theme.warn; strong: true; visible: (root.liteV.time || "") !== "" } ]
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.mid ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Repeater {
-                    model: [
-                        { c: I18n.tr("KEEP"), g: "check_circle", t: Theme.secondary_container, v: root.liteV.keep || "" },
-                        { c: I18n.tr("CUT"), g: "scissors", t: Theme.error, v: root.liteV.cut || "" }
-                    ]
-                    Box {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.preferredWidth: 1
-                        Layout.alignment: Qt.AlignTop
-                        visible: modelData.v !== ""
-                        border.color: U.withAlpha(modelData.t, 0.35)
-                        color: U.withAlpha(modelData.t, Theme.isDark ? 0.07 : 0.05)
-                        RowLayout {
-                            spacing: 6
-                            C.IconGlyph { name: modelData.g; size: 15; glyphColor: modelData.t }
-                            Caption { text: modelData.c; color: modelData.t }
-                        }
-                        Body { text: modelData.v }
-                    }
-                }
-            }
-        }
-
-        // ── v7 · FACT CHECK (v1.0.3) ──
-        // Every claim in the script a viewer could call out, with how to
-        // verify it. Tick each one off before you publish (per idea, not saved).
-        Stage {
-            id: sFacts
-            host: root; act: 1; order: 7
-            has: root.hasFacts
-            kicker: "FACT CHECK"
-            heading: I18n.tr("Check these before you publish")
-
-            Repeater {
-                model: root.idea.factCheck || []
-                Rectangle {
-                    id: fc
-                    readonly property bool done: root.factDone[index] === true
-                    Layout.fillWidth: true
-                    radius: Tokens.radiusXl
-                    color: Theme.surface_low
-                    border.width: 1
-                    border.color: fc.done ? U.withAlpha(Theme.secondary_container, 0.5) : Theme.border
-                    Behavior on border.color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
-                    implicitHeight: fcRow.implicitHeight + Tokens.space4 * 2
-                    RowLayout {
-                        id: fcRow
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: Tokens.space4
-                        spacing: Tokens.space3
-                        AbstractButton {
-                            Layout.alignment: Qt.AlignTop
-                            implicitWidth: 24; implicitHeight: 24
-                            onClicked: {
-                                var m = Object.assign({}, root.factDone)
-                                m[index] = !fc.done
-                                root.factDone = m
-                            }
-                            HoverHandler { cursorShape: Qt.PointingHandCursor }
-                            background: Rectangle {
-                                radius: 12
-                                color: fc.done ? Theme.secondary_container : "transparent"
-                                border.width: 1.5
-                                border.color: fc.done ? Theme.secondary_container : Theme.border_med
-                            }
-                            contentItem: C.IconGlyph {
-                                name: "check"
-                                size: 13
-                                visible: fc.done
-                                glyphColor: Theme.isDark ? "#0F0D12" : "#FFFFFF"
-                            }
-                        }
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: Tokens.space2
-                            Body {
-                                text: modelData.claim || ""
-                                font.pixelSize: Tokens.fontLabel + 1
-                                color: Theme.text_strong
-                                opacity: fc.done ? 0.6 : 1
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true
-                                visible: (modelData.verify || "") !== ""
-                                spacing: Tokens.space2
-                                C.IconGlyph { name: "search"; size: 14; glyphColor: Theme.warn; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
-                                Body { text: modelData.verify || ""; font.pixelSize: Tokens.fontBody; color: Theme.on_surface_var }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-
-        Stage {
-            id: sTitles
-            host: root; act: 2; order: 0
-            has: root.hasTitles
-            kicker: "PACKAGING"
-            heading: I18n.tr("Titles")
-
-            Rectangle {
-                Layout.fillWidth: true
-                visible: (root.pack.framework || "") !== ""
-                radius: Tokens.radiusLg
-                color: U.withAlpha(Theme.secondary_container, 0.06)
-                border.width: 1
-                border.color: U.withAlpha(Theme.secondary_container, 0.24)
-                implicitHeight: fwRow.implicitHeight + Tokens.space4 * 2
-                RowLayout {
-                    id: fwRow
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.margins: Tokens.space4
-                    spacing: Tokens.space3
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 2
-                        Caption { text: I18n.tr("Title formula"); color: Theme.secondary_container }
-                        Body { text: root.pack.framework || ""; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
-                    }
-                    C.IconButton {
-                        iconName: "content_copy"
-                        tip: I18n.tr("Copy")
-                        accent: Theme.primary
-                        onClicked: root.copyRequested(root.pack.framework || "")
-                    }
-                }
-            }
-
-            Repeater {
-                model: root.idea.titles || []
-                Rectangle {
-                    id: tRow
-                    Layout.fillWidth: true
-                    readonly property bool isTop: index === 0
-                    radius: Tokens.radiusLg
-                    color: isTop ? U.withAlpha(Theme.secondary_container, Theme.isDark ? 0.10 : 0.08)
-                               : (index % 2 ? Theme.surface_low : Theme.surface_high)
-                    border.width: 1
-                    border.color: isTop ? U.withAlpha(Theme.secondary_container, 0.32) : Theme.border
-                    implicitHeight: tLay.implicitHeight + Tokens.space5 * 2
-                    HoverHandler { id: tHover }
-                    RowLayout {
-                        id: tLay
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: Tokens.space5
-                        spacing: Tokens.space4
-                        C.AppText {
-                            text: root.num(index + 1)
-                            weight: Tokens.weightBold
-                            font.pixelSize: Tokens.fontLabel
-                            color: tRow.isTop ? Theme.secondary_container : Theme.outline
-                            Layout.preferredWidth: 20
-                            Layout.alignment: Qt.AlignTop
-                            Layout.topMargin: 3
-                        }
-                        Body {
-                            text: modelData
-                            weight: tRow.isTop ? Tokens.weightExtraBold : Tokens.weightMedium
-                            font.pixelSize: tRow.isTop ? Tokens.fontTitle : Tokens.fontSubtitle + 1
-                            color: Theme.text_strong
-                        }
-                        Pill {
-                            visible: tRow.isTop && root.mid
-                            text: I18n.tr("Top pick")
-                            tint: Theme.secondary_container
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-                        C.AppText {
-                            visible: root.mid
-                            text: String(String(modelData).length)
-                            mono: true
-                            font.pixelSize: Tokens.fontCaption
-                            color: String(modelData).length > 70 ? Theme.error : Theme.outline
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-                        C.IconButton {
-                            iconName: "content_copy"
-                            tip: I18n.tr("Copy")
-                            accent: Theme.primary
-                            implicitWidth: 30
-                            implicitHeight: 30
-                            opacity: tHover.hovered ? 1 : 0.35
-                            Layout.alignment: Qt.AlignVCenter
-                            onClicked: root.copyRequested(modelData)
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── v5 · TEST PLAN ──
-        Stage {
-            id: sAb
-            host: root; act: 2; order: 1
-            has: root.hasAbPlan
-            kicker: "TEST PLAN"
-            heading: I18n.tr("Launch with this, swap when it stalls")
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.wide ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Repeater {
-                    model: {
-                        var a = []
-                        if (root.ab.thumbnailFirst) a.push({ g: "image", n: I18n.tr("Thumbnail to launch with"), v: root.ab.thumbnailFirst, t: Theme.secondary_container })
-                        if (root.ab.titleFirst) a.push({ g: "text", n: I18n.tr("Title to launch with"), v: root.ab.titleFirst, t: Theme.secondary_container })
-                        if (root.ab.swapRule) a.push({ g: "sync", n: I18n.tr("When to swap"), v: root.ab.swapRule, t: Theme.warn })
-                        if (root.ab.watch) a.push({ g: "query_stats", n: I18n.tr("Watch first in Studio"), v: root.ab.watch, t: Theme.tertiary })
-                        return a
-                    }
-                    Box {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: Tokens.space3
-                            Rectangle {
-                                Layout.preferredWidth: 32; Layout.preferredHeight: 32
-                                Layout.alignment: Qt.AlignTop
-                                radius: Tokens.radiusSm
-                                color: U.withAlpha(modelData.t, 0.13)
-                                C.IconGlyph { anchors.centerIn: parent; name: modelData.g; size: 16; glyphColor: modelData.t }
-                            }
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 2
-                                Caption { text: modelData.n }
-                                Body { text: modelData.v; font.pixelSize: Tokens.fontLabel + 1; color: Theme.text_strong }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Stage {
-            id: sPlan
-            host: root; act: 2; order: 1
-            has: root.hasPlan
-            kicker: "PUBLISH PLAN"
-            heading: I18n.tr("When it goes out, and the hour after")
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.mid && (root.plan.first_hour || []).length > 0 ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-
-                // the slot, set like a departure board
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 4
-                    radius: Tokens.radiusXl + 4
-                    gradient: Gradient {
-                        GradientStop { position: 0.0; color: U.withAlpha(Theme.secondary_container, Theme.isDark ? 0.24 : 0.14) }
-                        GradientStop { position: 0.75; color: U.withAlpha(Theme.secondary_container, 0.03) }
-                    }
-                    border.width: 1
-                    border.color: U.withAlpha(Theme.secondary_container, 0.30)
-                    implicitHeight: slotCol.implicitHeight + Tokens.space6 * 2
-                    ColumnLayout {
-                        id: slotCol
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: Tokens.space6
-                        spacing: Tokens.space2
-                        Caption { text: I18n.tr("Upload slot"); color: Theme.secondary_container }
-                        C.AppText {
-                            visible: text !== ""
-                            text: root.plan.day || ""
-                            weight: Tokens.weightExtraBold
-                            font.pixelSize: 40
-                            color: Theme.text_strong
-                            wrapMode: Text.Wrap
-                            Layout.fillWidth: true
-                        }
-                        C.AppText {
-                            visible: text !== ""
-                            text: root.plan.time || ""
-                            weight: Tokens.weightExtraBold
-                            font.pixelSize: 52
-                            color: Theme.secondary_container
-                            wrapMode: Text.Wrap
-                            Layout.fillWidth: true
-                        }
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Layout.topMargin: Tokens.space3
-                            visible: (root.plan.why || "") !== ""
-                            spacing: Tokens.space2
-                            C.IconGlyph { name: "schedule"; size: 16; glyphColor: Theme.on_surface_var; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
-                            Body { text: root.plan.why || ""; font.pixelSize: Tokens.fontLabel; color: Theme.on_surface_var }
-                        }
-                        RowLayout {
-                            Layout.fillWidth: true
-                            visible: (root.pack.timing || "") !== ""
-                            spacing: Tokens.space2
-                            C.IconGlyph { name: "lightbulb"; size: 16; glyphColor: Theme.on_surface_var; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
-                            Body { text: root.pack.timing || ""; font.pixelSize: Tokens.fontLabel; color: Theme.on_surface_var }
-                        }
-                    }
-                }
-
-                // the first hour, as a checklist you can actually tick
-                Box {
-                    id: planBox
-                    visible: (root.plan.first_hour || []).length > 0
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 5
-                    readonly property int doneCount: {
-                        var n = 0, d = root.planDone
-                        for (var k in d) if (d[k]) n++
-                        return n
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Layout.bottomMargin: Tokens.space2
-                        C.AppText { text: I18n.tr("The first hour after publishing"); weight: Tokens.weightBold; font.pixelSize: Tokens.fontSubtitle; color: Theme.text_strong; Layout.fillWidth: true; elide: Text.ElideRight }
-                        C.AppText {
-                            text: planBox.doneCount + "/" + (root.plan.first_hour || []).length
-                            mono: true
-                            font.pixelSize: Tokens.fontBody
-                            color: Theme.secondary_container
-                            LayoutMirroring.enabled: false
-                        }
-                    }
-                    Repeater {
-                        model: root.plan.first_hour || []
-                        AbstractButton {
-                            id: chk
-                            readonly property bool done: root.planDone[index] === true
-                            Layout.fillWidth: true
-                            implicitHeight: chkRow.implicitHeight + Tokens.space3 * 2
-                            onClicked: {
-                                var d = Object.assign({}, root.planDone)
-                                d[index] = !chk.done
-                                root.planDone = d
-                            }
-                            HoverHandler { id: chkHover; cursorShape: Qt.PointingHandCursor }
-                            background: Rectangle {
-                                radius: Tokens.radiusLg
-                                color: chk.done ? U.withAlpha(Theme.secondary_container, 0.07)
-                                     : chkHover.hovered ? U.withAlpha(Theme.on_surface, 0.04) : U.withAlpha(Theme.on_surface, 0)
-                                Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
-                            }
-                            contentItem: RowLayout {
-                                id: chkRow
-                                spacing: Tokens.space3
-                                Rectangle {
-                                    Layout.leftMargin: Tokens.space3
-                                    Layout.alignment: Qt.AlignVCenter
-                                    width: 24; height: 24; radius: Tokens.radiusXs + 1
-                                    color: chk.done ? Theme.secondary_container : U.withAlpha(Theme.secondary_container, 0)
-                                    border.width: chk.done ? 0 : 1.5
-                                    border.color: Theme.border_strong !== undefined ? Theme.border_strong : Theme.outline
-                                    Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
-                                    C.IconGlyph { anchors.centerIn: parent; visible: chk.done; name: "check"; size: 16; glyphColor: Theme.isDark ? "#0F0D12" : "#FFFFFF" }
-                                }
-                                Body {
-                                    Layout.rightMargin: Tokens.space3
-                                    text: modelData
-                                    selectable: false
-                                    font.pixelSize: Tokens.fontLabel
-                                    font.strikeout: chk.done
-                                    color: chk.done ? Theme.outline : Theme.on_surface
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Stage {
-            id: sCaption
-            host: root; act: 2; order: 2
-            has: root.hasCaption
-            kicker: "CAPTION & CTA"
-            heading: I18n.tr("Caption, hashtags and the ask")
-
-            GridLayout {
-                Layout.fillWidth: true
-                id: capGrid
-                readonly property bool hasCap: root.idea.hasCaptionPack === true || (root.idea.pinnedComment || "") !== ""
-                columns: root.mid && hasCap && root.idea.hasCta === true ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-
-                Box {
-                    visible: capGrid.hasCap
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 1
-                    Layout.alignment: Qt.AlignTop
-                    RowLayout {
-                        Layout.fillWidth: true
-                        visible: (root.caption.description || "") !== ""
-                        Caption { text: I18n.tr("Shorts caption") }
-                        C.IconButton {
-                            iconName: "content_copy"
-                            tip: I18n.tr("Copy")
-                            accent: Theme.primary
-                            onClicked: root.copyRequested((root.caption.description || "") + "\n" + (root.caption.hashtags || []).join(" "))
-                        }
-                    }
-                    Body {
-                        visible: text !== ""
-                        text: root.caption.description || ""
-                        weight: Tokens.weightMedium
-                        font.pixelSize: Tokens.fontSubtitle + 1
-                        color: Theme.text_strong
-                    }
-                    Flow {
-                        Layout.fillWidth: true
-                        visible: (root.caption.hashtags || []).length > 0
-                        spacing: Tokens.space2
-                        Repeater {
-                            model: root.caption.hashtags || []
-                            Pill { text: modelData; tint: Theme.secondary_container }
-                        }
-                    }
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.topMargin: Tokens.space2
-                        visible: (root.idea.pinnedComment || "") !== ""
-                        radius: Tokens.radiusLg
-                        color: Theme.surface_low
-                        implicitHeight: pinRow.implicitHeight + Tokens.space4 * 2
-                        RowLayout {
-                            id: pinRow
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            anchors.margins: Tokens.space4
-                            spacing: Tokens.space3
-                            C.IconGlyph { name: "bookmark"; size: 16; glyphColor: Theme.outline; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: 2
-                                Caption { text: I18n.tr("Pinned comment") }
-                                Body { text: root.idea.pinnedComment || ""; font.pixelSize: Tokens.fontLabel }
-                            }
-                            C.IconButton {
-                                iconName: "content_copy"
-                                tip: I18n.tr("Copy")
-                                accent: Theme.primary
-                                Layout.alignment: Qt.AlignTop
-                                onClicked: root.copyRequested(root.idea.pinnedComment || "")
-                            }
-                        }
-                    }
-                }
-
-                ColumnLayout {
-                    visible: root.idea.hasCta === true
-                    Layout.fillWidth: true
-                    Layout.preferredWidth: 1
-                    Layout.alignment: Qt.AlignTop
-                    spacing: Tokens.space3
-                    Repeater {
-                        model: root.idea.ctaOptions || []
-                        Box {
-                            Layout.fillWidth: true
-                            color: Theme.surface_low
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: Tokens.space3
-                                C.IconGlyph { name: "message"; size: 18; glyphColor: Theme.secondary_container }
-                                C.AppText { text: modelData.label || ""; weight: Tokens.weightBold; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
-                                C.AppText {
-                                    text: modelData.timing || ""
-                                    font.pixelSize: Tokens.fontCaption
-                                    color: Theme.outline
-                                    elide: Text.ElideRight
-                                    Layout.fillWidth: true
-                                }
-                                C.IconButton {
-                                    iconName: "content_copy"
-                                    tip: I18n.tr("Copy")
-                                    accent: Theme.primary
-                                    onClicked: root.copyRequested(modelData.text || "")
-                                }
-                            }
-                            Body { text: modelData.text || ""; weight: Tokens.weightMedium; font.pixelSize: Tokens.fontSubtitle; color: Theme.text_strong }
-                        }
-                    }
-                }
-            }
-            // v5: the Community tab / Stories teaser
-            Box {
-                Layout.fillWidth: true
-                visible: (root.idea.communityPost || "") !== ""
-                color: Theme.surface_low
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Tokens.space3
-                    C.IconGlyph { name: "messages"; size: 18; glyphColor: Theme.secondary_container }
-                    Caption { text: I18n.tr("Community post teaser") }
-                    C.IconButton {
-                        iconName: "content_copy"
-                        tip: I18n.tr("Copy")
-                        accent: Theme.primary
-                        onClicked: root.copyRequested(root.idea.communityPost || "")
-                    }
-                }
-                Body { text: root.idea.communityPost || ""; font.pixelSize: Tokens.fontLabel + 1; color: Theme.text_strong }
-            }
-        }
-
-        // ── v6 · CARDS & END SCREEN ──
-        // Where the info cards pop on the video's own time axis, what the end
-        // screen pushes, and the exact line spoken over it.
-        Stage {
-            id: sEndScreen
-            host: root; act: 2; order: 3
-            has: root.hasEndScreen
-            kicker: "CARDS & END SCREEN"
-            heading: I18n.tr("Where this viewer goes next")
-
-            // the axis: only drawn when at least one card has a real time
-            Box {
-                id: esAxisBox
-                readonly property var timed: {
-                    var out = [], src = root.endS.cards || []
-                    for (var i = 0; i < src.length; i++)
-                        if (src[i].atSec !== undefined && src[i].atSec >= 0) out.push(src[i])
-                    return out
-                }
-                visible: timed.length > 0
-                Layout.fillWidth: true
-                pad: Tokens.space4
-                Caption { text: I18n.tr("Info cards on the timeline") }
-                Item {
-                    Layout.fillWidth: true
-                    implicitHeight: 44
-                    Rectangle {
-                        id: esTrack
-                        anchors.left: parent.left; anchors.right: parent.right
-                        y: 28
-                        height: 4; radius: 2
-                        color: Theme.surface_highest
-                        LayoutMirroring.enabled: false
-                        Rectangle {
-                            // the last 20 s: end-screen zone
-                            height: parent.height; radius: 2
-                            width: Math.min(parent.width, parent.width * Math.min(20, root.total) / root.total)
-                            x: parent.width - width
-                            color: U.withAlpha(Theme.secondary_container, 0.6)
-                        }
-                    }
-                    Repeater {
-                        model: esAxisBox.timed
-                        Item {
-                            readonly property real fx: Math.max(0, Math.min(1, (modelData.atSec || 0) / root.total))
-                            x: Math.max(0, Math.min(esTrack.width - width, fx * esTrack.width - width / 2))
-                            y: 0
-                            width: 52; height: 40
-                            Rectangle {
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                width: esTime.implicitWidth + 10; height: 20; radius: 6
-                                color: Theme.secondary_container
-                                C.AppText { id: esTime; anchors.centerIn: parent; text: modelData.time || ""; mono: true; font.pixelSize: 11; weight: Tokens.weightBold; color: Theme.isDark ? "#0F0D12" : "#FFFFFF" }
-                            }
-                            Rectangle { anchors.horizontalCenter: parent.horizontalCenter; y: 22; width: 2; height: 12; color: Theme.secondary_container }
-                        }
-                    }
-                }
-            }
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.mid && (root.endS.cards || []).length > 0 && ((root.endS.endTarget || "") !== "" || (root.endS.line || "") !== "") ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Box {
-                    visible: (root.endS.cards || []).length > 0
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 1
-                    Layout.alignment: Qt.AlignTop
-                    Caption { text: I18n.tr("Info cards") }
-                    Repeater {
-                        model: root.endS.cards || []
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: Tokens.space3
-                            Pill { Layout.alignment: Qt.AlignTop; visible: (modelData.time || "") !== ""; text: modelData.time || ""; mono: true; glyph: "schedule"; tint: Theme.secondary_container }
-                            Body { text: modelData.target || ""; font.pixelSize: Tokens.fontLabel }
-                        }
-                    }
-                }
-                Box {
-                    visible: (root.endS.endTarget || "") !== "" || (root.endS.line || "") !== ""
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 1
-                    Layout.alignment: Qt.AlignTop
-                    color: U.withAlpha(Theme.secondary_container, Theme.isDark ? 0.07 : 0.05)
-                    border.color: U.withAlpha(Theme.secondary_container, 0.28)
-                    Caption { visible: (root.endS.endTarget || "") !== ""; text: I18n.tr("End screen points to"); color: Theme.secondary_container }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        visible: (root.endS.endTarget || "") !== ""
-                        spacing: Tokens.space3
-                        C.IconGlyph { name: "play_circle"; size: 20; glyphColor: Theme.secondary_container; Layout.alignment: Qt.AlignTop; Layout.topMargin: 2 }
-                        Body { text: root.endS.endTarget || ""; weight: Tokens.weightBold; font.pixelSize: Tokens.fontLabel + 1; color: Theme.text_strong }
-                    }
-                    Caption { visible: (root.endS.line || "") !== ""; Layout.topMargin: Tokens.space2; text: I18n.tr("Say over the last seconds") }
-                    Option {
-                        visible: (root.endS.line || "") !== ""
-                        body: root.endS.line || ""
-                        tint: Theme.secondary_container
-                        onCopyClicked: (t) => root.copyRequested(t)
-                    }
-                }
-            }
-        }
-
-        Stage {
-            id: sSeo
-            host: root; act: 2; order: 3
-            has: root.hasSeo
-            kicker: "SEO"
-            heading: I18n.tr("SEO & discoverability")
-
-            Box {
-                Layout.fillWidth: true
-                visible: (root.seo.description || "") !== ""
-                RowLayout {
-                    Layout.fillWidth: true
-                    Caption { text: I18n.tr("YouTube description") }
-                    C.IconButton { iconName: "content_copy"; tip: I18n.tr("Copy"); accent: Theme.primary; onClicked: root.copyRequested(root.seo.description || "") }
-                }
-                Body { text: root.seo.description || ""; font.pixelSize: Tokens.fontLabel }
-            }
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.mid ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Box {
-                    visible: (root.seo.keywords || []).length > 0
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 1
-                    Caption { text: I18n.tr("Target keywords") }
-                    Flow {
-                        Layout.fillWidth: true
-                        spacing: Tokens.space2
-                        Repeater { model: root.seo.keywords || []; Pill { text: modelData; tint: Theme.secondary_container } }
-                    }
-                }
-                Box {
-                    visible: (root.seo.tags || []).length > 0
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 1
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Caption { text: I18n.tr("Tags") }
-                        C.IconButton { iconName: "content_copy"; tip: I18n.tr("Copy"); accent: Theme.primary; onClicked: root.copyRequested((root.seo.tags || []).join(", ")) }
-                    }
-                    Body { text: (root.seo.tags || []).join(", "); verbatim: true; font.pixelSize: Tokens.fontBody; color: Theme.on_surface_var }
-                }
-            }
-            Box {
-                Layout.fillWidth: true
-                visible: (root.seo.timestamps || []).length > 0
-                Caption { text: I18n.tr("Chapters") }
-                Repeater {
-                    model: root.seo.timestamps || []
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Tokens.space4
-                        C.AppText { text: modelData.time || ""; mono: true; font.pixelSize: Tokens.fontBody; color: Theme.secondary_container; Layout.preferredWidth: 64; LayoutMirroring.enabled: false }
-                        Body { text: modelData.label || ""; font.pixelSize: Tokens.fontLabel }
-                    }
-                }
-            }
-        }
-
-        Stage {
-            id: sMoney
-            host: root; act: 2; order: 4
-            has: root.hasMoney
-            kicker: "MONETIZATION & REACH"
-            heading: I18n.tr("Revenue fit, and where else it lives")
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.mid && root.idea.hasMonetization === true && root.idea.hasRepurpose === true ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-
-                Box {
-                    visible: root.idea.hasMonetization === true
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 1
-                    RowLayout {
-                        Layout.fillWidth: true
-                        visible: (root.monet.adSafetyLabel || "") !== ""
-                        spacing: Tokens.space3
-                        C.IconGlyph { name: root.monet.adSafety === "Risky" ? "warning" : "verified"; size: 24; glyphColor: root.monetAccent }
-                        C.AppText { text: root.monet.adSafetyLabel || ""; weight: Tokens.weightExtraBold; font.pixelSize: Tokens.fontTitle; color: Theme.text_strong; Layout.fillWidth: true }
-                    }
-                    Body { visible: text !== ""; text: root.monet.why || ""; font.pixelSize: Tokens.fontLabel; color: Theme.on_surface_var }
-                    Caption { visible: (root.monet.sponsorFit || []).length > 0; text: I18n.tr("Sponsor fit"); Layout.topMargin: Tokens.space2 }
-                    Flow {
-                        Layout.fillWidth: true
-                        visible: (root.monet.sponsorFit || []).length > 0
-                        spacing: Tokens.space2
-                        Repeater { model: root.monet.sponsorFit || []; Pill { text: modelData; tint: root.monetAccent } }
-                    }
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.topMargin: Tokens.space2
-                        visible: (root.monet.productTieIn || "") !== ""
-                        radius: Tokens.radiusLg
-                        color: Theme.surface_low
-                        implicitHeight: tieCol.implicitHeight + Tokens.space4 * 2
-                        ColumnLayout {
-                            id: tieCol
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            anchors.margins: Tokens.space4
-                            spacing: 2
-                            Caption { text: I18n.tr("Natural product tie-in") }
-                            Body { text: root.monet.productTieIn || ""; font.pixelSize: Tokens.fontLabel }
-                        }
-                    }
-                }
-
-                Box {
-                    visible: root.idea.hasRepurpose === true
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: 1
-                    Caption { text: I18n.tr("One shoot, more distribution") }
-                    Repeater {
-                        model: root.idea.repurpose || []
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            Layout.topMargin: Tokens.space2
-                            spacing: 2
-                            RowLayout {
-                                Layout.fillWidth: true
-                                C.AppText { text: modelData.platform || ""; weight: Tokens.weightBold; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong; Layout.fillWidth: true; elide: Text.ElideRight }
-                                C.IconButton { iconName: "content_copy"; tip: I18n.tr("Copy"); accent: Theme.primary; implicitWidth: 28; implicitHeight: 28; onClicked: root.copyRequested(modelData.how || "") }
-                            }
-                            Body { text: modelData.how || ""; font.pixelSize: Tokens.fontLabel; color: Theme.on_surface_var }
-                            Rectangle { Layout.fillWidth: true; Layout.topMargin: Tokens.space2; height: 1; color: Theme.border; visible: index < (root.idea.repurpose || []).length - 1 }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── v5 · RIGHTS ──
-        Stage {
-            id: sRights
-            host: root; act: 2; order: 5
-            has: root.hasRights
-            kicker: "RIGHTS"
-            heading: I18n.tr("Copyright and Content ID")
-            aside: [
-                Pill {
-                    visible: (root.rights.riskLabel || "") !== ""
-                    glyph: "verified"
-                    text: root.rights.riskLabel || ""
-                    tint: root.rightsAccent
-                    strong: true
-                }
-            ]
-            Box {
-                Layout.fillWidth: true
-                color: U.withAlpha(root.rightsAccent, Theme.isDark ? 0.06 : 0.05)
-                border.color: U.withAlpha(root.rightsAccent, 0.26)
-                Body {
-                    visible: text !== ""
-                    text: root.rights.notes || ""
-                    font.pixelSize: Tokens.fontLabel + 1
-                    color: Theme.text_strong
-                }
-                Caption { visible: (root.rights.safeMoves || []).length > 0; text: I18n.tr("Keep it safe"); Layout.topMargin: Tokens.space2 }
-                Repeater {
-                    model: root.rights.safeMoves || []
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Tokens.space3
-                        C.IconGlyph { name: "check_circle"; size: 16; glyphColor: Theme.secondary_container; Layout.alignment: Qt.AlignTop; Layout.topMargin: 2 }
-                        Body { text: modelData }
-                    }
-                }
-            }
-        }
-
-        Stage {
-            id: sRisks
-            host: root; act: 2; order: 5
-            has: root.hasRisks
-            kicker: "RISKS"
-            heading: I18n.tr("What could sink this video")
-
-            Repeater {
-                model: root.idea.risks || []
-                Rectangle {
-                    Layout.fillWidth: true
-                    radius: Tokens.radiusXl
-                    color: Theme.surface_low
-                    border.width: 1
-                    border.color: Theme.border
-                    implicitHeight: rkGrid.implicitHeight + Tokens.space4 * 2
-                    GridLayout {
-                        id: rkGrid
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: Tokens.space4
-                        columns: root.mid ? 3 : 1
-                        columnSpacing: Tokens.space4
-                        rowSpacing: Tokens.space2
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Layout.preferredWidth: 1
-                            Layout.leftMargin: Tokens.space2
-                            spacing: Tokens.space3
-                            C.IconGlyph { name: "warning"; size: 18; glyphColor: Theme.error; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
-                            Body { text: modelData.risk || ""; font.pixelSize: Tokens.fontLabel + 1; color: Theme.text_strong }
-                        }
-                        C.IconGlyph {
-                            visible: root.mid && (modelData.fix || "") !== ""
-                            name: I18n.rtl ? "arrow_back" : "arrow_forward"
-                            size: 18
-                            glyphColor: Theme.outline
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-                        Rectangle {
-                            visible: (modelData.fix || "") !== ""
-                            Layout.fillWidth: true
-                            Layout.preferredWidth: 1
-                            radius: Tokens.radiusLg
-                            color: U.withAlpha(Theme.secondary_container, Theme.isDark ? 0.08 : 0.07)
-                            implicitHeight: fixTxt.implicitHeight + Tokens.space3 * 2
-                            Body {
-                                id: fixTxt
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.margins: Tokens.space4
-                                text: modelData.fix || ""
-                                font.pixelSize: Tokens.fontLabel
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ══════════════════════════ ACT 4 · GROW ══════════════════════════
-
-        // ── v6 · CHECKPOINTS (Grow) ──
-        // 1 hour → 24 hours → 7 days as three stations on one line. Each says
-        // what to open in Studio, what good looks like, and the move if not.
-        // Tick a station once you've checked it (per idea, not saved).
-        Stage {
-            id: sCheckpoints
-            host: root; act: 3; order: 0
-            has: root.hasCheckpoints
-            kicker: "CHECKPOINTS"
-            heading: I18n.tr("What to check, and when")
-            aside: [ Pill {
-                visible: root.mid
-                glyph: "query_stats"
-                text: I18n.tr("Against your channel's usual, not someone else's")
-                tint: root.growColor
-                maxTextWidth: 320
-            } ]
-
-            GridLayout {
-                id: cpGrid
-                Layout.fillWidth: true
-                readonly property int n: (root.idea.checkpoints || []).length
-                columns: root.mid ? Math.max(1, Math.min(3, n)) : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Repeater {
-                    model: root.idea.checkpoints || []
-                    Rectangle {
-                        id: cp
-                        readonly property bool done: root.cpDone[index] === true
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.preferredWidth: 1
-                        Layout.alignment: Qt.AlignTop
-                        radius: Tokens.radiusXl + 2
-                        color: done ? U.withAlpha(root.growColor, Theme.isDark ? 0.10 : 0.07) : Theme.surface_high
-                        border.width: 1
-                        border.color: done ? U.withAlpha(root.growColor, 0.45) : Theme.border
-                        Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durMed } }
-                        implicitHeight: cpCol.implicitHeight + Tokens.space5 * 2
-                        ColumnLayout {
-                            id: cpCol
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            anchors.margins: Tokens.space5
-                            spacing: Tokens.space2
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: Tokens.space3
-                                // the station dot
-                                Rectangle {
-                                    width: 30; height: 30; radius: 15
-                                    color: cp.done ? root.growColor : U.withAlpha(root.growColor, 0.16)
-                                    border.width: cp.done ? 0 : 1.5
-                                    border.color: U.withAlpha(root.growColor, 0.6)
-                                    Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durMed } }
-                                    C.AppText {
-                                        anchors.centerIn: parent
-                                        visible: !cp.done
-                                        text: root.num(index + 1)
-                                        weight: Tokens.weightExtraBold
-                                        font.pixelSize: Tokens.fontCaption + 1
-                                        color: root.growColor
-                                    }
-                                    C.IconGlyph { anchors.centerIn: parent; visible: cp.done; name: "check"; size: 16; glyphColor: Theme.isDark ? "#0F0D12" : "#FFFFFF" }
-                                }
-                                C.AppText {
-                                    Layout.fillWidth: true
-                                    text: modelData.whenLabel || modelData.when || ""
-                                    weight: Tokens.weightExtraBold
-                                    font.pixelSize: Tokens.fontSubtitle + 2
-                                    color: Theme.text_strong
-                                    elide: Text.ElideRight
-                                }
-                                C.IconButton {
-                                    iconName: cp.done ? "check_circle" : "check"
-                                    tip: cp.done ? I18n.tr("Checked") : I18n.tr("Mark as checked")
-                                    accent: root.growColor
-                                    active: cp.done
-                                    implicitWidth: 30; implicitHeight: 30
-                                    onClicked: {
-                                        var m = Object.assign({}, root.cpDone)
-                                        m[index] = !cp.done
-                                        root.cpDone = m
-                                    }
-                                }
-                            }
-                            Caption { visible: (modelData.check || "") !== ""; Layout.topMargin: Tokens.space1; text: I18n.tr("Open in Studio") }
-                            Body { visible: text !== ""; text: modelData.check || ""; weight: Tokens.weightBold; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
-                            RowLayout {
-                                Layout.fillWidth: true
-                                visible: (modelData.goodSign || "") !== ""
-                                Layout.topMargin: Tokens.space1
-                                spacing: Tokens.space2
-                                C.IconGlyph { name: "check_circle"; size: 15; glyphColor: Theme.secondary_container; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
-                                Body { text: modelData.goodSign || ""; font.pixelSize: Tokens.fontBody }
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true
-                                visible: (modelData.ifNot || "") !== ""
-                                spacing: Tokens.space2
-                                C.IconGlyph { name: I18n.rtl ? "arrow_back" : "arrow_forward"; size: 15; glyphColor: Theme.warn; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
-                                Body { text: modelData.ifNot || ""; font.pixelSize: Tokens.fontBody; color: Theme.on_surface_var }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── v5 · IF IT STALLS ──
-        Stage {
-            id: sPlaybook
-            host: root; act: 3; order: 1
-            has: root.hasPlaybook
-            kicker: "PLAYBOOK"
-            heading: I18n.tr("If Studio shows this in the first 48 hours")
-
-            Repeater {
-                model: root.idea.playbook || []
-                Rectangle {
-                    Layout.fillWidth: true
-                    radius: Tokens.radiusXl
-                    color: Theme.surface_low
-                    border.width: 1
-                    border.color: Theme.border
-                    implicitHeight: pbGrid.implicitHeight + Tokens.space4 * 2
-                    GridLayout {
-                        id: pbGrid
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: Tokens.space4
-                        columns: root.mid ? 3 : 1
-                        columnSpacing: Tokens.space4
-                        rowSpacing: Tokens.space2
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Layout.preferredWidth: 1
-                            Layout.leftMargin: Tokens.space2
-                            spacing: Tokens.space3
-                            C.IconGlyph { name: "query_stats"; size: 18; glyphColor: Theme.warn; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
-                            Body { text: modelData.signal || ""; font.pixelSize: Tokens.fontLabel + 1; color: Theme.text_strong }
-                        }
-                        C.IconGlyph {
-                            visible: root.mid && (modelData.action || "") !== ""
-                            name: I18n.rtl ? "arrow_back" : "arrow_forward"
-                            size: 18
-                            glyphColor: Theme.outline
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-                        Rectangle {
-                            visible: (modelData.action || "") !== ""
-                            Layout.fillWidth: true
-                            Layout.preferredWidth: 1
-                            radius: Tokens.radiusLg
-                            color: U.withAlpha(Theme.tertiary, Theme.isDark ? 0.08 : 0.06)
-                            implicitHeight: pbTxt.implicitHeight + Tokens.space3 * 2
-                            Body {
-                                id: pbTxt
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.margins: Tokens.space4
-                                text: modelData.action || ""
-                                font.pixelSize: Tokens.fontLabel
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── v6 · REPLY BANK (Grow) ──
-        // The comments this video will get, each with a reply ready to paste —
-        // drawn as a comment thread so it reads like the place it goes.
-        Stage {
-            id: sReplies
-            host: root; act: 3; order: 2
-            has: root.hasReplies
-            kicker: "REPLY BANK"
-            heading: I18n.tr("Comments you'll get, answers ready")
-
-            GridLayout {
-                Layout.fillWidth: true
-                columns: root.wide ? 2 : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Repeater {
-                    model: root.idea.replyBank || []
-                    Rectangle {
-                        id: rb
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.preferredWidth: 1
-                        Layout.alignment: Qt.AlignTop
-                        radius: Tokens.radiusXl
-                        color: Theme.surface_high
-                        border.width: 1
-                        border.color: rbHover.hovered ? U.withAlpha(root.growColor, 0.4) : Theme.border
-                        Behavior on border.color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
-                        implicitHeight: rbCol.implicitHeight + Tokens.space4 * 2
-                        HoverHandler { id: rbHover }
-                        ColumnLayout {
-                            id: rbCol
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            anchors.margins: Tokens.space4
-                            spacing: Tokens.space3
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: Tokens.space3
-                                Rectangle {
-                                    Layout.alignment: Qt.AlignTop
-                                    width: 28; height: 28; radius: 14
-                                    color: Theme.surface_highest
-                                    C.IconGlyph { anchors.centerIn: parent; name: "user"; size: 15; glyphColor: Theme.on_surface_var }
-                                }
-                                Body { text: modelData.comment || ""; font.pixelSize: Tokens.fontLabel; color: Theme.on_surface }
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true
-                                visible: (modelData.reply || "") !== ""
-                                spacing: Tokens.space3
-                                // indent: the reply sits under the comment, like a thread
-                                Item { Layout.preferredWidth: 28; Layout.preferredHeight: 1 }
-                                Rectangle {
-                                    Layout.alignment: Qt.AlignTop
-                                    width: 28; height: 28; radius: 14
-                                    color: root.growColor
-                                    C.IconGlyph { anchors.centerIn: parent; name: "message"; size: 14; glyphColor: Theme.isDark ? "#0F0D12" : "#FFFFFF" }
-                                }
-                                Body { text: modelData.reply || ""; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
-                                C.IconButton {
-                                    Layout.alignment: Qt.AlignTop
-                                    iconName: "content_copy"
-                                    tip: I18n.tr("Copy reply")
-                                    accent: Theme.primary
-                                    implicitWidth: 28; implicitHeight: 28
-                                    opacity: rbHover.hovered ? 1 : 0.45
-                                    Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
-                                    onClicked: root.copyRequested(modelData.reply || "")
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Stage {
-            id: sSeries
-            host: root; act: 3; order: 3
-            has: root.hasSeries
-            kicker: "SERIES"
-            heading: I18n.tr("What comes next — keep this viewer")
-
-            GridLayout {
-                id: serGrid
-                Layout.fillWidth: true
-                readonly property int n: (root.idea.seriesNext || []).length
-                columns: root.mid ? Math.max(1, Math.min(3, n)) : 1
-                columnSpacing: Tokens.space3
-                rowSpacing: Tokens.space3
-                Repeater {
-                    model: root.idea.seriesNext || []
-                    Rectangle {
-                        id: ep
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        Layout.preferredWidth: 1
-                        radius: Tokens.radiusXl + 2
-                        color: epHover.hovered ? U.hoverTint(Theme.surface_high, Theme.isDark) : Theme.surface_high
-                        border.width: 1
-                        border.color: epHover.hovered ? U.withAlpha(Theme.secondary_container, 0.35) : Theme.border
-                        Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durMed } }
-                        implicitHeight: Math.max(170, epCol.implicitHeight + Tokens.space5 * 2 + 34)
-                        HoverHandler { id: epHover }
-                        transform: Translate {
-                            id: epLift
-                            y: epHover.hovered ? -3 : 0
-                            Behavior on y { NumberAnimation { duration: Tokens.durMed; easing.type: Easing.OutCubic } }
-                        }
-                        // keep the hit box on the resting footprint too (see LiftMask.qml)
-                        containmentMask: C.LiftMask { target: ep; dy: epLift.y }
-                        C.AppText {
-                            anchors.left: parent.left
-                            anchors.top: parent.top
-                            anchors.margins: Tokens.space5
-                            text: "EP " + ((index + 2) < 10 ? "0" : "") + (index + 2)
-                            weight: Tokens.weightBold
-                            font.pixelSize: Tokens.fontBody
-                            font.letterSpacing: 1.2
-                            color: Theme.secondary_container
-                        }
-                        ColumnLayout {
-                            id: epCol
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.bottom: parent.bottom
-                            anchors.margins: Tokens.space5
-                            spacing: Tokens.space1
-                            Body { text: modelData.title || ""; weight: Tokens.weightBold; font.pixelSize: Tokens.fontSubtitle + 2; color: Theme.text_strong }
-                            Body { visible: text !== ""; text: modelData.why || ""; selectable: false; font.pixelSize: Tokens.fontBody; color: Theme.outline }
-                        }
-                    }
-                }
-            }
-        }
-
-        // ── v7 · FORMAT FUNNEL (v1.0.3) ──
-        // YouTube's own funnel: a long video feeds Shorts, a Short points at
-        // a long video. Long-form lists the clips to cut; a Short names the
-        // video to set as its Related video.
-        Stage {
-            id: sFunnel
-            host: root; act: 3; order: 4
-            has: root.hasFunnel
-            kicker: "FORMAT FUNNEL"
-            heading: root.idea.isLong ? I18n.tr("Shorts to cut from this video")
-                                      : I18n.tr("Where this Short sends viewers")
-
-            Repeater {
-                model: root.funnelD.clips || []
-                Rectangle {
-                    id: fnRow
-                    Layout.fillWidth: true
-                    radius: Tokens.radiusXl
-                    color: Theme.surface_high
-                    border.width: 1
-                    border.color: fnHover.hovered ? U.withAlpha(root.growColor, 0.45) : Theme.border
-                    Behavior on border.color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
-                    implicitHeight: fnLay.implicitHeight + Tokens.space4 * 2
-                    HoverHandler { id: fnHover }
-                    RowLayout {
-                        id: fnLay
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: Tokens.space4
-                        spacing: Tokens.space3
-                        Pill { Layout.alignment: Qt.AlignTop; text: modelData.from || ""; glyph: "scissors"; mono: true; tint: root.growColor; strong: true; visible: (modelData.from || "") !== "" }
-                        Body { text: modelData.hook || ""; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
-                        C.IconButton {
-                            Layout.alignment: Qt.AlignTop
-                            iconName: "content_copy"
-                            tip: I18n.tr("Copy hook")
-                            accent: Theme.primary
-                            implicitWidth: 28; implicitHeight: 28
-                            opacity: fnHover.hovered ? 1 : 0.45
-                            Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
-                            onClicked: root.copyRequested(modelData.hook || "")
-                        }
-                    }
-                }
-            }
-            Box {
-                Layout.fillWidth: true
-                visible: (root.funnelD.linkTo || "") !== ""
-                border.color: U.withAlpha(root.growColor, 0.35)
-                RowLayout {
-                    spacing: 6
-                    C.IconGlyph { name: "link"; size: 15; glyphColor: root.growColor }
-                    Caption { text: root.idea.isLong ? I18n.tr("SEND VIEWERS TO") : I18n.tr("SET AS RELATED VIDEO"); color: root.growColor }
-                }
-                Body { text: root.funnelD.linkTo || ""; font.pixelSize: Tokens.fontLabel + 1; color: Theme.text_strong }
-                Body { visible: text !== ""; text: root.funnelD.why || ""; font.pixelSize: Tokens.fontBody; color: Theme.on_surface_var }
-            }
-        }
-
 
         // ═════════════ next act ═════════════
         AbstractButton {
@@ -4718,6 +1620,3423 @@ Item {
                 color: Theme.outline
                 wrapMode: Text.Wrap
                 Layout.maximumWidth: 340
+            }
+        }
+    }
+
+    Component {
+        id: act0Comp
+        ColumnLayout {
+            width: act0Loader.width
+            spacing: Tokens.space6
+            // ── v5 · THE PROMISE ──
+
+            Stage {
+                id: sPromise
+                key: "sPromise"
+                host: root; act: 0; order: 0
+                has: root.hasPromise   // v1.0.6: back in the Universal greenlight
+                kicker: "THE PROMISE"
+                heading: I18n.tr("What it promises, and when it pays off")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.wide ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Box {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 1
+                        visible: (root.promise.promise || "") !== ""
+                        color: U.withAlpha(Theme.tertiary, Theme.isDark ? 0.07 : 0.05)
+                        border.color: U.withAlpha(Theme.tertiary, 0.26)
+                        Caption { text: I18n.tr("Title, thumbnail and hook all promise"); color: Theme.tertiary }
+                        Body {
+                            text: root.promise.promise || ""
+                            weight: Tokens.weightBold
+                            font.pixelSize: root.mid ? 22 : 19
+                            color: Theme.text_strong
+                        }
+                    }
+                    Box {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 1
+                        visible: (root.promise.payoff || "") !== "" || (root.promise.differentiator || "") !== ""
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: (root.promise.payoff || "") !== ""
+                            Caption { text: I18n.tr("The payoff") }
+                            Pill {
+                                visible: (root.promise.payoffTime || "") !== ""
+                                glyph: "schedule"
+                                mono: true
+                                text: root.promise.payoffTime || ""
+                                tint: Theme.tertiary
+                            }
+                        }
+                        Body { visible: text !== ""; text: root.promise.payoff || ""; font.pixelSize: Tokens.fontLabel + 1; color: Theme.text_strong }
+                        Caption { visible: (root.promise.differentiator || "") !== ""; text: I18n.tr("Only this version has"); Layout.topMargin: Tokens.space2 }
+                        Body { visible: text !== ""; text: root.promise.differentiator || ""; font.pixelSize: Tokens.fontLabel }
+                        // v10: the cost of scrolling past it
+                        Caption { visible: (root.promise.stakes || "") !== ""; text: I18n.tr("Why they can't skip it"); Layout.topMargin: Tokens.space2 }
+                        Body { visible: text !== ""; text: root.promise.stakes || ""; font.pixelSize: Tokens.fontLabel }
+                        // v10, Shorts: the seamless loop
+                        Caption { visible: (root.promise.loop || "") !== ""; text: I18n.tr("Loops back into the start"); Layout.topMargin: Tokens.space2 }
+                        Body { visible: text !== ""; text: root.promise.loop || ""; font.pixelSize: Tokens.fontLabel }
+                    }
+                }
+
+                // v10: who it is built for, and where its views come from
+                Box {
+                    Layout.fillWidth: true
+                    visible: root.hasTarget
+                    Caption { text: I18n.tr("Built for") }
+                    Flow {
+                        Layout.fillWidth: true
+                        spacing: Tokens.space2
+                        Pill {
+                            visible: (root.target.spectrumLabel || "") !== ""
+                            glyph: root.target.spectrum === "Niche" ? "target" : "public"
+                            text: root.target.spectrumLabel || ""
+                            tint: Theme.tertiary
+                        }
+                        Pill {
+                            visible: (root.target.laneLabel || "") !== ""
+                            glyph: root.target.lane === "Search" ? "search"
+                                 : root.target.lane === "Suggested" ? "smart_display" : "home_work"
+                            text: root.target.laneLabel || ""
+                            tint: Theme.tertiary
+                        }
+                    }
+                    Body {
+                        visible: text !== ""
+                        Layout.topMargin: Tokens.space1
+                        text: root.target.both || ""
+                        font.pixelSize: Tokens.fontLabel
+                        color: Theme.on_surface_var
+                    }
+                }
+            }
+
+            Stage {
+                id: sAngle
+                key: "sAngle"
+                host: root; act: 0; order: 1
+                has: root.hasAngle
+                kicker: "VIRAL ANGLE"
+                heading: I18n.tr("Viral angle")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.wide && (root.angle.triggers || []).length > 0 ? 2 : 1
+                    columnSpacing: Tokens.space7
+                    rowSpacing: Tokens.space5
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 3
+                        Layout.alignment: Qt.AlignTop
+                        spacing: Tokens.space4
+                        Body {
+                            text: root.angle.concept || ""
+                            visible: text !== ""
+                            weight: Tokens.weightBold
+                            font.pixelSize: root.mid ? 26 : 21
+                            color: Theme.text_strong
+                        }
+                        WhyNote { text_: root.angle.reasoning || ""; accent: Theme.tertiary }
+                    }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                        Layout.alignment: Qt.AlignTop
+                        visible: (root.angle.triggers || []).length > 0
+                        spacing: Tokens.space2
+                        Caption { text: I18n.tr("Psychological triggers") }
+                        Repeater {
+                            model: root.angle.triggers || []
+                            Rectangle {
+                                Layout.fillWidth: true
+                                radius: Tokens.radiusMd
+                                color: index % 2 ? Theme.surface_low : Theme.surface_high
+                                border.width: 1
+                                border.color: Theme.border
+                                implicitHeight: trRow.implicitHeight + Tokens.space3 * 2
+                                RowLayout {
+                                    id: trRow
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.margins: Tokens.space4
+                                    spacing: Tokens.space3
+                                    Rectangle {
+                                        width: 8; height: 8; radius: 4
+                                        color: Theme.tertiary
+                                        opacity: 1 - index * 0.15
+                                        Layout.alignment: Qt.AlignVCenter
+                                    }
+                                    Body { text: modelData; selectable: false; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Stage {
+                id: sHook
+                key: "sHook"
+                host: root; act: 0; order: 1
+                has: root.hasHook
+                kicker: "HOOK ANATOMY"
+                heading: I18n.tr("Hook anatomy")
+                aside: [
+                    Pill {
+                        visible: (root.hookData.focusTag || "") !== ""
+                        text: root.hookData.focusTag || ""
+                        tint: Theme.tertiary
+                        strong: true
+                    }
+                ]
+
+                GridLayout {
+                    id: hookGrid
+                    Layout.fillWidth: true
+                    readonly property var cols: {
+                        var c = []
+                        if ((root.hookData.spoken || []).length > 0)
+                            c.push({ g: "volume_up", n: I18n.tr("Opening line"), s: I18n.tr("the first words, three ways"), items: root.hookData.spoken, big: true, verbatim: true })
+                        if ((root.hookData.visual || []).length > 0)
+                            c.push({ g: "visibility", n: I18n.tr("Visual hook"), s: I18n.tr("the first frame they see"), items: root.hookData.visual, big: false, verbatim: false })
+                        if ((root.hookData.text || []).length > 0)
+                            c.push({ g: "text", n: I18n.tr("On-screen text"), s: I18n.tr("read with the sound off"), items: root.hookData.text, big: true, verbatim: false })
+                        if (root.idea.hasAntiHook === true)
+                            c.push({ g: "cancel", n: I18n.tr("Anti-hook"),
+                                    s: root.isV10 ? I18n.tr("raw and honest, earns trust instead of hype")
+                                                  : I18n.tr("pushes the wrong viewer away"),
+                                    items: root.antiHookData.options || [], big: false, verbatim: false })
+                        return c
+                    }
+                    columns: root.wide ? Math.max(1, cols.length) : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+
+                    Repeater {
+                        model: hookGrid.cols
+                        Box {
+                            id: hookCol
+                            readonly property var cd: modelData
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 1
+                            Layout.alignment: Qt.AlignTop
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.bottomMargin: Tokens.space2
+                                spacing: Tokens.space3
+                                Rectangle {
+                                    width: 40; height: 40; radius: Tokens.radiusMd
+                                    color: U.withAlpha(Theme.tertiary, 0.14)
+                                    C.IconGlyph { anchors.centerIn: parent; name: modelData.g; size: 18; glyphColor: Theme.tertiary }
+                                }
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 0
+                                    C.AppText { text: modelData.n; weight: Tokens.weightBold; font.pixelSize: Tokens.fontSubtitle; color: Theme.text_strong; Layout.fillWidth: true; elide: Text.ElideRight }
+                                    C.AppText { text: modelData.s; font.pixelSize: Tokens.fontCaption; color: Theme.outline; Layout.fillWidth: true; elide: Text.ElideRight }
+                                }
+                            }
+                            Repeater {
+                                model: modelData.items
+                                Option {
+                                    letter: String.fromCharCode(65 + index)
+                                    body: modelData
+                                    big: hookCol.cd.big === true
+                                    tint: Theme.tertiary
+                                    onCopyClicked: (t) => root.copyRequested(t)
+                                }
+                            }
+                        }
+                    }
+                }
+                WhyNote { text_: root.hookData.reasoning || ""; accent: Theme.tertiary }
+                WhyNote {
+                    text_: root.idea.hasAntiHook === true ? (root.antiHookData.reasoning || "") : ""
+                    accent: Theme.tertiary
+                }
+            }
+
+            Stage {
+                id: sEvidence
+                key: "sEvidence"
+                host: root; act: 0; order: 2
+                has: root.hasEvidence
+                kicker: "EVIDENCE"
+                heading: I18n.tr("Why the data backs it")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.mid ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Repeater {
+                        model: root.idea.evidence || []
+                        Rectangle {
+                            id: evCard
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 1
+                            readonly property bool linked: (modelData.url || "") !== ""
+                            radius: Tokens.radiusXl
+                            color: Theme.surface_low
+                            border.width: 1
+                            border.color: Theme.border
+                            implicitHeight: evRow.implicitHeight + Tokens.space5 * 2
+                            HoverHandler { cursorShape: evCard.linked ? Qt.PointingHandCursor : Qt.ArrowCursor }
+                            TapHandler { enabled: evCard.linked; onTapped: Qt.openUrlExternally(modelData.url) }
+                            RowLayout {
+                                id: evRow
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: Tokens.space5
+                                spacing: Tokens.space4
+                                Rectangle {
+                                    Layout.alignment: Qt.AlignTop
+                                    implicitWidth: Math.max(40, evRef.implicitWidth + Tokens.space3)
+                                    implicitHeight: 32
+                                    radius: Tokens.radiusSm
+                                    color: U.withAlpha(Theme.secondary_container, 0.14)
+                                    C.AppText { id: evRef; anchors.centerIn: parent; text: modelData.ref || "DATA"; mono: true; font.pixelSize: Tokens.fontCaption; color: Theme.secondary_container }
+                                }
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Tokens.space1
+                                    Body { text: modelData.claim || ""; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
+                                    Body {
+                                        visible: text !== ""
+                                        text: (modelData.title || "") + (modelData.views ? "  ·  " + modelData.views : "")
+                                        selectable: false
+                                        font.pixelSize: Tokens.fontBody - 1
+                                        color: Theme.outline
+                                    }
+                                }
+                                C.IconGlyph { visible: evCard.linked; name: "open_in_new"; size: 16; glyphColor: Theme.outline; Layout.alignment: Qt.AlignTop }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Stage {
+                id: sPulse
+                key: "sPulse"
+                host: root; act: 0; order: 3
+                has: root.hasPulse
+                kicker: "DATA PULSE"
+                heading: I18n.tr("The numbers it was built from")
+
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: Tokens.space3
+                    Repeater {
+                        model: (root.idea.pulse || {}).tiles || []
+                        Rectangle {
+                            radius: Tokens.radiusLg
+                            color: Theme.surface_high
+                            border.width: 1
+                            border.color: Theme.border
+                            width: Math.max(170, pCol.implicitWidth + Tokens.space5 * 2)
+                            implicitHeight: pCol.implicitHeight + Tokens.space4 * 2
+                            height: implicitHeight
+                            ColumnLayout {
+                                id: pCol
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: Tokens.space4
+                                anchors.leftMargin: Tokens.space5
+                                anchors.rightMargin: Tokens.space5
+                                spacing: 2
+                                C.AppText { text: modelData.label || ""; font.pixelSize: Tokens.fontCaption; color: Theme.outline }
+                                C.AppText { text: modelData.value || ""; weight: Tokens.weightBold; font.pixelSize: 28; color: Theme.text_strong; LayoutMirroring.enabled: false }
+                                C.AppText { text: modelData.sub || ""; font.pixelSize: Tokens.fontCaption; color: Theme.on_surface_var; elide: Text.ElideRight; Layout.maximumWidth: 240 }
+                            }
+                        }
+                    }
+                }
+                Repeater {
+                    model: (root.idea.pulse || {}).csv || []
+                    Box {
+                        Layout.fillWidth: true
+                        color: U.withAlpha(Theme.secondary_container, 0.05)
+                        border.color: U.withAlpha(Theme.secondary_container, 0.22)
+                        pad: Tokens.space4
+                        C.AppText { text: modelData.name || ""; weight: Tokens.weightBold; color: Theme.secondary_container; Layout.fillWidth: true; elide: Text.ElideMiddle }
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: Tokens.space5
+                            Repeater {
+                                model: [
+                                    { l: I18n.tr("Videos"), v: modelData.videos },
+                                    { l: I18n.tr("Median"), v: modelData.median },
+                                    { l: I18n.tr("Top"), v: modelData.top },
+                                    { l: I18n.tr("Best length"), v: modelData.bestLength },
+                                    { l: I18n.tr("Best day"), v: modelData.bestDay }
+                                ]
+                                Column {
+                                    spacing: 0
+                                    C.AppText { text: modelData.l; font.pixelSize: Tokens.fontCaption; color: Theme.outline }
+                                    C.AppText { text: modelData.v || "—"; weight: Tokens.weightBold; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Component {
+        id: act1Comp
+        ColumnLayout {
+            width: act1Loader.width
+            spacing: Tokens.space6
+            Stage {
+                id: sThumbs
+                key: "sThumbs"
+                host: root; act: 1; order: 1
+                has: root.hasThumbs
+                kicker: "THUMBNAIL CONCEPTS"
+                heading: I18n.tr("Thumbnails to test against each other")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.mid ? 2 : 1
+                    columnSpacing: Tokens.space5
+                    rowSpacing: Tokens.space4
+
+                    // picker tiles — a 9:16 slot per concept
+                    Row {
+                        Layout.alignment: Qt.AlignTop
+                        spacing: Tokens.space3
+                        Repeater {
+                            model: root.idea.thumbnails || []
+                            AbstractButton {
+                                id: tile
+                                readonly property bool isOn: root.thumbPick === index
+                                readonly property color tint: index === 0 ? Theme.tertiary : index === 1 ? Theme.warn : Theme.secondary_container
+                                width: root.wide ? 128 : 104
+                                height: Math.round(width * 16 / 9)
+                                onClicked: root.thumbPick = index
+                                HoverHandler { id: tileHover; cursorShape: Qt.PointingHandCursor }
+                                transform: Translate {
+                                    y: tile.isOn ? -6 : 0
+                                    Behavior on y { NumberAnimation { duration: Tokens.durMed; easing.type: Easing.OutCubic } }
+                                }
+                                opacity: tile.isOn || tileHover.hovered ? 1 : 0.6
+                                Behavior on opacity { NumberAnimation { duration: Tokens.durMed } }
+                                background: Rectangle {
+                                    radius: Tokens.radiusLg + 2
+                                    antialiasing: true
+                                    gradient: Gradient {
+                                        GradientStop { position: 0.0; color: U.mix(root.inkDeep, tile.tint, 0.55) }
+                                        GradientStop { position: 0.6; color: U.mix(root.inkDeep, tile.tint, 0.16) }
+                                        GradientStop { position: 1.0; color: "#0B0910" }
+                                    }
+                                    border.width: tile.isOn ? 2 : 1
+                                    border.color: tile.isOn ? tile.tint : Qt.rgba(1, 1, 1, 0.10)
+                                }
+                                contentItem: Item {
+                                    C.AppText {
+                                        anchors.centerIn: parent
+                                        visible: (modelData.text || "") === ""
+                                        text: String.fromCharCode(65 + index)
+                                        weight: Tokens.weightExtraBold
+                                        font.pixelSize: 54
+                                        color: Qt.rgba(1, 1, 1, tile.isOn ? 0.95 : 0.7)
+                                    }
+                                    // v1.0.5: the words that go ON the thumbnail
+                                    C.AppText {
+                                        anchors.centerIn: parent
+                                        anchors.verticalCenterOffset: -Tokens.space4
+                                        visible: (modelData.text || "") !== ""
+                                        width: parent.width - Tokens.space3 * 2
+                                        text: modelData.text || ""
+                                        weight: Tokens.weightExtraBold
+                                        font.pixelSize: Tokens.fontSubtitle
+                                        color: Qt.rgba(1, 1, 1, tile.isOn ? 0.98 : 0.75)
+                                        horizontalAlignment: Text.AlignHCenter
+                                        wrapMode: Text.Wrap
+                                        maximumLineCount: 3
+                                        elide: Text.ElideRight
+                                    }
+                                    C.AppText {
+                                        anchors.bottom: parent.bottom
+                                        anchors.bottomMargin: Tokens.space3
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        width: parent.width - Tokens.space3 * 2
+                                        text: modelData.label || ""
+                                        font.pixelSize: Tokens.fontCaption
+                                        weight: Tokens.weightDemiBold
+                                        color: Qt.rgba(1, 1, 1, 0.8)
+                                        horizontalAlignment: Text.AlignHCenter
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Box {
+                        id: thumbBox
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignTop
+                        readonly property var cur: (root.idea.thumbnails || [])[root.thumbPick] || ({})
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Tokens.space2
+                            C.AppText {
+                                text: (thumbBox.cur.label || "") + " · prompt"
+                                weight: Tokens.weightBold
+                                font.pixelSize: Tokens.fontBody
+                                color: Theme.tertiary
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                            }
+                            C.IconButton {
+                                iconName: "content_copy"
+                                tip: I18n.tr("Copy")
+                                accent: Theme.primary
+                                onClicked: root.copyRequested(thumbBox.cur.prompt || "")
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: (thumbBox.cur.text || "") !== ""
+                            spacing: Tokens.space2
+                            C.AppText {
+                                text: I18n.tr("On the thumbnail")
+                                font.pixelSize: Tokens.fontBody
+                                color: Theme.outline
+                            }
+                            C.AppText {
+                                Layout.fillWidth: true
+                                text: "“" + (thumbBox.cur.text || "") + "”"
+                                weight: Tokens.weightBold
+                                font.pixelSize: Tokens.fontLabel
+                                color: Theme.text_strong
+                                elide: Text.ElideRight
+                            }
+                            C.IconButton {
+                                iconName: "content_copy"
+                                tip: I18n.tr("Copy")
+                                accent: Theme.primary
+                                onClicked: root.copyRequested(thumbBox.cur.text || "")
+                            }
+                        }
+                        Body {
+                            text: thumbBox.cur.prompt || ""
+                            font.pixelSize: Tokens.fontLabel
+                            color: Theme.on_surface
+                        }
+                        C.AppText {
+                            Layout.fillWidth: true
+                            Layout.topMargin: Tokens.space2
+                            text: I18n.tr("Test these against each other rather than picking the first — thumbnail is the single biggest lever on click-through.")
+                            font.pixelSize: Tokens.fontBody
+                            color: Theme.outline
+                            wrapMode: Text.Wrap
+                        }
+                    }
+                }
+            }
+
+            // ── v7 · PACKAGING BRIEF (v1.0.3) ──
+            // The words ON the thumbnail, the one thing the eye lands on, and how
+            // title and thumbnail split the job instead of repeating each other.
+
+            Stage {
+                id: sPack
+                key: "sPack"
+                host: root; act: 1; order: 2
+                has: root.hasPackBrief   // v1.0.14: back in the v10 greenlight
+                kicker: "PACKAGING"
+                heading: I18n.tr("Title + thumbnail, working as one")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    visible: (root.packBrief.thumbText || []).length > 0
+                    columns: root.mid ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Repeater {
+                        model: root.packBrief.thumbText || []
+                        Option {
+                            Layout.preferredWidth: 1
+                            letter: index === 0 ? "A" : index === 1 ? "B" : "C"
+                            body: modelData
+                            big: true
+                            tint: Theme.tertiary
+                            onCopyClicked: (t) => root.copyRequested(t)
+                        }
+                    }
+                }
+                C.AppText {
+                    visible: (root.packBrief.thumbText || []).length > 0
+                    text: I18n.tr("Words on the thumbnail: 4 or fewer, never the title again.")
+                    font.pixelSize: Tokens.fontCaption
+                    color: Theme.outline
+                    Layout.fillWidth: true
+                }
+                GridLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: Tokens.space2
+                    columns: root.wide ? 3 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Repeater {
+                        model: [
+                            { c: I18n.tr("THE EYE LANDS ON"), g: "visibility", v: root.packBrief.focal || "" },
+                            { c: I18n.tr("TITLE VS. THUMBNAIL"), g: "filter_none", v: root.packBrief.pairing || "" },
+                            { c: I18n.tr("STANDS OUT IN THE FEED"), g: "sparkling", v: root.packBrief.standOut || "" }
+                        ]
+                        Box {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 1
+                            Layout.alignment: Qt.AlignTop
+                            visible: modelData.v !== ""
+                            RowLayout {
+                                spacing: 6
+                                C.IconGlyph { name: modelData.g; size: 14; glyphColor: Theme.tertiary }
+                                Caption { text: modelData.c; color: Theme.tertiary }
+                            }
+                            Body { text: modelData.v }
+                        }
+                    }
+                }
+            }
+
+            Stage {
+                id: sTitles
+                key: "sTitles"
+                host: root; act: 1; order: 0
+                has: root.hasTitles
+                kicker: "PACKAGING"
+                heading: I18n.tr("Titles")
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    visible: (root.pack.framework || "") !== ""
+                    radius: Tokens.radiusLg
+                    color: U.withAlpha(Theme.secondary_container, 0.06)
+                    border.width: 1
+                    border.color: U.withAlpha(Theme.secondary_container, 0.24)
+                    implicitHeight: fwRow.implicitHeight + Tokens.space4 * 2
+                    RowLayout {
+                        id: fwRow
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: Tokens.space4
+                        spacing: Tokens.space3
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+                            Caption { text: I18n.tr("Title formula"); color: Theme.secondary_container }
+                            Body { text: root.pack.framework || ""; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
+                        }
+                        C.IconButton {
+                            iconName: "content_copy"
+                            tip: I18n.tr("Copy")
+                            accent: Theme.primary
+                            onClicked: root.copyRequested(root.pack.framework || "")
+                        }
+                    }
+                }
+
+                Repeater {
+                    model: root.idea.titles || []
+                    Rectangle {
+                        id: tRow
+                        Layout.fillWidth: true
+                        readonly property bool isTop: index === 0
+                        radius: Tokens.radiusLg
+                        color: isTop ? U.withAlpha(Theme.secondary_container, Theme.isDark ? 0.10 : 0.08)
+                                   : (index % 2 ? Theme.surface_low : Theme.surface_high)
+                        border.width: 1
+                        border.color: isTop ? U.withAlpha(Theme.secondary_container, 0.32) : Theme.border
+                        implicitHeight: tLay.implicitHeight + Tokens.space5 * 2
+                        HoverHandler { id: tHover }
+                        RowLayout {
+                            id: tLay
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: Tokens.space5
+                            spacing: Tokens.space4
+                            C.AppText {
+                                text: root.num(index + 1)
+                                weight: Tokens.weightBold
+                                font.pixelSize: Tokens.fontLabel
+                                color: tRow.isTop ? Theme.secondary_container : Theme.outline
+                                Layout.preferredWidth: 20
+                                Layout.alignment: Qt.AlignTop
+                                Layout.topMargin: 3
+                            }
+                            Body {
+                                text: modelData
+                                weight: tRow.isTop ? Tokens.weightExtraBold : Tokens.weightMedium
+                                font.pixelSize: tRow.isTop ? Tokens.fontTitle : Tokens.fontSubtitle + 1
+                                color: Theme.text_strong
+                            }
+                            Pill {
+                                visible: tRow.isTop && root.mid
+                                text: I18n.tr("Top pick")
+                                tint: Theme.secondary_container
+                                Layout.alignment: Qt.AlignVCenter
+                            }
+                            C.AppText {
+                                visible: root.mid
+                                text: String(String(modelData).length)
+                                mono: true
+                                font.pixelSize: Tokens.fontCaption
+                                color: String(modelData).length > 70 ? Theme.error : Theme.outline
+                                Layout.alignment: Qt.AlignVCenter
+                            }
+                            C.IconButton {
+                                iconName: "content_copy"
+                                tip: I18n.tr("Copy")
+                                accent: Theme.primary
+                                implicitWidth: 30
+                                implicitHeight: 30
+                                opacity: tHover.hovered ? 1 : 0.35
+                                Layout.alignment: Qt.AlignVCenter
+                                onClicked: root.copyRequested(modelData)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Component {
+        id: act2Comp
+        ColumnLayout {
+            width: act2Loader.width
+            spacing: Tokens.space6
+            // The edit bay: script, re-hooks and pacing on one time axis, with the
+            // cover preview's playhead. Time always runs left → right, like every
+            // editing app, so this block is never mirrored.
+
+            Stage {
+                id: sBay
+                key: "sBay"
+                host: root; act: 2; order: 0
+                has: root.hasScript
+                kicker: "EDIT BAY"
+                heading: I18n.tr("The whole video on one timeline")
+                aside: [
+                    C.AppText {
+                        text: root.fmt(root.playT) + " / " + (root.idea.totalLabel || root.fmt(root.total))
+                        mono: true
+                        font.pixelSize: Tokens.fontBody
+                        color: Theme.on_surface_var
+                        Layout.alignment: Qt.AlignVCenter
+                        LayoutMirroring.enabled: false
+                    },
+                    C.PrimaryButton {
+                        variant: "ghost"
+                        iconName: root.playing ? "pause" : "play_arrow"
+                        text: root.playing ? I18n.tr("Pause") : I18n.tr("Play")
+                        implicitHeight: 38
+                        onClicked: root.playing = !root.playing
+                    }
+                ]
+
+                Box {
+                    Layout.fillWidth: true
+                    pad: Tokens.space5
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Tokens.space4
+                        LayoutMirroring.enabled: false
+                        LayoutMirroring.childrenInherit: true
+
+                        // lane names
+                        Column {
+                            Layout.alignment: Qt.AlignTop
+                            Layout.preferredWidth: root.mid ? 104 : 72
+                            spacing: 0
+                            Item { width: 1; height: 30 }
+                            Repeater {
+                                model: [
+                                    { n: I18n.tr("Script"), h: 58 },
+                                    { n: I18n.tr("Re-hooks"), h: 40 },
+                                    { n: I18n.tr("Pacing"), h: 40 }
+                                ]
+                                Item {
+                                    width: parent.width
+                                    height: modelData.h + Tokens.space2
+                                    C.AppText {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        anchors.verticalCenterOffset: -Tokens.space1
+                                        width: parent.width
+                                        text: modelData.n
+                                        font.pixelSize: Tokens.fontCaption
+                                        weight: Tokens.weightDemiBold
+                                        color: Theme.outline
+                                        elide: Text.ElideRight
+                                        horizontalAlignment: I18n.rtl ? Text.AlignRight : Text.AlignLeft
+                                    }
+                                }
+                            }
+                        }
+
+                        // the track
+                        Item {
+                            id: track
+                            Layout.fillWidth: true
+                            implicitHeight: 30 + 58 + 40 + 40 + Tokens.space2 * 3
+                            function xOf(s) { return width * Math.max(0, Math.min(1, s / root.total)) }
+                            readonly property real step: root.total <= 40 ? 5 : root.total <= 120 ? 15
+                                                       : root.total <= 600 ? 60 : root.total <= 1800 ? 120 : 300
+
+                            // ruler
+                            Repeater {
+                                model: Math.floor(root.total / track.step) + 1
+                                Item {
+                                    x: track.xOf(index * track.step)
+                                    y: 0
+                                    C.AppText {
+                                        x: index === 0 ? 0 : -implicitWidth / 2
+                                        y: 0
+                                        text: root.fmt(index * track.step)
+                                        mono: true
+                                        font.pixelSize: Tokens.fontCaption
+                                        color: Theme.outline
+                                        visible: track.xOf(index * track.step) <= track.width - 18
+                                    }
+                                    Rectangle { x: 0; y: 22; width: 1; height: track.height - 22; color: U.withAlpha(Theme.outline, 0.12) }
+                                }
+                            }
+
+                            // script lane
+                            Repeater {
+                                model: root.script
+                                Rectangle {
+                                    readonly property bool isOn: index === root.beat
+                                    readonly property color tone: root.speakerColor(modelData.speaker)
+                                    x: track.xOf(modelData.startSec || 0) + 1
+                                    y: 30
+                                    width: Math.max(6, track.xOf(modelData.endSec || 0) - track.xOf(modelData.startSec || 0) - 2)
+                                    height: 58
+                                    radius: Tokens.radiusSm
+                                    clip: true
+                                    color: U.withAlpha(tone, isOn ? 0.24 : 0.09)
+                                    border.width: 1
+                                    border.color: U.withAlpha(tone, isOn ? 0.65 : 0.22)
+                                    Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durMed } }
+                                    Column {
+                                        anchors.fill: parent
+                                        anchors.margins: Tokens.space2
+                                        spacing: 2
+                                        C.AppText {
+                                            width: parent.width
+                                            text: modelData.speaker || ""
+                                            weight: Tokens.weightBold
+                                            font.pixelSize: Tokens.fontMicro + 1
+                                            color: parent.parent.tone
+                                            elide: Text.ElideRight
+                                        }
+                                        C.AppText {
+                                            width: parent.width
+                                            text: modelData.line || modelData.visual || ""
+                                            font.pixelSize: Tokens.fontCaption
+                                            color: Theme.on_surface_var
+                                            elide: Text.ElideRight
+                                            horizontalAlignment: /[\u0590-\u08FF]/.test(text) ? Text.AlignRight : Text.AlignLeft
+                                        }
+                                    }
+                                }
+                            }
+
+                            // re-hook lane
+                            Rectangle { x: 0; y: 30 + 58 + Tokens.space2 + 20; width: track.width; height: 1; color: Theme.border }
+                            Repeater {
+                                model: root.idea.rehooks || []
+                                Rectangle {
+                                    visible: modelData.atSec !== undefined && modelData.atSec >= 0
+                                    x: track.xOf(modelData.atSec || 0) - width / 2
+                                    y: 30 + 58 + Tokens.space2 + 6
+                                    width: 28; height: 28; radius: 14
+                                    color: Theme.warn
+                                    C.IconGlyph { anchors.centerIn: parent; name: "bolt"; fill: true; size: 15; glyphColor: "#1D1305" }
+                                    HoverHandler { id: rhHover }
+                                    C.AppTooltip {
+                                        visible: rhHover.hovered
+                                        text: (modelData.device || "") + (modelData.line ? " · " + modelData.line : "")
+                                    }
+                                }
+                            }
+
+                            // pacing lane
+                            Repeater {
+                                model: root.ret.phases || []
+                                Rectangle {
+                                    readonly property real p0: (index > 0 ? (root.ret.phases[index - 1].endPct || 0) : 0) / 100
+                                    readonly property real p1: (modelData.endPct || 0) / 100
+                                    x: track.width * p0 + (index > 0 ? 1 : 0)
+                                    y: 30 + 58 + 40 + Tokens.space2 * 2
+                                    width: Math.max(0, track.width * (p1 - p0) - (index > 0 ? 1 : 0))
+                                    height: 40
+                                    radius: Tokens.radiusSm
+                                    color: U.withAlpha(Theme.warn, [0.34, 0.12, 0.26, 0.18, 0.09, 0.22, 0.14, 0.3][index % 8])
+                                    C.AppText {
+                                        anchors.centerIn: parent
+                                        width: parent.width - Tokens.space2
+                                        text: modelData.label || ""
+                                        font.pixelSize: Tokens.fontCaption
+                                        weight: Tokens.weightDemiBold
+                                        color: Theme.text_strong
+                                        horizontalAlignment: Text.AlignHCenter
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                            }
+
+                            // playhead
+                            Item {
+                                x: track.xOf(root.playT)
+                                y: 18
+                                height: track.height - 18
+                                Rectangle { x: -5; y: 0; width: 10; height: 10; radius: 3; color: Theme.warn }
+                                Rectangle { x: -1; y: 0; width: 2; height: parent.height; color: Theme.warn }
+                            }
+
+                            // scrub
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                preventStealing: true
+                                onPressed: (m) => root.seek(m.x / track.width * root.total)
+                                onPositionChanged: (m) => { if (pressed) root.seek(m.x / track.width * root.total) }
+                            }
+                        }
+                    }
+                }
+
+                // now playing
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: Tokens.space2
+                    spacing: Tokens.space4
+                    C.AppText {
+                        Layout.alignment: Qt.AlignTop
+                        Layout.topMargin: 4
+                        text: root.beatRow.time || ""
+                        mono: true
+                        font.pixelSize: Tokens.fontBody
+                        color: Theme.warn
+                        LayoutMirroring.enabled: false
+                    }
+                    Body {
+                        text: root.beatRow.line || ""
+                        selectable: false
+                        weight: root.isScene(root.beatRow.speaker) ? Tokens.weightRegular : Tokens.weightBold
+                        font.pixelSize: Tokens.fontTitle - 2
+                        color: root.isScene(root.beatRow.speaker) ? Theme.on_surface_var : Theme.text_strong
+                    }
+                }
+                C.AppText {
+                    visible: root.idea.timelineExact === false
+                    text: I18n.tr("Timing estimated from line length")
+                    font.pixelSize: Tokens.fontCaption
+                    color: Theme.outline
+                }
+            }
+
+            Stage {
+                id: sScript
+                key: "sScript"
+                host: root; act: 2; order: 1
+                has: root.hasScript
+                kicker: "FULL SCRIPT"
+                heading: I18n.tr("Word for word, second by second")
+                aside: [
+                    C.PrimaryButton {
+                        variant: "ghost"
+                        iconName: "content_copy"
+                        text: root.mid ? I18n.tr("Copy whole script") : ""
+                        implicitHeight: 40
+                        onClicked: root.copyRequested(root.idea.scriptCopyText || "")
+                    },
+                    C.PrimaryButton {
+                        iconName: "play_circle"
+                        text: I18n.tr("Read on camera")
+                        implicitHeight: 40
+                        onClicked: root.prompterRequested(root.idea.id || 0)
+                    }
+                ]
+
+                Repeater {
+                    model: root.script
+                    Rectangle {
+                        id: sRow
+                        Layout.fillWidth: true
+                        readonly property bool isOn: index === root.beat
+                        readonly property bool scene: root.isScene(modelData.speaker)
+                        radius: Tokens.radiusLg
+                        color: isOn ? U.withAlpha(Theme.warn, Theme.isDark ? 0.08 : 0.10)
+                             : srHover.hovered ? U.withAlpha(Theme.on_surface, 0.03) : U.withAlpha(Theme.on_surface, 0)
+                        Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durMed } }
+                        implicitHeight: srRow.implicitHeight + Tokens.space4 * 2
+                        HoverHandler { id: srHover }
+                        RowLayout {
+                            id: srRow
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: Tokens.space4
+                            spacing: Tokens.space5
+                            // the timecode doubles as a seek button
+                            AbstractButton {
+                                Layout.alignment: Qt.AlignTop
+                                Layout.preferredWidth: 100
+                                implicitHeight: tcCol.implicitHeight
+                                onClicked: root.seek(modelData.startSec || 0)
+                                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                background: Item {}
+                                contentItem: Column {
+                                    id: tcCol
+                                    spacing: 2
+                                    C.AppText {
+                                        text: modelData.time || ""
+                                        mono: true
+                                        font.pixelSize: Tokens.fontBody - 1
+                                        color: sRow.isOn ? Theme.warn : Theme.outline
+                                        LayoutMirroring.enabled: false
+                                    }
+                                    C.AppText {
+                                        text: root.speakerLabel(modelData.speaker)
+                                        font.pixelSize: Tokens.fontCaption
+                                        color: sRow.scene ? Theme.tertiary : modelData.speaker === "On-screen" ? Theme.warn : Theme.on_surface_var
+                                    }
+                                }
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: Tokens.space2
+                                Body {
+                                    visible: text !== ""
+                                    text: modelData.line || ""
+                                    weight: sRow.scene ? Tokens.weightRegular : Tokens.weightBold
+                                    font.pixelSize: sRow.scene ? Tokens.fontLabel + 1 : Tokens.fontTitle - 2
+                                    color: sRow.scene ? Theme.on_surface_var
+                                         : modelData.speaker === "On-screen" ? Theme.warn : Theme.text_strong
+                                }
+                                // v5: what is on screen while it is said
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: (modelData.visual || "") !== ""
+                                    spacing: Tokens.space2
+                                    C.IconGlyph { name: "visibility"; size: 14; glyphColor: Theme.outline; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
+                                    Body {
+                                        text: modelData.visual || ""
+                                        font.pixelSize: Tokens.fontBody
+                                        color: Theme.on_surface_var
+                                    }
+                                }
+                            }
+                            C.IconButton {
+                                Layout.alignment: Qt.AlignTop
+                                iconName: "content_copy"
+                                tip: I18n.tr("Copy")
+                                accent: Theme.primary
+                                implicitWidth: 30
+                                implicitHeight: 30
+                                opacity: srHover.hovered ? 1 : 0.35
+                                Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
+                                onClicked: root.copyRequested(modelData.line || "")
+                            }
+                        }
+                    }
+                }
+            }
+
+            Stage {
+                id: sShots
+                key: "sShots"
+                host: root; act: 2; order: 2
+                has: root.hasShots   // v1.0.6: back in the Universal greenlight
+                kicker: "CAPTURE LIST"
+                heading: I18n.tr("What to film, record or gather")
+                aside: [ Pill { visible: root.mid; glyph: "movie"; text: I18n.tr("Essentials first, cover footage last") } ]
+
+                GridLayout {
+                    id: shotGrid
+                    Layout.fillWidth: true
+                    readonly property int n: (root.idea.shotList || []).length
+                    columns: Math.max(1, Math.min(n, Math.floor(width / 190)))
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Repeater {
+                        model: root.idea.shotList || []
+                        Rectangle {
+                            id: shot
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 1
+                            readonly property bool isB: modelData.broll === true
+                            radius: Tokens.radiusXl
+                            color: isB ? "transparent" : Theme.surface_high
+                            border.width: 1
+                            border.color: isB ? U.withAlpha(Theme.outline, 0.45) : Theme.border
+                            implicitHeight: shotCol.implicitHeight + Tokens.space5 * 2
+                            ColumnLayout {
+                                id: shotCol
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: Tokens.space5
+                                spacing: Tokens.space2
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Layout.bottomMargin: Tokens.space3
+                                    C.AppText {
+                                        text: String(modelData.shot || (index + 1))
+                                        weight: Tokens.weightRegular
+                                        font.pixelSize: 36
+                                        color: shot.isB ? Theme.outline : root.actColor(2)
+                                        LayoutMirroring.enabled: false
+                                        Layout.fillWidth: true
+                                    }
+                                    Pill { visible: shot.isB; text: I18n.tr("Cover"); mono: true }
+                                }
+                                C.AppText {
+                                    text: modelData.type || ""
+                                    weight: Tokens.weightBold
+                                    font.pixelSize: Tokens.fontBody
+                                    color: Theme.on_surface_var
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.Wrap
+                                }
+                                Body { text: modelData.desc || ""; font.pixelSize: Tokens.fontLabel }
+                                C.AppText {
+                                    visible: (modelData.beat || "") !== ""
+                                    text: I18n.tr("Covers {t}").replace("{t}", modelData.beat || "")
+                                    mono: true
+                                    font.pixelSize: Tokens.fontCaption
+                                    color: Theme.outline
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── v5 · LOOK & SOUND ──
+
+            Stage {
+                id: sStyle
+                key: "sStyle"
+                host: root; act: 2; order: 3
+                has: root.hasStyle   // v1.0.14: back as the audio-cue map
+                readonly property bool _lookToo: (root.styleG.look || "") !== "" || (root.styleG.palette || []).length > 0
+                                                 || (root.styleG.typography || "") !== ""
+                kicker: _lookToo ? "LOOK & SOUND" : "SOUND"
+                heading: _lookToo ? I18n.tr("How it looks, reads and sounds")
+                                  : I18n.tr("Where the sound changes the mood")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.wide ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+
+                    Box {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 1
+                        visible: (root.styleG.look || "") !== "" || (root.styleG.palette || []).length > 0
+                                 || (root.styleG.typography || "") !== "" || (root.styleG.captions || "") !== ""
+                        // palette: real swatches, click to copy the hex
+                        Flow {
+                            Layout.fillWidth: true
+                            visible: (root.styleG.palette || []).length > 0
+                            spacing: Tokens.space2
+                            Repeater {
+                                model: root.styleG.palette || []
+                                AbstractButton {
+                                    id: sw
+                                    implicitWidth: swRow.implicitWidth + Tokens.space4
+                                    implicitHeight: 36
+                                    onClicked: root.copyRequested(modelData)
+                                    HoverHandler { id: swHover; cursorShape: Qt.PointingHandCursor }
+                                    background: Rectangle {
+                                        radius: Tokens.radiusPill
+                                        color: swHover.hovered ? Theme.surface_highest : Theme.surface_low
+                                        border.width: 1
+                                        border.color: Theme.border
+                                    }
+                                    contentItem: Item {
+                                        implicitWidth: swRow.implicitWidth
+                                        Row {
+                                            id: swRow
+                                            anchors.centerIn: parent
+                                            spacing: 7
+                                            Rectangle {
+                                                width: 20; height: 20; radius: 10
+                                                color: modelData
+                                                border.width: 1
+                                                border.color: U.withAlpha(Theme.on_surface, 0.2)
+                                                anchors.verticalCenter: parent.verticalCenter
+                                            }
+                                            C.AppText {
+                                                text: String(modelData).toUpperCase()
+                                                mono: true
+                                                font.pixelSize: Tokens.fontCaption + 1
+                                                color: Theme.on_surface
+                                                anchors.verticalCenter: parent.verticalCenter
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Repeater {
+                            model: {
+                                var a = []
+                                if (root.styleG.look) a.push({ g: "visibility", n: I18n.tr("Look"), v: root.styleG.look })
+                                if (root.styleG.typography) a.push({ g: "text", n: I18n.tr("Type"), v: root.styleG.typography })
+                                if (root.styleG.captions) a.push({ g: "subject", n: I18n.tr("Captions"), v: root.styleG.captions })
+                                return a
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: Tokens.space3
+                                C.IconGlyph { name: modelData.g; size: 16; glyphColor: Theme.warn; Layout.alignment: Qt.AlignTop; Layout.topMargin: 2 }
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 1
+                                    Caption { text: modelData.n }
+                                    Body { text: modelData.v }
+                                }
+                            }
+                        }
+                    }
+
+                    Box {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 1
+                        visible: (root.styleG.music || "") !== "" || (root.styleG.sfx || []).length > 0
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: (root.styleG.music || "") !== ""
+                            spacing: Tokens.space3
+                            C.IconGlyph { name: "music_note"; size: 16; glyphColor: Theme.tertiary; Layout.alignment: Qt.AlignTop; Layout.topMargin: 2 }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 1
+                                Caption { text: I18n.tr("Music") }
+                                Body { text: root.styleG.music || "" }
+                            }
+                        }
+                        Caption {
+                            visible: (root.styleG.sfx || []).length > 0
+                            text: I18n.tr("Sound effects, where they hit")
+                            Layout.topMargin: Tokens.space2
+                        }
+                        Repeater {
+                            model: root.styleG.sfx || []
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: Tokens.space3
+                                C.AppText {
+                                    text: modelData.time || ""
+                                    mono: true
+                                    font.pixelSize: Tokens.fontCaption + 1
+                                    color: Theme.tertiary
+                                    Layout.preferredWidth: 56
+                                    Layout.alignment: Qt.AlignTop
+                                    LayoutMirroring.enabled: false
+                                }
+                                Body { text: modelData.cue || ""; font.pixelSize: Tokens.fontBody + 1 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Stage {
+                id: sRet
+                key: "sRet"
+                host: root; act: 2; order: 2
+                has: root.showPacing
+                kicker: "RETENTION PACING"
+                heading: I18n.tr("The rhythm that keeps them watching")
+                aside: [ Pill { text: root.ret.totalLabel || ""; mono: true; visible: (root.ret.totalLabel || "") !== "" } ]
+
+                Item {
+                    Layout.fillWidth: true
+                    implicitHeight: 12
+                    Row {
+                        id: paceBar
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        height: 12
+                        spacing: 3
+                        LayoutMirroring.enabled: false
+                        readonly property int phaseCount: (root.ret.phases || []).length
+                        Repeater {
+                            model: root.ret.phases || []
+                            Rectangle {
+                                width: (paceBar.width - (paceBar.phaseCount - 1) * 3) * Math.max(0, modelData.spanPct || 0) / 100
+                                height: paceBar.height
+                                radius: 6
+                                color: U.withAlpha(Theme.warn, 1.0 - index * (0.6 / Math.max(1, paceBar.phaseCount)))
+                            }
+                        }
+                    }
+                }
+                GridLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: Tokens.space2
+                    columns: root.wide ? Math.max(1, Math.min(5, (root.ret.phases || []).length)) : 1
+                    columnSpacing: Tokens.space4
+                    rowSpacing: Tokens.space4
+                    Repeater {
+                        model: root.ret.phases || []
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            Layout.preferredWidth: 1
+                            Layout.alignment: Qt.AlignTop
+                            spacing: 2
+                            C.AppText { text: modelData.endTime || ""; mono: true; font.pixelSize: Tokens.fontBody; color: Theme.warn; LayoutMirroring.enabled: false }
+                            C.AppText { text: modelData.label || ""; weight: Tokens.weightBold; font.pixelSize: Tokens.fontLabel + 1; color: Theme.text_strong; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Body { visible: text !== ""; text: modelData.desc || ""; font.pixelSize: Tokens.fontBody; color: Theme.on_surface_var }
+                        }
+                    }
+                }
+            }
+
+            // ── v5 · PREP & GEAR ──
+
+            Stage {
+                id: sPrep
+                key: "sPrep"
+                host: root; act: 2; order: 3
+                has: root.hasProduction   // v1.0.6: back in the Universal greenlight
+                kicker: "PREP"
+                heading: I18n.tr("What you need before you record")
+
+                // time estimates: prep → shoot → edit
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: Tokens.space3
+                    Repeater {
+                        model: {
+                            var a = []
+                            if (root.prod.prep) a.push({ g: "checklist", n: I18n.tr("Prep"), v: root.prod.prep })
+                            if (root.prod.shoot) a.push({ g: "movie", n: I18n.tr("Shoot"), v: root.prod.shoot })
+                            if (root.prod.edit) a.push({ g: "scissors", n: I18n.tr("Edit"), v: root.prod.edit })
+                            if (root.prod.location) a.push({ g: "compass", n: I18n.tr("Where"), v: root.prod.location })
+                            return a
+                        }
+                        Rectangle {
+                            radius: Tokens.radiusLg
+                            color: Theme.surface_high
+                            border.width: 1
+                            border.color: Theme.border
+                            implicitWidth: Math.min(360, tCol.implicitWidth + Tokens.space5 * 2)
+                            implicitHeight: tCol.implicitHeight + Tokens.space4 * 2
+                            Column {
+                                id: tCol
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.leftMargin: Tokens.space5
+                                width: Math.min(implicitWidth, 360 - Tokens.space5 * 2)
+                                spacing: 2
+                                Row {
+                                    spacing: 6
+                                    C.IconGlyph { name: modelData.g; size: 14; glyphColor: root.actColor(2); anchors.verticalCenter: parent.verticalCenter }
+                                    C.AppText { text: modelData.n; font.pixelSize: Tokens.fontCaption; weight: Tokens.weightDemiBold; color: Theme.outline; anchors.verticalCenter: parent.verticalCenter }
+                                }
+                                C.AppText {
+                                    width: Math.min(implicitWidth, 320)
+                                    text: modelData.v
+                                    weight: Tokens.weightBold
+                                    font.pixelSize: Tokens.fontSubtitle
+                                    color: Theme.text_strong
+                                    elide: Text.ElideRight
+                                }
+                            }
+                        }
+                    }
+                }
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.wide ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+
+                    Box {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 1
+                        visible: (root.prod.gear || []).length > 0 || (root.prod.props || []).length > 0
+                        Caption { visible: (root.prod.props || []).length > 0; text: I18n.tr("You'll need") }
+                        Flow {
+                            Layout.fillWidth: true
+                            visible: (root.prod.props || []).length > 0
+                            spacing: Tokens.space2
+                            Repeater { model: root.prod.props || []; Pill { text: modelData; glyph: "inventory_2"; tint: root.actColor(2) } }
+                        }
+                        Caption { visible: (root.prod.gear || []).length > 0; text: I18n.tr("Extra gear"); Layout.topMargin: Tokens.space2 }
+                        Flow {
+                            Layout.fillWidth: true
+                            visible: (root.prod.gear || []).length > 0
+                            spacing: Tokens.space2
+                            Repeater { model: root.prod.gear || []; Pill { text: modelData } }
+                        }
+                    }
+
+                    Box {
+                        id: prepBox
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 1
+                        visible: (root.prod.checklist || []).length > 0
+                        readonly property int doneCount: {
+                            var n = 0, d = root.prepDone
+                            for (var k in d) if (d[k]) n++
+                            return n
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            C.AppText { text: I18n.tr("Before you record"); weight: Tokens.weightBold; font.pixelSize: Tokens.fontSubtitle; color: Theme.text_strong; Layout.fillWidth: true; elide: Text.ElideRight }
+                            C.AppText {
+                                text: prepBox.doneCount + "/" + (root.prod.checklist || []).length
+                                mono: true
+                                font.pixelSize: Tokens.fontBody
+                                color: root.actColor(2)
+                                LayoutMirroring.enabled: false
+                            }
+                        }
+                        Repeater {
+                            model: root.prod.checklist || []
+                            AbstractButton {
+                                id: pchk
+                                readonly property bool done: root.prepDone[index] === true
+                                Layout.fillWidth: true
+                                implicitHeight: pchkRow.implicitHeight + Tokens.space3 * 2
+                                onClicked: {
+                                    var d = Object.assign({}, root.prepDone)
+                                    d[index] = !pchk.done
+                                    root.prepDone = d
+                                }
+                                HoverHandler { id: pchkHover; cursorShape: Qt.PointingHandCursor }
+                                background: Rectangle {
+                                    radius: Tokens.radiusLg
+                                    color: pchk.done ? U.withAlpha(root.actColor(2), 0.07)
+                                         : pchkHover.hovered ? U.withAlpha(Theme.on_surface, 0.04) : "transparent"
+                                }
+                                contentItem: RowLayout {
+                                    id: pchkRow
+                                    spacing: Tokens.space3
+                                    Rectangle {
+                                        Layout.leftMargin: Tokens.space3
+                                        Layout.alignment: Qt.AlignVCenter
+                                        width: 22; height: 22; radius: Tokens.radiusXs + 1
+                                        color: pchk.done ? root.actColor(2) : "transparent"
+                                        border.width: pchk.done ? 0 : 1.5
+                                        border.color: Theme.outline
+                                        C.IconGlyph { anchors.centerIn: parent; visible: pchk.done; name: "check"; size: 15; glyphColor: Theme.isDark ? "#0F0D12" : "#FFFFFF" }
+                                    }
+                                    Body {
+                                        Layout.rightMargin: Tokens.space3
+                                        text: modelData
+                                        selectable: false
+                                        font.pixelSize: Tokens.fontLabel
+                                        font.strikeout: pchk.done
+                                        color: pchk.done ? Theme.outline : Theme.on_surface
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── v7 · SHORT ON TIME (v1.0.3) ──
+            // The version that ships when there's an hour, not a day: what must
+            // stay (the video fails without it) and what can go.
+
+            Stage {
+                id: sLite
+                key: "sLite"
+                host: root; act: 2; order: 4
+                has: root.hasLite   // v1.0.6: back in the Universal greenlight
+                kicker: "SHORT ON TIME"
+                heading: I18n.tr("The fast version")
+                aside: [ Pill { text: root.liteV.time || ""; glyph: "schedule"; tint: Theme.warn; strong: true; visible: (root.liteV.time || "") !== "" } ]
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.mid ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Repeater {
+                        model: [
+                            { c: I18n.tr("KEEP"), g: "check_circle", t: Theme.secondary_container, v: root.liteV.keep || "" },
+                            { c: I18n.tr("CUT"), g: "scissors", t: Theme.error, v: root.liteV.cut || "" }
+                        ]
+                        Box {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 1
+                            Layout.alignment: Qt.AlignTop
+                            visible: modelData.v !== ""
+                            border.color: U.withAlpha(modelData.t, 0.35)
+                            color: U.withAlpha(modelData.t, Theme.isDark ? 0.07 : 0.05)
+                            RowLayout {
+                                spacing: 6
+                                C.IconGlyph { name: modelData.g; size: 15; glyphColor: modelData.t }
+                                Caption { text: modelData.c; color: modelData.t }
+                            }
+                            Body { text: modelData.v }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Component {
+        id: act3Comp
+        ColumnLayout {
+            width: act3Loader.width
+            spacing: Tokens.space6
+            // ── v6 · DISCOVERY ──
+            // How people find it: searches drawn as YouTube search bars you can
+            // copy (or open), what it should be suggested beside, why it gets
+            // clicked on Home / the feed.
+
+            Stage {
+                id: sDiscovery
+                key: "sDiscovery"
+                host: root; act: 3; order: 0
+                has: root.hasDiscovery   // v1.0.14: back in the v10 greenlight
+                kicker: "DISCOVERY"
+                heading: I18n.tr("How viewers will find it")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.wide && (root.disc.searchQueries || []).length > 0
+                             && ((root.disc.suggestedBeside || []).length > 0 || (root.disc.browseTrigger || "") !== "") ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+
+                    Box {
+                        visible: (root.disc.searchQueries || []).length > 0
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 3
+                        Layout.alignment: Qt.AlignTop
+                        Caption { text: I18n.tr("What they type into search") }
+                        Repeater {
+                            model: root.disc.searchQueries || []
+                            AbstractButton {
+                                id: sq
+                                Layout.fillWidth: true
+                                implicitHeight: 42
+                                hoverEnabled: true
+                                onClicked: Qt.openUrlExternally("https://www.youtube.com/results?search_query=" + encodeURIComponent(modelData))
+                                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                background: Rectangle {
+                                    radius: Tokens.radiusPill
+                                    color: sq.hovered ? U.hoverTint(Theme.input_bg, Theme.isDark) : Theme.input_bg
+                                    border.width: 1
+                                    border.color: sq.hovered ? U.withAlpha(Theme.tertiary, 0.45) : Theme.border
+                                    Behavior on border.color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+                                }
+                                contentItem: RowLayout {
+                                    spacing: Tokens.space3
+                                    C.IconGlyph { Layout.leftMargin: Tokens.space4; name: "search"; size: 16; glyphColor: sq.hovered ? Theme.tertiary : Theme.outline }
+                                    Body { text: modelData; selectable: false; maximumLineCount: 1; elide: Text.ElideRight; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
+                                    C.IconButton {
+                                        Layout.rightMargin: Tokens.space2
+                                        iconName: "content_copy"
+                                        tip: I18n.tr("Copy")
+                                        accent: Theme.primary
+                                        implicitWidth: 28; implicitHeight: 28
+                                        opacity: sq.hovered ? 1 : 0.4
+                                        onClicked: root.copyRequested(modelData)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Box {
+                        visible: (root.disc.suggestedBeside || []).length > 0 || (root.disc.browseTrigger || "") !== ""
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 2
+                        Layout.alignment: Qt.AlignTop
+                        Caption { visible: (root.disc.suggestedBeside || []).length > 0; text: I18n.tr("Suggested next to") }
+                        Flow {
+                            Layout.fillWidth: true
+                            visible: (root.disc.suggestedBeside || []).length > 0
+                            spacing: Tokens.space2
+                            Repeater {
+                                model: root.disc.suggestedBeside || []
+                                Pill { text: modelData; glyph: "smart_display"; tint: Theme.tertiary; maxTextWidth: 300 }
+                            }
+                        }
+                        Caption {
+                            visible: (root.disc.browseTrigger || "") !== ""
+                            Layout.topMargin: (root.disc.suggestedBeside || []).length > 0 ? Tokens.space2 : 0
+                            text: I18n.tr("Why they stop scrolling")
+                        }
+                        Body { visible: text !== ""; text: root.disc.browseTrigger || ""; font.pixelSize: Tokens.fontLabel }
+                    }
+                }
+
+                // v10: words to SAY early, YouTube indexes the speech
+                Box {
+                    Layout.fillWidth: true
+                    visible: (root.disc.spokenKeywords || []).length > 0
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Tokens.space2
+                        C.IconGlyph { name: "volume_up"; size: 15; glyphColor: Theme.tertiary; Layout.alignment: Qt.AlignVCenter }
+                        Caption {
+                            text: root.idea.isLong === true ? I18n.tr("Say these out loud in the first minute")
+                                                            : I18n.tr("Say these out loud in the first seconds")
+                            Layout.fillWidth: true
+                        }
+                    }
+                    Flow {
+                        Layout.fillWidth: true
+                        spacing: Tokens.space2
+                        Repeater {
+                            model: root.disc.spokenKeywords || []
+                            Pill { text: modelData; glyph: "messages"; tint: Theme.tertiary; maxTextWidth: 320 }
+                        }
+                    }
+                }
+            }
+
+            Stage {
+                id: sCaption
+                key: "sCaption"
+                host: root; act: 3; order: 0
+                has: root.hasCaption
+                kicker: "CAPTION & CTA"
+                heading: I18n.tr("Caption, hashtags and the ask")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    id: capGrid
+                    readonly property bool hasCap: root.idea.hasCaptionPack === true || (root.idea.pinnedComment || "") !== ""
+                    columns: root.mid && hasCap && root.idea.hasCta === true ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+
+                    Box {
+                        visible: capGrid.hasCap
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 1
+                        Layout.alignment: Qt.AlignTop
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: (root.caption.description || "") !== ""
+                            Caption { text: I18n.tr("Shorts caption") }
+                            C.IconButton {
+                                iconName: "content_copy"
+                                tip: I18n.tr("Copy")
+                                accent: Theme.primary
+                                onClicked: root.copyRequested((root.caption.description || "") + "\n" + (root.caption.hashtags || []).join(" "))
+                            }
+                        }
+                        Body {
+                            visible: text !== ""
+                            text: root.caption.description || ""
+                            weight: Tokens.weightMedium
+                            font.pixelSize: Tokens.fontSubtitle + 1
+                            color: Theme.text_strong
+                        }
+                        Flow {
+                            Layout.fillWidth: true
+                            visible: (root.caption.hashtags || []).length > 0
+                            spacing: Tokens.space2
+                            Repeater {
+                                model: root.caption.hashtags || []
+                                Pill { text: modelData; tint: Theme.secondary_container }
+                            }
+                        }
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.topMargin: Tokens.space2
+                            visible: (root.idea.pinnedComment || "") !== ""
+                            radius: Tokens.radiusLg
+                            color: Theme.surface_low
+                            implicitHeight: pinRow.implicitHeight + Tokens.space4 * 2
+                            RowLayout {
+                                id: pinRow
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: Tokens.space4
+                                spacing: Tokens.space3
+                                C.IconGlyph { name: "bookmark"; size: 16; glyphColor: Theme.outline; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 2
+                                    Caption { text: I18n.tr("Pinned comment") }
+                                    Body { text: root.idea.pinnedComment || ""; font.pixelSize: Tokens.fontLabel }
+                                }
+                                C.IconButton {
+                                    iconName: "content_copy"
+                                    tip: I18n.tr("Copy")
+                                    accent: Theme.primary
+                                    Layout.alignment: Qt.AlignTop
+                                    onClicked: root.copyRequested(root.idea.pinnedComment || "")
+                                }
+                            }
+                        }
+                    }
+
+                    ColumnLayout {
+                        visible: root.idea.hasCta === true
+                        Layout.fillWidth: true
+                        Layout.preferredWidth: 1
+                        Layout.alignment: Qt.AlignTop
+                        spacing: Tokens.space3
+                        Repeater {
+                            model: root.idea.ctaOptions || []
+                            Box {
+                                Layout.fillWidth: true
+                                color: Theme.surface_low
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Tokens.space3
+                                    C.IconGlyph { name: "message"; size: 18; glyphColor: Theme.secondary_container }
+                                    C.AppText { text: modelData.label || ""; weight: Tokens.weightBold; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
+                                    C.AppText {
+                                        text: modelData.timing || ""
+                                        font.pixelSize: Tokens.fontCaption
+                                        color: Theme.outline
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
+                                    C.IconButton {
+                                        iconName: "content_copy"
+                                        tip: I18n.tr("Copy")
+                                        accent: Theme.primary
+                                        onClicked: root.copyRequested(modelData.text || "")
+                                    }
+                                }
+                                Body { text: modelData.text || ""; weight: Tokens.weightMedium; font.pixelSize: Tokens.fontSubtitle; color: Theme.text_strong }
+                            }
+                        }
+                    }
+                }
+                // v5: the Community tab / Stories teaser
+                Box {
+                    Layout.fillWidth: true
+                    visible: (root.idea.communityPost || "") !== ""
+                    color: Theme.surface_low
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Tokens.space3
+                        C.IconGlyph { name: "messages"; size: 18; glyphColor: Theme.secondary_container }
+                        Caption { text: I18n.tr("Community post teaser") }
+                        C.IconButton {
+                            iconName: "content_copy"
+                            tip: I18n.tr("Copy")
+                            accent: Theme.primary
+                            onClicked: root.copyRequested(root.idea.communityPost || "")
+                        }
+                    }
+                    Body { text: root.idea.communityPost || ""; font.pixelSize: Tokens.fontLabel + 1; color: Theme.text_strong }
+                }
+            }
+
+            // ── v6 · CARDS & END SCREEN ──
+            // Where the info cards pop on the video's own time axis, what the end
+            // screen pushes, and the exact line spoken over it.
+
+            Stage {
+                id: sEndScreen
+                key: "sEndScreen"
+                host: root; act: 3; order: 2
+                has: root.hasEndScreen   // v1.0.14: the end bridge (binge tunnel)
+                kicker: (root.endS.cards || []).length > 0 ? "CARDS & END SCREEN" : "END BRIDGE"
+                heading: I18n.tr("Where this viewer goes next")
+
+                // the axis: only drawn when at least one card has a real time
+                Box {
+                    id: esAxisBox
+                    readonly property var timed: {
+                        var out = [], src = root.endS.cards || []
+                        for (var i = 0; i < src.length; i++)
+                            if (src[i].atSec !== undefined && src[i].atSec >= 0) out.push(src[i])
+                        return out
+                    }
+                    visible: timed.length > 0
+                    Layout.fillWidth: true
+                    pad: Tokens.space4
+                    Caption { text: I18n.tr("Info cards on the timeline") }
+                    Item {
+                        Layout.fillWidth: true
+                        implicitHeight: 44
+                        Rectangle {
+                            id: esTrack
+                            anchors.left: parent.left; anchors.right: parent.right
+                            y: 28
+                            height: 4; radius: 2
+                            color: Theme.surface_highest
+                            LayoutMirroring.enabled: false
+                            Rectangle {
+                                // the last 20 s: end-screen zone
+                                height: parent.height; radius: 2
+                                width: Math.min(parent.width, parent.width * Math.min(20, root.total) / root.total)
+                                x: parent.width - width
+                                color: U.withAlpha(Theme.secondary_container, 0.6)
+                            }
+                        }
+                        Repeater {
+                            model: esAxisBox.timed
+                            Item {
+                                readonly property real fx: Math.max(0, Math.min(1, (modelData.atSec || 0) / root.total))
+                                x: Math.max(0, Math.min(esTrack.width - width, fx * esTrack.width - width / 2))
+                                y: 0
+                                width: 52; height: 40
+                                Rectangle {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    width: esTime.implicitWidth + 10; height: 20; radius: 6
+                                    color: Theme.secondary_container
+                                    C.AppText { id: esTime; anchors.centerIn: parent; text: modelData.time || ""; mono: true; font.pixelSize: 11; weight: Tokens.weightBold; color: Theme.isDark ? "#0F0D12" : "#FFFFFF" }
+                                }
+                                Rectangle { anchors.horizontalCenter: parent.horizontalCenter; y: 22; width: 2; height: 12; color: Theme.secondary_container }
+                            }
+                        }
+                    }
+                }
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.mid && (root.endS.cards || []).length > 0 && ((root.endS.endTarget || "") !== "" || (root.endS.line || "") !== "") ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Box {
+                        visible: (root.endS.cards || []).length > 0
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 1
+                        Layout.alignment: Qt.AlignTop
+                        Caption { text: I18n.tr("Info cards") }
+                        Repeater {
+                            model: root.endS.cards || []
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: Tokens.space3
+                                Pill { Layout.alignment: Qt.AlignTop; visible: (modelData.time || "") !== ""; text: modelData.time || ""; mono: true; glyph: "schedule"; tint: Theme.secondary_container }
+                                Body { text: modelData.target || ""; font.pixelSize: Tokens.fontLabel }
+                            }
+                        }
+                    }
+                    Box {
+                        visible: (root.endS.endTarget || "") !== "" || (root.endS.line || "") !== ""
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 1
+                        Layout.alignment: Qt.AlignTop
+                        color: U.withAlpha(Theme.secondary_container, Theme.isDark ? 0.07 : 0.05)
+                        border.color: U.withAlpha(Theme.secondary_container, 0.28)
+                        Caption { visible: (root.endS.endTarget || "") !== ""; text: I18n.tr("End screen points to"); color: Theme.secondary_container }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: (root.endS.endTarget || "") !== ""
+                            spacing: Tokens.space3
+                            C.IconGlyph { name: "play_circle"; size: 20; glyphColor: Theme.secondary_container; Layout.alignment: Qt.AlignTop; Layout.topMargin: 2 }
+                            Body { text: root.endS.endTarget || ""; weight: Tokens.weightBold; font.pixelSize: Tokens.fontLabel + 1; color: Theme.text_strong }
+                        }
+                        Caption { visible: (root.endS.line || "") !== ""; Layout.topMargin: Tokens.space2; text: I18n.tr("Say over the last seconds") }
+                        Option {
+                            visible: (root.endS.line || "") !== ""
+                            body: root.endS.line || ""
+                            tint: Theme.secondary_container
+                            onCopyClicked: (t) => root.copyRequested(t)
+                        }
+                    }
+                }
+            }
+
+            Stage {
+                id: sSeo
+                key: "sSeo"
+                host: root; act: 3; order: 1
+                has: root.hasSeo
+                kicker: "SEO"
+                heading: I18n.tr("SEO & discoverability")
+
+                Box {
+                    Layout.fillWidth: true
+                    visible: (root.seo.description || "") !== ""
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Caption { text: I18n.tr("YouTube description") }
+                        C.IconButton { iconName: "content_copy"; tip: I18n.tr("Copy"); accent: Theme.primary; onClicked: root.copyRequested(root.seo.description || "") }
+                    }
+                    Body { text: root.seo.description || ""; font.pixelSize: Tokens.fontLabel }
+                }
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.mid ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Box {
+                        visible: (root.seo.keywords || []).length > 0
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 1
+                        Caption { text: I18n.tr("Target keywords") }
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: Tokens.space2
+                            Repeater { model: root.seo.keywords || []; Pill { text: modelData; tint: Theme.secondary_container } }
+                        }
+                    }
+                    Box {
+                        visible: (root.seo.tags || []).length > 0
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 1
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Caption { text: I18n.tr("Tags") }
+                            C.IconButton { iconName: "content_copy"; tip: I18n.tr("Copy"); accent: Theme.primary; onClicked: root.copyRequested((root.seo.tags || []).join(", ")) }
+                        }
+                        Body { text: (root.seo.tags || []).join(", "); verbatim: true; font.pixelSize: Tokens.fontBody; color: Theme.on_surface_var }
+                    }
+                }
+                Box {
+                    Layout.fillWidth: true
+                    visible: (root.seo.timestamps || []).length > 0
+                    Caption { text: I18n.tr("Chapters") }
+                    Repeater {
+                        model: root.seo.timestamps || []
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Tokens.space4
+                            C.AppText { text: modelData.time || ""; mono: true; font.pixelSize: Tokens.fontBody; color: Theme.secondary_container; Layout.preferredWidth: 64; LayoutMirroring.enabled: false }
+                            Body { text: modelData.label || ""; font.pixelSize: Tokens.fontLabel }
+                        }
+                    }
+                }
+            }
+
+            Stage {
+                id: sRisks
+                key: "sRisks"
+                host: root; act: 3; order: 2
+                has: root.hasRisks
+                kicker: "RISKS"
+                heading: I18n.tr("What could sink this video")
+
+                Repeater {
+                    model: root.idea.risks || []
+                    Rectangle {
+                        Layout.fillWidth: true
+                        radius: Tokens.radiusXl
+                        color: Theme.surface_low
+                        border.width: 1
+                        border.color: Theme.border
+                        implicitHeight: rkGrid.implicitHeight + Tokens.space4 * 2
+                        GridLayout {
+                            id: rkGrid
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: Tokens.space4
+                            columns: root.mid ? 3 : 1
+                            columnSpacing: Tokens.space4
+                            rowSpacing: Tokens.space2
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 1
+                                Layout.leftMargin: Tokens.space2
+                                spacing: Tokens.space3
+                                C.IconGlyph { name: "warning"; size: 18; glyphColor: Theme.error; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
+                                Body { text: modelData.risk || ""; font.pixelSize: Tokens.fontLabel + 1; color: Theme.text_strong }
+                            }
+                            C.IconGlyph {
+                                visible: root.mid && (modelData.fix || "") !== ""
+                                name: I18n.rtl ? "arrow_back" : "arrow_forward"
+                                size: 18
+                                glyphColor: Theme.outline
+                                Layout.alignment: Qt.AlignVCenter
+                            }
+                            Rectangle {
+                                visible: (modelData.fix || "") !== ""
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 1
+                                radius: Tokens.radiusLg
+                                color: U.withAlpha(Theme.secondary_container, Theme.isDark ? 0.08 : 0.07)
+                                implicitHeight: fixTxt.implicitHeight + Tokens.space3 * 2
+                                Body {
+                                    id: fixTxt
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.margins: Tokens.space4
+                                    text: modelData.fix || ""
+                                    font.pixelSize: Tokens.fontLabel
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Stage {
+                id: sSeries
+                key: "sSeries"
+                host: root; act: 3; order: 3
+                has: root.hasSeries
+                kicker: "SERIES"
+                heading: I18n.tr("What comes next — keep this viewer")
+
+                GridLayout {
+                    id: serGrid
+                    Layout.fillWidth: true
+                    readonly property int n: (root.idea.seriesNext || []).length
+                    columns: root.mid ? Math.max(1, Math.min(3, n)) : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Repeater {
+                        model: root.idea.seriesNext || []
+                        Rectangle {
+                            id: ep
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 1
+                            radius: Tokens.radiusXl + 2
+                            color: epHover.hovered ? U.hoverTint(Theme.surface_high, Theme.isDark) : Theme.surface_high
+                            border.width: 1
+                            border.color: epHover.hovered ? U.withAlpha(Theme.secondary_container, 0.35) : Theme.border
+                            Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durMed } }
+                            implicitHeight: Math.max(170, epCol.implicitHeight + Tokens.space5 * 2 + 34)
+                            HoverHandler { id: epHover }
+                            transform: Translate {
+                                id: epLift
+                                y: epHover.hovered ? -3 : 0
+                                Behavior on y { NumberAnimation { duration: Tokens.durMed; easing.type: Easing.OutCubic } }
+                            }
+                            // keep the hit box on the resting footprint too (see LiftMask.qml)
+                            containmentMask: C.LiftMask { target: ep; dy: epLift.y }
+                            C.AppText {
+                                anchors.left: parent.left
+                                anchors.top: parent.top
+                                anchors.margins: Tokens.space5
+                                text: "EP " + ((index + 2) < 10 ? "0" : "") + (index + 2)
+                                weight: Tokens.weightBold
+                                font.pixelSize: Tokens.fontBody
+                                font.letterSpacing: 1.2
+                                color: Theme.secondary_container
+                            }
+                            ColumnLayout {
+                                id: epCol
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.bottom: parent.bottom
+                                anchors.margins: Tokens.space5
+                                spacing: Tokens.space1
+                                Body { text: modelData.title || ""; weight: Tokens.weightBold; font.pixelSize: Tokens.fontSubtitle + 2; color: Theme.text_strong }
+                                Body { visible: text !== ""; text: modelData.why || ""; selectable: false; font.pixelSize: Tokens.fontBody; color: Theme.outline }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── v7 · FORMAT FUNNEL (v1.0.3) ──
+            // YouTube's own funnel: a long video feeds Shorts, a Short points at
+            // a long video. Long-form lists the clips to cut; a Short names the
+            // video to set as its Related video.
+
+            Stage {
+                id: sFunnel
+                key: "sFunnel"
+                host: root; act: 3; order: 4
+                has: root.hasFunnel   // v1.0.6: back in the Universal greenlight
+                kicker: "FORMAT FUNNEL"
+                heading: root.idea.isLong ? I18n.tr("Shorts to cut from this video")
+                                          : I18n.tr("Where this Short sends viewers")
+
+                Repeater {
+                    model: root.funnelD.clips || []
+                    Rectangle {
+                        id: fnRow
+                        Layout.fillWidth: true
+                        radius: Tokens.radiusXl
+                        color: Theme.surface_high
+                        border.width: 1
+                        border.color: fnHover.hovered ? U.withAlpha(root.growColor, 0.45) : Theme.border
+                        Behavior on border.color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+                        implicitHeight: fnLay.implicitHeight + Tokens.space4 * 2
+                        HoverHandler { id: fnHover }
+                        RowLayout {
+                            id: fnLay
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: Tokens.space4
+                            spacing: Tokens.space3
+                            Pill { Layout.alignment: Qt.AlignTop; text: modelData.from || ""; glyph: "scissors"; mono: true; tint: root.growColor; strong: true; visible: (modelData.from || "") !== "" }
+                            Body { text: modelData.hook || ""; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
+                            C.IconButton {
+                                Layout.alignment: Qt.AlignTop
+                                iconName: "content_copy"
+                                tip: I18n.tr("Copy hook")
+                                accent: Theme.primary
+                                implicitWidth: 28; implicitHeight: 28
+                                opacity: fnHover.hovered ? 1 : 0.45
+                                Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
+                                onClicked: root.copyRequested(modelData.hook || "")
+                            }
+                        }
+                    }
+                }
+                Box {
+                    Layout.fillWidth: true
+                    visible: (root.funnelD.linkTo || "") !== ""
+                    border.color: U.withAlpha(root.growColor, 0.35)
+                    RowLayout {
+                        spacing: 6
+                        C.IconGlyph { name: "link"; size: 15; glyphColor: root.growColor }
+                        Caption { text: root.idea.isLong ? I18n.tr("SEND VIEWERS TO") : I18n.tr("SET AS RELATED VIDEO"); color: root.growColor }
+                    }
+                    Body { text: root.funnelD.linkTo || ""; font.pixelSize: Tokens.fontLabel + 1; color: Theme.text_strong }
+                    Body { visible: text !== ""; text: root.funnelD.why || ""; font.pixelSize: Tokens.fontBody; color: Theme.on_surface_var }
+                }
+            }
+        }
+    }
+
+    // v1.0.15: stages the v10 greenlight no longer shows (old records
+    // still carry their data). Kept off-screen in a Component that is
+    // never instantiated, so they cost the first paint nothing.
+    Component {
+        id: retiredComp
+        ColumnLayout {
+            spacing: Tokens.space6
+            // ── v6 · WHY NOW ──
+            // A three-stop shelf-life gauge (Evergreen · Seasonal · Trending) with
+            // the idea's stop lit, the window as a pill and the reason beside it.
+
+            Stage {
+                id: sWhyNow
+                key: "sWhyNow"
+                host: root; act: 0; order: 0
+                has: false   // v1.0.5: not part of the Essentials greenlight
+                kicker: "WHY NOW"
+                heading: I18n.tr("How long this idea stays worth making")
+                aside: [ Pill {
+                    visible: (root.whyNow.window || "") !== ""
+                    glyph: "schedule"
+                    text: root.whyNow.window || ""
+                    tint: root.shelfColor
+                    strong: true
+                    maxTextWidth: 260
+                } ]
+
+                Box {
+                    Layout.fillWidth: true
+                    RowLayout {
+                        Layout.fillWidth: true
+                        visible: (root.whyNow.shelfLife || "") !== ""
+                        spacing: Tokens.space2
+                        Repeater {
+                            model: [
+                                { key: "Evergreen", label: I18n.tr("Evergreen"), glyph: "autorenew",     tint: Theme.secondary_container, sub: I18n.tr("works any month") },
+                                { key: "Seasonal",  label: I18n.tr("Seasonal"),  glyph: "schedule",       tint: Theme.warn,               sub: I18n.tr("has a season") },
+                                { key: "Trending",  label: I18n.tr("Trending"),  glyph: "bolt",           tint: Theme.error,              sub: I18n.tr("make it this week") }
+                            ]
+                            Rectangle {
+                                id: shelf
+                                readonly property bool isOn: root.whyNow.shelfLife === modelData.key
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 1
+                                implicitHeight: 64
+                                radius: Tokens.radiusLg
+                                color: isOn ? U.withAlpha(modelData.tint, Theme.isDark ? 0.16 : 0.11) : "transparent"
+                                border.width: 1
+                                border.color: isOn ? U.withAlpha(modelData.tint, 0.5) : Theme.border
+                                opacity: isOn ? 1 : 0.55
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: Tokens.space4
+                                    anchors.rightMargin: Tokens.space4
+                                    spacing: Tokens.space3
+                                    Rectangle {
+                                        width: 32; height: 32; radius: 10
+                                        color: shelf.isOn ? modelData.tint : Theme.surface_highest
+                                        C.IconGlyph {
+                                            anchors.centerIn: parent
+                                            name: modelData.glyph
+                                            size: 17
+                                            glyphColor: shelf.isOn ? (Theme.isDark ? "#0F0D12" : "#FFFFFF") : Theme.outline
+                                        }
+                                    }
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 0
+                                        C.AppText { text: modelData.label; weight: Tokens.weightBold; font.pixelSize: Tokens.fontLabel; color: shelf.isOn ? Theme.text_strong : Theme.on_surface_var; elide: Text.ElideRight; Layout.fillWidth: true }
+                                        C.AppText { visible: root.mid; text: modelData.sub; font.pixelSize: Tokens.fontCaption; color: Theme.outline; elide: Text.ElideRight; Layout.fillWidth: true }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Body {
+                        visible: text !== ""
+                        Layout.topMargin: (root.whyNow.shelfLife || "") !== "" ? Tokens.space2 : 0
+                        text: root.whyNow.why || ""
+                        font.pixelSize: Tokens.fontLabel + 1
+                        color: Theme.text_strong
+                    }
+                }
+            }
+
+            Stage {
+                id: sAudience
+                key: "sAudience"
+                host: root; act: 0; order: 0
+                has: false   // v1.0.5: not part of the Essentials greenlight
+                kicker: "AUDIENCE"
+                heading: I18n.tr("Who this is for")
+                aside: [
+                    Pill {
+                        visible: (root.audience.watchContext || "") !== "" && root.mid
+                        glyph: "smart_display"
+                        text: root.audience.watchContext || ""
+                        maxTextWidth: 300
+                    }
+                ]
+
+                Body {
+                    visible: text !== ""
+                    text: root.audience.persona || ""
+                    weight: Tokens.weightMedium
+                    font.pixelSize: Tokens.fontTitle - 1
+                    color: Theme.text_strong
+                    Layout.bottomMargin: Tokens.space2
+                }
+                GridLayout {
+                    id: audGrid
+                    Layout.fillWidth: true
+                    readonly property var cols: {
+                        var c = []
+                        if ((root.audience.painPoints || []).length) c.push({ n: I18n.tr("Pain points"), items: root.audience.painPoints, tint: Theme.error })
+                        if ((root.audience.desires || []).length) c.push({ n: I18n.tr("Desires"), items: root.audience.desires, tint: Theme.secondary_container })
+                        if ((root.audience.objections || []).length) c.push({ n: I18n.tr("Objections"), items: root.audience.objections, tint: Theme.warn })
+                        return c
+                    }
+                    columns: root.mid ? Math.max(1, cols.length) : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Repeater {
+                        model: audGrid.cols
+                        Box {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 1
+                            color: Theme.surface_low
+                            Rectangle {
+                                Layout.preferredWidth: 28
+                                Layout.preferredHeight: 3
+                                radius: 1.5
+                                color: modelData.tint
+                            }
+                            C.AppText { text: modelData.n; weight: Tokens.weightBold; font.pixelSize: Tokens.fontLabel; color: modelData.tint }
+                            Repeater {
+                                model: modelData.items
+                                Body { text: modelData; font.pixelSize: Tokens.fontLabel }
+                            }
+                        }
+                    }
+                }
+                C.AppText {
+                    visible: !root.mid && (root.audience.watchContext || "") !== ""
+                    text: root.audience.watchContext || ""
+                    font.pixelSize: Tokens.fontBody
+                    color: Theme.on_surface_var
+                    wrapMode: Text.Wrap
+                    Layout.fillWidth: true
+                }
+            }
+
+            Stage {
+                id: sComp
+                key: "sComp"
+                host: root; act: 0; order: 0
+                has: false   // v1.0.5: not part of the Essentials greenlight
+                kicker: "COMPETITION"
+                heading: I18n.tr("What others made, and where you stand")
+
+                // the conclusion first — it is the one thing here you act on
+                Rectangle {
+                    Layout.fillWidth: true
+                    visible: (root.comp.gap || "") !== ""
+                    radius: Tokens.radiusXl
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.0; color: U.withAlpha(Theme.tertiary, Theme.isDark ? 0.20 : 0.12) }
+                        GradientStop { position: 1.0; color: U.withAlpha(Theme.tertiary, 0.03) }
+                    }
+                    border.width: 1
+                    border.color: U.withAlpha(Theme.tertiary, 0.30)
+                    implicitHeight: gapCol.implicitHeight + Tokens.space6 * 2
+                    ColumnLayout {
+                        id: gapCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: Tokens.space6
+                        spacing: Tokens.space2
+                        Caption { text: I18n.tr("Your opening"); color: Theme.tertiary }
+                        Body {
+                            text: root.comp.gap || ""
+                            weight: Tokens.weightBold
+                            font.pixelSize: Tokens.fontTitle - 1
+                            color: Theme.text_strong
+                        }
+                    }
+                }
+
+                // v3.15 competitor reel: a real 16:9 thumbnail on the reading-start
+                // side, the title as a link, then their angle and what they miss as
+                // two labelled columns. The whole card opens the video (or, for a
+                // row with no known video, a YouTube search for its title). It is
+                // mirrored with the UI now — the old grid pinned the thumbnail and
+                // title to the top-left corner even in Persian.
+                Repeater {
+                    model: root.comp.rows || []
+                    AbstractButton {
+                        id: cRow
+                        Layout.fillWidth: true
+                        readonly property bool linked: (modelData.openUrl || "") !== ""
+                        readonly property bool hasThumb: cThumb.status === Image.Ready
+                        readonly property bool hot: cHover.hovered && linked
+                        enabled: linked
+                        hoverEnabled: true
+                        implicitHeight: cLay.implicitHeight + Tokens.space4 * 2
+                        onClicked: Qt.openUrlExternally(modelData.openUrl)
+                        HoverHandler { id: cHover; cursorShape: cRow.linked ? Qt.PointingHandCursor : Qt.ArrowCursor }
+                        C.AppTooltip {
+                            visible: cRow.hot
+                            text: modelData.isSearch ? I18n.tr("Search this on YouTube") : I18n.tr("Open on YouTube")
+                        }
+                        background: Rectangle {
+                            radius: Tokens.radiusXl
+                            color: cRow.hot ? U.hoverTint(Theme.surface_high, Theme.isDark) : Theme.surface_high
+                            border.width: 1
+                            border.color: cRow.hot ? U.withAlpha(Theme.tertiary, 0.42) : Theme.border
+                            Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+                            Behavior on border.color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+                            // a thin act-coloured edge on the reading-start side
+                            Rectangle {
+                                width: 3
+                                radius: 2
+                                anchors.top: parent.top; anchors.bottom: parent.bottom
+                                anchors.topMargin: Tokens.space4; anchors.bottomMargin: Tokens.space4
+                                x: I18n.rtl ? parent.width - width : 0
+                                color: Theme.tertiary
+                                opacity: cRow.hot ? 0.9 : 0
+                                Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
+                            }
+                        }
+                        contentItem: Item {
+                            implicitHeight: cLay.implicitHeight
+                            RowLayout {
+                                id: cLay
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.leftMargin: Tokens.space4
+                                anchors.rightMargin: Tokens.space4
+                                anchors.topMargin: Tokens.space4
+                                LayoutMirroring.enabled: I18n.rtl
+                                LayoutMirroring.childrenInherit: true
+                                spacing: Tokens.space4
+
+                                // ── thumbnail ──
+                                Rectangle {
+                                    id: cThumbBox
+                                    Layout.alignment: Qt.AlignTop
+                                    Layout.preferredWidth: root.mid ? 176 : 128
+                                    Layout.preferredHeight: root.mid ? 99 : 72
+                                    radius: Tokens.radiusMd
+                                    color: Theme.surface_highest
+                                    clip: true
+                                    Image {
+                                        id: cThumb
+                                        anchors.fill: parent
+                                        visible: status === Image.Ready
+                                        source: (modelData.thumbId || "") !== "" ? "image://thumbs/" + modelData.thumbId : ""
+                                        sourceSize: Qt.size(352, 198)
+                                        fillMode: Image.PreserveAspectCrop
+                                        asynchronous: true
+                                        scale: cRow.hot ? 1.05 : 1
+                                        Behavior on scale { NumberAnimation { duration: Tokens.durMed; easing.type: Easing.OutCubic } }
+                                    }
+                                    // no video id: a quiet placeholder, never an empty box
+                                    Column {
+                                        anchors.centerIn: parent
+                                        visible: !cRow.hasThumb
+                                        spacing: 4
+                                        C.IconGlyph {
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            name: modelData.isSearch ? "search" : "smart_display"
+                                            size: 22
+                                            glyphColor: Theme.outline
+                                        }
+                                        C.AppText {
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            text: modelData.isSearch ? I18n.tr("Find it") : (modelData.ref || "—")
+                                            font.pixelSize: Tokens.fontCaption
+                                            color: Theme.on_surface_var
+                                        }
+                                    }
+                                    // dark scrim + play disc on hover
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        visible: cRow.hasThumb
+                                        color: "#000000"
+                                        opacity: cRow.hot ? 0.28 : 0
+                                        Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
+                                    }
+                                    Rectangle {
+                                        visible: cRow.hasThumb
+                                        anchors.centerIn: parent
+                                        width: 36; height: 36; radius: 18
+                                        color: U.withAlpha("#000000", 0.62)
+                                        opacity: cRow.hot ? 1 : 0.0
+                                        scale: cRow.hot ? 1 : 0.8
+                                        Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
+                                        Behavior on scale { NumberAnimation { duration: Tokens.durMed; easing.type: Easing.OutBack } }
+                                        C.IconGlyph { anchors.centerIn: parent; name: "play_arrow"; size: 20; glyphColor: "#FFFFFF" }
+                                    }
+                                    // ref tag (V1, C2 …) top-start
+                                    Rectangle {
+                                        visible: (modelData.ref || "") !== "" && cRow.hasThumb
+                                        x: I18n.rtl ? parent.width - width - 6 : 6
+                                        y: 6
+                                        width: cRefTxt.implicitWidth + 10; height: 18; radius: 5
+                                        color: U.withAlpha("#000000", 0.66)
+                                        C.AppText { id: cRefTxt; anchors.centerIn: parent; text: modelData.ref || ""; mono: true; font.pixelSize: 11; weight: Tokens.weightBold; color: "#FFFFFF" }
+                                    }
+                                    // views, bottom-end
+                                    Rectangle {
+                                        visible: (modelData.views || "") !== "" && cRow.hasThumb
+                                        x: I18n.rtl ? 6 : parent.width - width - 6
+                                        y: parent.height - height - 6
+                                        width: cViewsTxt.implicitWidth + 10; height: 18; radius: 5
+                                        color: U.withAlpha("#000000", 0.66)
+                                        C.AppText { id: cViewsTxt; anchors.centerIn: parent; text: modelData.views || ""; mono: true; font.pixelSize: 11; weight: Tokens.weightBold; color: "#FFFFFF" }
+                                    }
+                                }
+
+                                // ── words ──
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    Layout.alignment: Qt.AlignTop
+                                    spacing: Tokens.space2
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: Tokens.space2
+                                        Body {
+                                            text: modelData.name || ""
+                                            selectable: false
+                                            weight: Tokens.weightBold
+                                            font.pixelSize: Tokens.fontLabel + 1
+                                            font.underline: cRow.hot
+                                            color: cRow.hot ? Theme.tertiary : Theme.text_strong
+                                            textFormat: Text.PlainText
+                                            maximumLineCount: 2
+                                            elide: Text.ElideRight
+                                        }
+                                        C.IconGlyph {
+                                            visible: cRow.linked
+                                            Layout.alignment: Qt.AlignTop
+                                            Layout.topMargin: 3
+                                            name: modelData.isSearch ? "search" : "open_in_new"
+                                            size: 15
+                                            glyphColor: cRow.hot ? Theme.tertiary : Theme.outline
+                                        }
+                                    }
+                                    Flow {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        visible: (modelData.channel || "") !== "" || (modelData.views || "") !== "" || modelData.isSearch === true
+                                        C.AppText { visible: text !== ""; text: modelData.channel || ""; weight: Tokens.weightDemiBold; font.pixelSize: Tokens.fontCaption + 1; color: Theme.on_surface_var }
+                                        C.AppText { visible: (modelData.views || "") !== ""; text: ((modelData.channel || "") !== "" ? "· " : "") + (modelData.views || "") + " " + I18n.tr("views"); mono: true; font.pixelSize: Tokens.fontCaption + 1; color: Theme.outline }
+                                        C.AppText { visible: modelData.isSearch === true; text: I18n.tr("no video link — opens a YouTube search"); font.pixelSize: Tokens.fontCaption + 1; color: Theme.outline }
+                                    }
+
+                                    GridLayout {
+                                        Layout.fillWidth: true
+                                        Layout.topMargin: Tokens.space1
+                                        visible: (modelData.angle || "") !== "" || (modelData.gap || "") !== ""
+                                        columns: root.wide ? 2 : 1
+                                        columnSpacing: Tokens.space4
+                                        rowSpacing: Tokens.space2
+                                        ColumnLayout {
+                                            visible: (modelData.angle || "") !== ""
+                                            Layout.fillWidth: true
+                                            Layout.preferredWidth: 1
+                                            Layout.alignment: Qt.AlignTop
+                                            spacing: 2
+                                            Caption { text: I18n.tr("Their angle") }
+                                            Body { text: modelData.angle || ""; selectable: false; font.pixelSize: Tokens.fontBody; color: Theme.on_surface }
+                                        }
+                                        ColumnLayout {
+                                            visible: (modelData.gap || "") !== ""
+                                            Layout.fillWidth: true
+                                            Layout.preferredWidth: 1
+                                            Layout.alignment: Qt.AlignTop
+                                            spacing: 2
+                                            Caption { text: I18n.tr("What they miss"); color: Theme.tertiary }
+                                            Body { text: modelData.gap || ""; selectable: false; font.pixelSize: Tokens.fontBody; color: Theme.text_strong }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── v6 · DELIVERY ──
+            // How to SAY the script: three dials (tone · pace · energy), the
+            // words to punch as bold chips, and the delivery mistakes to avoid.
+
+            Stage {
+                id: sDelivery
+                key: "sDelivery"
+                host: root; act: 0; order: 0
+                has: false   // v1.0.5: not part of the Essentials greenlight
+                kicker: "DELIVERY"
+                heading: I18n.tr("How to say it on camera")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.mid ? 3 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Repeater {
+                        model: [
+                            { label: I18n.tr("Tone"),   glyph: "user",       value: root.deliv.tone || "" },
+                            { label: I18n.tr("Pace"),   glyph: "speed",      value: root.deliv.pace || "" },
+                            { label: I18n.tr("Energy"), glyph: "trending_up", value: root.deliv.energy || "" }
+                        ]
+                        Box {
+                            visible: modelData.value !== ""
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 1
+                            Layout.alignment: Qt.AlignTop
+                            pad: Tokens.space4
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: Tokens.space2
+                                C.IconGlyph { name: modelData.glyph; size: 15; glyphColor: Theme.warn }
+                                Caption { text: modelData.label; color: Theme.warn }
+                            }
+                            Body { text: modelData.value; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
+                        }
+                    }
+                }
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    visible: (root.deliv.emphasis || []).length > 0 || (root.deliv.avoid || []).length > 0
+                    columns: root.mid && (root.deliv.emphasis || []).length > 0 && (root.deliv.avoid || []).length > 0 ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Box {
+                        visible: (root.deliv.emphasis || []).length > 0
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 1
+                        Layout.alignment: Qt.AlignTop
+                        Caption { text: I18n.tr("Punch these words") }
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: Tokens.space2
+                            Repeater {
+                                model: root.deliv.emphasis || []
+                                Pill { text: modelData; glyph: "bolt"; tint: Theme.warn; strong: true; maxTextWidth: 320 }
+                            }
+                        }
+                    }
+                    Box {
+                        visible: (root.deliv.avoid || []).length > 0
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 1
+                        Layout.alignment: Qt.AlignTop
+                        Caption { text: I18n.tr("Don't") }
+                        Repeater {
+                            model: root.deliv.avoid || []
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: Tokens.space3
+                                C.IconGlyph { name: "close"; size: 15; glyphColor: Theme.error; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
+                                Body { text: modelData; font.pixelSize: Tokens.fontLabel }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Stage {
+                id: sRehooks
+                key: "sRehooks"
+                host: root; act: 0; order: 0
+                has: false   // v1.0.5: not part of the Essentials greenlight
+                kicker: "RE-HOOKS"
+                heading: I18n.tr("Where viewers want to leave")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.mid ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Repeater {
+                        model: root.idea.rehooks || []
+                        Rectangle {
+                            id: rh
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 1
+                            radius: Tokens.radiusXl
+                            color: Theme.surface_low
+                            border.width: 1
+                            border.color: Theme.border
+                            implicitHeight: rhRow.implicitHeight + Tokens.space5 * 2
+                            HoverHandler { id: rhCardHover }
+                            RowLayout {
+                                id: rhRow
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: Tokens.space5
+                                spacing: Tokens.space5
+                                AbstractButton {
+                                    Layout.alignment: Qt.AlignTop
+                                    implicitWidth: rhTime.implicitWidth
+                                    implicitHeight: rhTime.implicitHeight
+                                    enabled: modelData.atSec !== undefined && modelData.atSec >= 0
+                                    onClicked: { root.seek(modelData.atSec); }
+                                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                    background: Item {}
+                                    contentItem: Column {
+                                        id: rhTime
+                                        spacing: 2
+                                        C.AppText { text: modelData.time || ""; mono: true; font.pixelSize: Tokens.fontTitle; color: Theme.warn; LayoutMirroring.enabled: false }
+                                        C.AppText { text: modelData.device || ""; font.pixelSize: Tokens.fontCaption; color: Theme.outline; width: Math.min(implicitWidth, 120); elide: Text.ElideRight }
+                                    }
+                                }
+                                Body { text: modelData.line || ""; weight: Tokens.weightBold; font.pixelSize: Tokens.fontSubtitle + 1; color: Theme.text_strong }
+                                C.IconButton {
+                                    Layout.alignment: Qt.AlignTop
+                                    iconName: "content_copy"
+                                    tip: I18n.tr("Copy")
+                                    accent: Theme.primary
+                                    implicitWidth: 30
+                                    implicitHeight: 30
+                                    opacity: rhCardHover.hovered ? 1 : 0.35
+                                    onClicked: root.copyRequested(modelData.line || "")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── v5 · ON-SCREEN TEXT ──
+
+            Stage {
+                id: sOverlay
+                key: "sOverlay"
+                host: root; act: 0; order: 0
+                has: false   // v1.0.5: not part of the Essentials greenlight
+                kicker: "ON-SCREEN TEXT"
+                heading: I18n.tr("Every overlay, timed")
+                aside: [
+                    C.PrimaryButton {
+                        visible: root.mid
+                        variant: "ghost"
+                        iconName: "content_copy"
+                        text: I18n.tr("Copy all")
+                        implicitHeight: 38
+                        onClicked: {
+                            var a = root.idea.onScreenText || [], out = []
+                            for (var i = 0; i < a.length; i++) out.push("[" + (a[i].time || "") + "] " + (a[i].text || "") + (a[i].style ? "  (" + a[i].style + ")" : ""))
+                            root.copyRequested(out.join("\n"))
+                        }
+                    }
+                ]
+                Repeater {
+                    model: root.idea.onScreenText || []
+                    Rectangle {
+                        id: ov
+                        Layout.fillWidth: true
+                        radius: Tokens.radiusLg
+                        color: index % 2 ? Theme.surface_low : Theme.surface_high
+                        border.width: 1
+                        border.color: ovHover.hovered ? U.withAlpha(Theme.warn, 0.35) : Theme.border
+                        implicitHeight: ovRow.implicitHeight + Tokens.space4 * 2
+                        HoverHandler { id: ovHover }
+                        RowLayout {
+                            id: ovRow
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.margins: Tokens.space4
+                            spacing: Tokens.space4
+                            Rectangle {
+                                Layout.preferredWidth: 64
+                                Layout.preferredHeight: 28
+                                radius: Tokens.radiusXs + 2
+                                color: U.withAlpha(Theme.warn, 0.12)
+                                C.AppText {
+                                    anchors.centerIn: parent
+                                    text: modelData.time || "—"
+                                    mono: true
+                                    font.pixelSize: Tokens.fontCaption
+                                    color: Theme.warn
+                                    LayoutMirroring.enabled: false
+                                }
+                            }
+                            Body {
+                                text: modelData.text || ""
+                                weight: Tokens.weightExtraBold
+                                font.pixelSize: Tokens.fontSubtitle + 1
+                                color: Theme.text_strong
+                            }
+                            Pill {
+                                visible: root.mid && (modelData.style || "") !== ""
+                                text: modelData.style || ""
+                                maxTextWidth: 180
+                                Layout.alignment: Qt.AlignVCenter
+                            }
+                            C.IconButton {
+                                iconName: "content_copy"
+                                tip: I18n.tr("Copy")
+                                accent: Theme.primary
+                                implicitWidth: 30; implicitHeight: 30
+                                opacity: ovHover.hovered ? 1 : 0.4
+                                onClicked: root.copyRequested(modelData.text || "")
+                            }
+                        }
+                    }
+                }
+            }
+
+            Stage {
+                id: sExec
+                key: "sExec"
+                host: root; act: 0; order: 0
+                has: false   // v1.0.5: not part of the Essentials greenlight
+                kicker: "EDIT NOTES"
+                heading: I18n.tr("The editor's brief")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.mid ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Repeater {
+                        model: [
+                            { g: "scissors",      n: I18n.tr("Editing & pace"),  v: root.exec.editing || "" },
+                            { g: "music_note",    n: I18n.tr("Audio & music"),   v: root.exec.audio || "" },
+                            { g: "inventory_2",   n: I18n.tr("Assets needed"),   v: root.exec.assets || "" },
+                            { g: "smart_display", n: I18n.tr("Render & export"), v: root.exec.render || "" }
+                        ]
+                        Box {
+                            visible: modelData.v !== ""
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 1
+                            Row {
+                                spacing: Tokens.space2
+                                C.IconGlyph { name: modelData.g; size: 16; glyphColor: Theme.warn; anchors.verticalCenter: parent.verticalCenter }
+                                C.AppText { text: modelData.n; weight: Tokens.weightBold; font.pixelSize: Tokens.fontBody; color: Theme.warn; anchors.verticalCenter: parent.verticalCenter }
+                            }
+                            Body { text: modelData.v; font.pixelSize: Tokens.fontLabel + 1 }
+                        }
+                    }
+                }
+                WhyNote { text_: root.exec.reasoning || ""; accent: Theme.warn }
+            }
+
+            // ── v7 · FACT CHECK (v1.0.3) ──
+            // Every claim in the script a viewer could call out, with how to
+            // verify it. Tick each one off before you publish (per idea, not saved).
+
+            Stage {
+                id: sFacts
+                key: "sFacts"
+                host: root; act: 0; order: 0
+                has: false   // v1.0.5: not part of the Essentials greenlight
+                kicker: "FACT CHECK"
+                heading: I18n.tr("Check these before you publish")
+
+                Repeater {
+                    model: root.idea.factCheck || []
+                    Rectangle {
+                        id: fc
+                        readonly property bool done: root.factDone[index] === true
+                        Layout.fillWidth: true
+                        radius: Tokens.radiusXl
+                        color: Theme.surface_low
+                        border.width: 1
+                        border.color: fc.done ? U.withAlpha(Theme.secondary_container, 0.5) : Theme.border
+                        Behavior on border.color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+                        implicitHeight: fcRow.implicitHeight + Tokens.space4 * 2
+                        RowLayout {
+                            id: fcRow
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: Tokens.space4
+                            spacing: Tokens.space3
+                            AbstractButton {
+                                Layout.alignment: Qt.AlignTop
+                                implicitWidth: 24; implicitHeight: 24
+                                onClicked: {
+                                    var m = Object.assign({}, root.factDone)
+                                    m[index] = !fc.done
+                                    root.factDone = m
+                                }
+                                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                background: Rectangle {
+                                    radius: 12
+                                    color: fc.done ? Theme.secondary_container : "transparent"
+                                    border.width: 1.5
+                                    border.color: fc.done ? Theme.secondary_container : Theme.border_med
+                                }
+                                contentItem: C.IconGlyph {
+                                    name: "check"
+                                    size: 13
+                                    visible: fc.done
+                                    glyphColor: Theme.isDark ? "#0F0D12" : "#FFFFFF"
+                                }
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: Tokens.space2
+                                Body {
+                                    text: modelData.claim || ""
+                                    font.pixelSize: Tokens.fontLabel + 1
+                                    color: Theme.text_strong
+                                    opacity: fc.done ? 0.6 : 1
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: (modelData.verify || "") !== ""
+                                    spacing: Tokens.space2
+                                    C.IconGlyph { name: "search"; size: 14; glyphColor: Theme.warn; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
+                                    Body { text: modelData.verify || ""; font.pixelSize: Tokens.fontBody; color: Theme.on_surface_var }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── v5 · TEST PLAN ──
+
+            Stage {
+                id: sAb
+                key: "sAb"
+                host: root; act: 0; order: 0
+                has: false   // v1.0.5: not part of the Essentials greenlight
+                kicker: "TEST PLAN"
+                heading: I18n.tr("Launch with this, swap when it stalls")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.wide ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Repeater {
+                        model: {
+                            var a = []
+                            if (root.ab.thumbnailFirst) a.push({ g: "image", n: I18n.tr("Thumbnail to launch with"), v: root.ab.thumbnailFirst, t: Theme.secondary_container })
+                            if (root.ab.titleFirst) a.push({ g: "text", n: I18n.tr("Title to launch with"), v: root.ab.titleFirst, t: Theme.secondary_container })
+                            if (root.ab.swapRule) a.push({ g: "sync", n: I18n.tr("When to swap"), v: root.ab.swapRule, t: Theme.warn })
+                            if (root.ab.watch) a.push({ g: "query_stats", n: I18n.tr("Watch first in Studio"), v: root.ab.watch, t: Theme.tertiary })
+                            return a
+                        }
+                        Box {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: Tokens.space3
+                                Rectangle {
+                                    Layout.preferredWidth: 32; Layout.preferredHeight: 32
+                                    Layout.alignment: Qt.AlignTop
+                                    radius: Tokens.radiusSm
+                                    color: U.withAlpha(modelData.t, 0.13)
+                                    C.IconGlyph { anchors.centerIn: parent; name: modelData.g; size: 16; glyphColor: modelData.t }
+                                }
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 2
+                                    Caption { text: modelData.n }
+                                    Body { text: modelData.v; font.pixelSize: Tokens.fontLabel + 1; color: Theme.text_strong }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Stage {
+                id: sPlan
+                key: "sPlan"
+                host: root; act: 0; order: 0
+                has: false   // v1.0.5: not part of the Essentials greenlight
+                kicker: "PUBLISH PLAN"
+                heading: I18n.tr("When it goes out, and the hour after")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.mid && (root.plan.first_hour || []).length > 0 ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+
+                    // the slot, set like a departure board
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 4
+                        radius: Tokens.radiusXl + 4
+                        gradient: Gradient {
+                            GradientStop { position: 0.0; color: U.withAlpha(Theme.secondary_container, Theme.isDark ? 0.24 : 0.14) }
+                            GradientStop { position: 0.75; color: U.withAlpha(Theme.secondary_container, 0.03) }
+                        }
+                        border.width: 1
+                        border.color: U.withAlpha(Theme.secondary_container, 0.30)
+                        implicitHeight: slotCol.implicitHeight + Tokens.space6 * 2
+                        ColumnLayout {
+                            id: slotCol
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: Tokens.space6
+                            spacing: Tokens.space2
+                            Caption { text: I18n.tr("Upload slot"); color: Theme.secondary_container }
+                            C.AppText {
+                                visible: text !== ""
+                                text: root.plan.day || ""
+                                weight: Tokens.weightExtraBold
+                                font.pixelSize: 40
+                                color: Theme.text_strong
+                                wrapMode: Text.Wrap
+                                Layout.fillWidth: true
+                            }
+                            C.AppText {
+                                visible: text !== ""
+                                text: root.plan.time || ""
+                                weight: Tokens.weightExtraBold
+                                font.pixelSize: 52
+                                color: Theme.secondary_container
+                                wrapMode: Text.Wrap
+                                Layout.fillWidth: true
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.topMargin: Tokens.space3
+                                visible: (root.plan.why || "") !== ""
+                                spacing: Tokens.space2
+                                C.IconGlyph { name: "schedule"; size: 16; glyphColor: Theme.on_surface_var; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
+                                Body { text: root.plan.why || ""; font.pixelSize: Tokens.fontLabel; color: Theme.on_surface_var }
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                visible: (root.pack.timing || "") !== ""
+                                spacing: Tokens.space2
+                                C.IconGlyph { name: "lightbulb"; size: 16; glyphColor: Theme.on_surface_var; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
+                                Body { text: root.pack.timing || ""; font.pixelSize: Tokens.fontLabel; color: Theme.on_surface_var }
+                            }
+                        }
+                    }
+
+                    // the first hour, as a checklist you can actually tick
+                    Box {
+                        id: planBox
+                        visible: (root.plan.first_hour || []).length > 0
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 5
+                        readonly property int doneCount: {
+                            var n = 0, d = root.planDone
+                            for (var k in d) if (d[k]) n++
+                            return n
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Layout.bottomMargin: Tokens.space2
+                            C.AppText { text: I18n.tr("The first hour after publishing"); weight: Tokens.weightBold; font.pixelSize: Tokens.fontSubtitle; color: Theme.text_strong; Layout.fillWidth: true; elide: Text.ElideRight }
+                            C.AppText {
+                                text: planBox.doneCount + "/" + (root.plan.first_hour || []).length
+                                mono: true
+                                font.pixelSize: Tokens.fontBody
+                                color: Theme.secondary_container
+                                LayoutMirroring.enabled: false
+                            }
+                        }
+                        Repeater {
+                            model: root.plan.first_hour || []
+                            AbstractButton {
+                                id: chk
+                                readonly property bool done: root.planDone[index] === true
+                                Layout.fillWidth: true
+                                implicitHeight: chkRow.implicitHeight + Tokens.space3 * 2
+                                onClicked: {
+                                    var d = Object.assign({}, root.planDone)
+                                    d[index] = !chk.done
+                                    root.planDone = d
+                                }
+                                HoverHandler { id: chkHover; cursorShape: Qt.PointingHandCursor }
+                                background: Rectangle {
+                                    radius: Tokens.radiusLg
+                                    color: chk.done ? U.withAlpha(Theme.secondary_container, 0.07)
+                                         : chkHover.hovered ? U.withAlpha(Theme.on_surface, 0.04) : U.withAlpha(Theme.on_surface, 0)
+                                    Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+                                }
+                                contentItem: RowLayout {
+                                    id: chkRow
+                                    spacing: Tokens.space3
+                                    Rectangle {
+                                        Layout.leftMargin: Tokens.space3
+                                        Layout.alignment: Qt.AlignVCenter
+                                        width: 24; height: 24; radius: Tokens.radiusXs + 1
+                                        color: chk.done ? Theme.secondary_container : U.withAlpha(Theme.secondary_container, 0)
+                                        border.width: chk.done ? 0 : 1.5
+                                        border.color: Theme.border_strong !== undefined ? Theme.border_strong : Theme.outline
+                                        Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+                                        C.IconGlyph { anchors.centerIn: parent; visible: chk.done; name: "check"; size: 16; glyphColor: Theme.isDark ? "#0F0D12" : "#FFFFFF" }
+                                    }
+                                    Body {
+                                        Layout.rightMargin: Tokens.space3
+                                        text: modelData
+                                        selectable: false
+                                        font.pixelSize: Tokens.fontLabel
+                                        font.strikeout: chk.done
+                                        color: chk.done ? Theme.outline : Theme.on_surface
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Stage {
+                id: sMoney
+                key: "sMoney"
+                host: root; act: 0; order: 0
+                has: false   // v1.0.5: not part of the Essentials greenlight
+                kicker: "MONETIZATION & REACH"
+                heading: I18n.tr("Revenue fit, and where else it lives")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.mid && root.idea.hasMonetization === true && root.idea.hasRepurpose === true ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+
+                    Box {
+                        visible: root.idea.hasMonetization === true
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 1
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: (root.monet.adSafetyLabel || "") !== ""
+                            spacing: Tokens.space3
+                            C.IconGlyph { name: root.monet.adSafety === "Risky" ? "warning" : "verified"; size: 24; glyphColor: root.monetAccent }
+                            C.AppText { text: root.monet.adSafetyLabel || ""; weight: Tokens.weightExtraBold; font.pixelSize: Tokens.fontTitle; color: Theme.text_strong; Layout.fillWidth: true }
+                        }
+                        Body { visible: text !== ""; text: root.monet.why || ""; font.pixelSize: Tokens.fontLabel; color: Theme.on_surface_var }
+                        Caption { visible: (root.monet.sponsorFit || []).length > 0; text: I18n.tr("Sponsor fit"); Layout.topMargin: Tokens.space2 }
+                        Flow {
+                            Layout.fillWidth: true
+                            visible: (root.monet.sponsorFit || []).length > 0
+                            spacing: Tokens.space2
+                            Repeater { model: root.monet.sponsorFit || []; Pill { text: modelData; tint: root.monetAccent } }
+                        }
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.topMargin: Tokens.space2
+                            visible: (root.monet.productTieIn || "") !== ""
+                            radius: Tokens.radiusLg
+                            color: Theme.surface_low
+                            implicitHeight: tieCol.implicitHeight + Tokens.space4 * 2
+                            ColumnLayout {
+                                id: tieCol
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: Tokens.space4
+                                spacing: 2
+                                Caption { text: I18n.tr("Natural product tie-in") }
+                                Body { text: root.monet.productTieIn || ""; font.pixelSize: Tokens.fontLabel }
+                            }
+                        }
+                    }
+
+                    Box {
+                        visible: root.idea.hasRepurpose === true
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.preferredWidth: 1
+                        Caption { text: I18n.tr("One shoot, more distribution") }
+                        Repeater {
+                            model: root.idea.repurpose || []
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                Layout.topMargin: Tokens.space2
+                                spacing: 2
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    C.AppText { text: modelData.platform || ""; weight: Tokens.weightBold; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong; Layout.fillWidth: true; elide: Text.ElideRight }
+                                    C.IconButton { iconName: "content_copy"; tip: I18n.tr("Copy"); accent: Theme.primary; implicitWidth: 28; implicitHeight: 28; onClicked: root.copyRequested(modelData.how || "") }
+                                }
+                                Body { text: modelData.how || ""; font.pixelSize: Tokens.fontLabel; color: Theme.on_surface_var }
+                                Rectangle { Layout.fillWidth: true; Layout.topMargin: Tokens.space2; height: 1; color: Theme.border; visible: index < (root.idea.repurpose || []).length - 1 }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── v5 · RIGHTS ──
+
+            Stage {
+                id: sRights
+                key: "sRights"
+                host: root; act: 0; order: 0
+                has: false   // v1.0.5: not part of the Essentials greenlight
+                kicker: "RIGHTS"
+                heading: I18n.tr("Copyright and Content ID")
+                aside: [
+                    Pill {
+                        visible: (root.rights.riskLabel || "") !== ""
+                        glyph: "verified"
+                        text: root.rights.riskLabel || ""
+                        tint: root.rightsAccent
+                        strong: true
+                    }
+                ]
+                Box {
+                    Layout.fillWidth: true
+                    color: U.withAlpha(root.rightsAccent, Theme.isDark ? 0.06 : 0.05)
+                    border.color: U.withAlpha(root.rightsAccent, 0.26)
+                    Body {
+                        visible: text !== ""
+                        text: root.rights.notes || ""
+                        font.pixelSize: Tokens.fontLabel + 1
+                        color: Theme.text_strong
+                    }
+                    Caption { visible: (root.rights.safeMoves || []).length > 0; text: I18n.tr("Keep it safe"); Layout.topMargin: Tokens.space2 }
+                    Repeater {
+                        model: root.rights.safeMoves || []
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Tokens.space3
+                            C.IconGlyph { name: "check_circle"; size: 16; glyphColor: Theme.secondary_container; Layout.alignment: Qt.AlignTop; Layout.topMargin: 2 }
+                            Body { text: modelData }
+                        }
+                    }
+                }
+            }
+
+            // ── v6 · CHECKPOINTS (Grow) ──
+            // 1 hour → 24 hours → 7 days as three stations on one line. Each says
+            // what to open in Studio, what good looks like, and the move if not.
+            // Tick a station once you've checked it (per idea, not saved).
+
+            Stage {
+                id: sCheckpoints
+                key: "sCheckpoints"
+                host: root; act: 0; order: 0
+                has: false   // v1.0.5: not part of the Essentials greenlight
+                kicker: "CHECKPOINTS"
+                heading: I18n.tr("What to check, and when")
+                aside: [ Pill {
+                    visible: root.mid
+                    glyph: "query_stats"
+                    text: I18n.tr("Against your channel's usual, not someone else's")
+                    tint: root.growColor
+                    maxTextWidth: 320
+                } ]
+
+                GridLayout {
+                    id: cpGrid
+                    Layout.fillWidth: true
+                    readonly property int n: (root.idea.checkpoints || []).length
+                    columns: root.mid ? Math.max(1, Math.min(3, n)) : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Repeater {
+                        model: root.idea.checkpoints || []
+                        Rectangle {
+                            id: cp
+                            readonly property bool done: root.cpDone[index] === true
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 1
+                            Layout.alignment: Qt.AlignTop
+                            radius: Tokens.radiusXl + 2
+                            color: done ? U.withAlpha(root.growColor, Theme.isDark ? 0.10 : 0.07) : Theme.surface_high
+                            border.width: 1
+                            border.color: done ? U.withAlpha(root.growColor, 0.45) : Theme.border
+                            Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durMed } }
+                            implicitHeight: cpCol.implicitHeight + Tokens.space5 * 2
+                            ColumnLayout {
+                                id: cpCol
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: Tokens.space5
+                                spacing: Tokens.space2
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Tokens.space3
+                                    // the station dot
+                                    Rectangle {
+                                        width: 30; height: 30; radius: 15
+                                        color: cp.done ? root.growColor : U.withAlpha(root.growColor, 0.16)
+                                        border.width: cp.done ? 0 : 1.5
+                                        border.color: U.withAlpha(root.growColor, 0.6)
+                                        Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durMed } }
+                                        C.AppText {
+                                            anchors.centerIn: parent
+                                            visible: !cp.done
+                                            text: root.num(index + 1)
+                                            weight: Tokens.weightExtraBold
+                                            font.pixelSize: Tokens.fontCaption + 1
+                                            color: root.growColor
+                                        }
+                                        C.IconGlyph { anchors.centerIn: parent; visible: cp.done; name: "check"; size: 16; glyphColor: Theme.isDark ? "#0F0D12" : "#FFFFFF" }
+                                    }
+                                    C.AppText {
+                                        Layout.fillWidth: true
+                                        text: modelData.whenLabel || modelData.when || ""
+                                        weight: Tokens.weightExtraBold
+                                        font.pixelSize: Tokens.fontSubtitle + 2
+                                        color: Theme.text_strong
+                                        elide: Text.ElideRight
+                                    }
+                                    C.IconButton {
+                                        iconName: cp.done ? "check_circle" : "check"
+                                        tip: cp.done ? I18n.tr("Checked") : I18n.tr("Mark as checked")
+                                        accent: root.growColor
+                                        active: cp.done
+                                        implicitWidth: 30; implicitHeight: 30
+                                        onClicked: {
+                                            var m = Object.assign({}, root.cpDone)
+                                            m[index] = !cp.done
+                                            root.cpDone = m
+                                        }
+                                    }
+                                }
+                                Caption { visible: (modelData.check || "") !== ""; Layout.topMargin: Tokens.space1; text: I18n.tr("Open in Studio") }
+                                Body { visible: text !== ""; text: modelData.check || ""; weight: Tokens.weightBold; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: (modelData.goodSign || "") !== ""
+                                    Layout.topMargin: Tokens.space1
+                                    spacing: Tokens.space2
+                                    C.IconGlyph { name: "check_circle"; size: 15; glyphColor: Theme.secondary_container; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
+                                    Body { text: modelData.goodSign || ""; font.pixelSize: Tokens.fontBody }
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: (modelData.ifNot || "") !== ""
+                                    spacing: Tokens.space2
+                                    C.IconGlyph { name: I18n.rtl ? "arrow_back" : "arrow_forward"; size: 15; glyphColor: Theme.warn; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
+                                    Body { text: modelData.ifNot || ""; font.pixelSize: Tokens.fontBody; color: Theme.on_surface_var }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── v5 · IF IT STALLS ──
+
+            Stage {
+                id: sPlaybook
+                key: "sPlaybook"
+                host: root; act: 0; order: 0
+                has: false   // v1.0.5: not part of the Essentials greenlight
+                kicker: "PLAYBOOK"
+                heading: I18n.tr("If Studio shows this in the first 48 hours")
+
+                Repeater {
+                    model: root.idea.playbook || []
+                    Rectangle {
+                        Layout.fillWidth: true
+                        radius: Tokens.radiusXl
+                        color: Theme.surface_low
+                        border.width: 1
+                        border.color: Theme.border
+                        implicitHeight: pbGrid.implicitHeight + Tokens.space4 * 2
+                        GridLayout {
+                            id: pbGrid
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: Tokens.space4
+                            columns: root.mid ? 3 : 1
+                            columnSpacing: Tokens.space4
+                            rowSpacing: Tokens.space2
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 1
+                                Layout.leftMargin: Tokens.space2
+                                spacing: Tokens.space3
+                                C.IconGlyph { name: "query_stats"; size: 18; glyphColor: Theme.warn; Layout.alignment: Qt.AlignTop; Layout.topMargin: 3 }
+                                Body { text: modelData.signal || ""; font.pixelSize: Tokens.fontLabel + 1; color: Theme.text_strong }
+                            }
+                            C.IconGlyph {
+                                visible: root.mid && (modelData.action || "") !== ""
+                                name: I18n.rtl ? "arrow_back" : "arrow_forward"
+                                size: 18
+                                glyphColor: Theme.outline
+                                Layout.alignment: Qt.AlignVCenter
+                            }
+                            Rectangle {
+                                visible: (modelData.action || "") !== ""
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 1
+                                radius: Tokens.radiusLg
+                                color: U.withAlpha(Theme.tertiary, Theme.isDark ? 0.08 : 0.06)
+                                implicitHeight: pbTxt.implicitHeight + Tokens.space3 * 2
+                                Body {
+                                    id: pbTxt
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.margins: Tokens.space4
+                                    text: modelData.action || ""
+                                    font.pixelSize: Tokens.fontLabel
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── v6 · REPLY BANK (Grow) ──
+            // The comments this video will get, each with a reply ready to paste —
+            // drawn as a comment thread so it reads like the place it goes.
+
+            Stage {
+                id: sReplies
+                key: "sReplies"
+                host: root; act: 0; order: 0
+                has: false   // v1.0.5: not part of the Essentials greenlight
+                kicker: "REPLY BANK"
+                heading: I18n.tr("Comments you'll get, answers ready")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: root.wide ? 2 : 1
+                    columnSpacing: Tokens.space3
+                    rowSpacing: Tokens.space3
+                    Repeater {
+                        model: root.idea.replyBank || []
+                        Rectangle {
+                            id: rb
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.preferredWidth: 1
+                            Layout.alignment: Qt.AlignTop
+                            radius: Tokens.radiusXl
+                            color: Theme.surface_high
+                            border.width: 1
+                            border.color: rbHover.hovered ? U.withAlpha(root.growColor, 0.4) : Theme.border
+                            Behavior on border.color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+                            implicitHeight: rbCol.implicitHeight + Tokens.space4 * 2
+                            HoverHandler { id: rbHover }
+                            ColumnLayout {
+                                id: rbCol
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: Tokens.space4
+                                spacing: Tokens.space3
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Tokens.space3
+                                    Rectangle {
+                                        Layout.alignment: Qt.AlignTop
+                                        width: 28; height: 28; radius: 14
+                                        color: Theme.surface_highest
+                                        C.IconGlyph { anchors.centerIn: parent; name: "user"; size: 15; glyphColor: Theme.on_surface_var }
+                                    }
+                                    Body { text: modelData.comment || ""; font.pixelSize: Tokens.fontLabel; color: Theme.on_surface }
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: (modelData.reply || "") !== ""
+                                    spacing: Tokens.space3
+                                    // indent: the reply sits under the comment, like a thread
+                                    Item { Layout.preferredWidth: 28; Layout.preferredHeight: 1 }
+                                    Rectangle {
+                                        Layout.alignment: Qt.AlignTop
+                                        width: 28; height: 28; radius: 14
+                                        color: root.growColor
+                                        C.IconGlyph { anchors.centerIn: parent; name: "message"; size: 14; glyphColor: Theme.isDark ? "#0F0D12" : "#FFFFFF" }
+                                    }
+                                    Body { text: modelData.reply || ""; font.pixelSize: Tokens.fontLabel; color: Theme.text_strong }
+                                    C.IconButton {
+                                        Layout.alignment: Qt.AlignTop
+                                        iconName: "content_copy"
+                                        tip: I18n.tr("Copy reply")
+                                        accent: Theme.primary
+                                        implicitWidth: 28; implicitHeight: 28
+                                        opacity: rbHover.hovered ? 1 : 0.45
+                                        Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
+                                        onClicked: root.copyRequested(modelData.reply || "")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

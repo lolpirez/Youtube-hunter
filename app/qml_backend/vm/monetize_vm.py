@@ -16,6 +16,7 @@ worker thread, reporting back over a queued Qt signal — same worker→GUI patt
 as the other VMs.
 """
 
+import re
 import threading
 import traceback
 
@@ -54,6 +55,59 @@ _TIER_NOTES = {
     "mid": "Middle of the band — the figure to plan against",
     "high": "Top of the band, in a good ad season",
 }
+
+
+# ── audience market (v1.0.15) ─────────────────────────────────────────────
+# The registered country is where the CREATOR lives, not where the viewers
+# are. An English channel filed under IN / PK / AE is usually watched by a
+# Tier-1 audience, and pricing it at its home band undercounts it 3-8x.
+_TIER1_ENGLISH = frozenset({"US", "CA", "GB", "AU", "NZ"})
+_INTL_MARKET = "US"
+_ENGLISH_TITLE_RATIO = 0.70     # share of title letters that must be ASCII
+_TITLE_SAMPLE = 10              # most recent uploads read for the title test
+# Function words that tell English apart from other Latin-script languages
+# (an all-ASCII Spanish / Portuguese / Indonesian title would otherwise read
+# as "English"). Tiny on purpose: pure set lookups, no NLP.
+_EN_WORDS = frozenset((
+    "the a an and or of to in on for with how what why when is are was you "
+    "your my i we this that it vs from best top new can do not"
+).split())
+_OTHER_LATIN_WORDS = frozenset((
+    "el la los las que y con para por una del como "      # es
+    "o os um uma com não para mais do da dos das "        # pt
+    "le les des et une pour avec est dans "               # fr
+    "der die das und ist mit für ein eine nicht "         # de
+    "il di che per non della "                            # it
+    "yang dan ini itu dengan untuk "                      # id / ms
+    "ve bir bu ile için nasıl"                            # tr
+).split())
+_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+# ── mid-roll / duration multiplier on the long-form RPM (v1.0.15) ────────
+# Long videos carry more ad breaks per view: 8:00 is where YouTube unlocks
+# creator mid-rolls, 15:00+ usually means several. Each band is (min avg
+# seconds, multiplier); below 3:00 the viewer rarely sits through a full ad.
+_MIDROLL_SECONDS = 480
+_DUR_CLIP_SECONDS = 3600        # one 4 h livestream VOD must not drag the mean
+_DUR_MULTIPLIERS = ((900, 1.30), (_MIDROLL_SECONDS, 1.15), (180, 1.00))
+_DUR_SHORT_MULTIPLIER = 0.80
+
+# ── Partner Program tiers ─────────────────────────────────────────────────
+# 500 subs opens fan funding (Memberships / Super Thanks / Shopping); ad
+# revenue needs 1,000. These proofs are ad-tier only, so they never prove the
+# fan-funding tier.
+_AD_TIER_SUBS = 1000
+_AD_PROOF_KEYS = frozenset({"ads", "midroll"})
+# How much each live feature proves on its own (see _verdict).
+_PROOF_WEIGHTS = {
+    "membership": 99,     # Join button: Partner Program only
+    "super_thanks": 98,   # Partner Program only
+    "merch": 96,          # needs an approved Partner Program store
+    "midroll": 95,        # 2+ creator-placed breaks: monetized channels only
+    "ads": 75,            # YouTube serves ads on non-partner channels too
+}
+_ADS_ONLY_CAP = 79        # ads and nothing else stays under 80 %
+_ODDS_CAP = 72            # no proof at all: numbers can't rule out a rejection
 
 
 def _money(v):
@@ -300,6 +354,135 @@ class MonetizeVM(QObject):
             is_short = len(shorts) > len(longs)
         return ("short", True) if is_short else ("long", False)
 
+    # ── audience market + duration (v1.0.15, PURE) ────────────────────────
+    @staticmethod
+    def _lang_root(code):
+        """'en-US' / 'en_GB' / 'EN' -> 'en'; anything unusable -> ''."""
+        if not isinstance(code, str):
+            return ""
+        return code.strip().replace("_", "-").split("-", 1)[0].lower()
+
+    @classmethod
+    def _declared_language(cls, snip, recent, branding=None):
+        """The language the creator DECLARED, by vote, or '' if none did.
+
+        A video's defaultAudioLanguage (what is spoken) counts twice, its
+        defaultLanguage (title / description) once, the channel's own
+        defaultLanguage once. Ties go to English only when it really tied."""
+        votes = {}
+
+        def vote(code, w):
+            root = cls._lang_root(code)
+            if root and root not in ("zxx", "und", "mul"):
+                votes[root] = votes.get(root, 0) + w
+
+        try:
+            vote((snip or {}).get("defaultLanguage"), 1)
+            vote((branding or {}).get("defaultLanguage"), 1)
+            for v in recent or ():
+                vs = (v or {}).get("snippet") or {}
+                vote(vs.get("defaultAudioLanguage"), 2)
+                vote(vs.get("defaultLanguage"), 1)
+        except (AttributeError, TypeError):
+            return ""
+        if not votes:
+            return ""
+        top = max(votes.values())
+        winners = sorted(k for k, n in votes.items() if n == top)
+        return "en" if "en" in winners else winners[0]
+
+    @staticmethod
+    def _titles_look_english(recent):
+        """Title heuristic for channels that declare no language.
+
+        English when >= 70 % of the letters in the 10 newest titles are ASCII
+        AND English function words are not outnumbered by Spanish / Portuguese
+        / French / German / Italian / Indonesian / Turkish ones (plain ASCII
+        alone would call a Brazilian channel English). None = no titles."""
+        try:
+            rows = sorted((v for v in (recent or ()) if isinstance(v, dict)),
+                          key=lambda v: (v.get("snippet") or {}).get("publishedAt") or "",
+                          reverse=True)[:_TITLE_SAMPLE]
+            titles = [str((v.get("snippet") or {}).get("title") or "") for v in rows]
+        except (AttributeError, TypeError):
+            return None
+        letters = ascii_letters = 0
+        en_hits = other_hits = 0
+        for t in titles:
+            for ch in t:
+                if ch.isalpha():
+                    letters += 1
+                    if ch.isascii():
+                        ascii_letters += 1
+            for w in _WORD_RE.findall(t.lower()):
+                if w in _EN_WORDS:
+                    en_hits += 1
+                elif w in _OTHER_LATIN_WORDS:
+                    other_hits += 1
+        if not letters:
+            return None
+        if ascii_letters / letters < _ENGLISH_TITLE_RATIO:
+            return False
+        return en_hits >= other_hits
+
+    @classmethod
+    def _infer_target_market(cls, snip, recent, branding=None):
+        """Where the RPM should be priced: (country, inferred, language).
+
+        English content from outside the English Tier-1 markets is priced as
+        the international (US) market, because that is who watches it. Any
+        other channel keeps its registered country. Never raises."""
+        try:
+            country = str((snip or {}).get("country") or "").strip().upper()
+        except (AttributeError, TypeError):
+            country = ""
+        lang = cls._declared_language(snip, recent, branding)
+        if lang:
+            english = lang == "en"
+        else:
+            english = bool(cls._titles_look_english(recent))
+            lang = "en" if english else ""
+        if english and country not in _TIER1_ENGLISH:
+            return _INTL_MARKET, True, lang
+        return country, False, lang
+
+    @classmethod
+    def _duration_multiplier(cls, recent):
+        """(multiplier, mean long-form seconds) for the long-form RPM.
+
+        Mean over the long-form uploads in `recent`, each clipped at 1 h so
+        a single livestream VOD can't fake a mid-roll channel. No long-form
+        upload (or nothing readable) -> (1.0, 0.0)."""
+        durs = []
+        for v in recent or ():
+            try:
+                if cls._is_probably_short(v):
+                    continue
+                d = parse_iso8601_duration(
+                    ((v or {}).get("contentDetails") or {}).get("duration", ""))
+            except Exception:      # noqa: BLE001 — one bad row never sinks it
+                continue
+            if d and d > 0:
+                durs.append(min(float(d), _DUR_CLIP_SECONDS))
+        if not durs:
+            return 1.0, 0.0
+        avg = sum(durs) / len(durs)
+        for floor, k in _DUR_MULTIPLIERS:
+            if avg >= floor:
+                return k, avg
+        return _DUR_SHORT_MULTIPLIER, avg
+
+    @staticmethod
+    def _scale_rpm(row, k):
+        """A copy of an estimate_rpm() row with its RPM band × k.
+
+        More ad breaks mean more impressions per view, not a higher price per
+        impression, so the CPM band is left as it is."""
+        out = dict(row)
+        out["rpm"] = {t: float(v) * k for t, v in (row.get("rpm") or {}).items()}
+        out["duration_multiplier"] = k
+        return out
+
     def _estimate_ypp(self, recent, total_views=None, channel_age_days=None,
                       short_share=None, lifetime_short_share=None):
         """Rough public watch hours/year and Shorts views in 90 days — neither
@@ -472,6 +655,7 @@ class MonetizeVM(QObject):
                    "look for on its videos."), kind="odds")
             return {"status": "NOT_MONETIZED", "certainty": 97, "checks": checks,
                     "format_used": format_used,
+                    "fan_funding_only": False, "ads_only": False,
                     "headline": tr("This channel is not monetized."),
                     "reason": tr("It is still under the 500-subscriber floor for "
                                  "applying to the Partner Program.")}
@@ -522,6 +706,16 @@ class MonetizeVM(QObject):
                 tr("No creator-placed mid-roll ad breaks found."))
 
         proof_hits = [c for c in checks if c["kind"] == "proof" and c["ok"]]
+        # Under 1,000 subs a channel can be in the Partner Program's fan-funding
+        # tier but never in the ad tier, so an ad slot there is YouTube's own
+        # (it serves ads on non-partner channels) and proves nothing.
+        fan_tier = subs is not None and subs < _AD_TIER_SUBS
+        if fan_tier and any(c["key"] in _AD_PROOF_KEYS for c in proof_hits):
+            proof_hits = [c for c in proof_hits if c["key"] not in _AD_PROOF_KEYS]
+            add(False, "ads_not_partner",
+                tr("Ad slots on a channel under 1,000 subscribers are placed by "
+                   "YouTube itself, not paid to the creator, so they are not "
+                   "counted as proof here."), kind="note")
 
         # ODDS · the thresholds YouTube actually applies
         est = self._estimate_ypp(recent, total_views, channel_age_days,
@@ -594,12 +788,21 @@ class MonetizeVM(QObject):
 
         # verdict — proof settles it
         if proof_hits:
-            weights = {"membership": 99, "super_thanks": 98, "ads": 94,
-                       "merch": 93, "midroll": 90}
-            certainty = max(weights.get(c["key"], 90) for c in proof_hits)
+            keys = {c["key"] for c in proof_hits}
+            certainty = max(_PROOF_WEIGHTS.get(k, 90) for k in keys)
             if len(proof_hits) > 1:
                 certainty = min(99, certainty + 2)
-            if not threshold_ok:
+            ads_only = keys == {"ads"}
+            if ads_only:
+                # A pre-roll alone is the weakest proof there is: YouTube can
+                # run ads on any channel and keep the money. Kept under 80 %.
+                certainty = min(_ADS_ONLY_CAP, certainty)
+                add(False, "ads_only",
+                    tr("Only standard ad slots were found. YouTube can insert "
+                       "ads on channels outside the Partner Program too, so "
+                       "ads alone don't prove the creator is being paid."),
+                    kind="note")
+            if not threshold_ok and not ads_only:
                 # v1.2: this is the case that confused people. A Join button is
                 # proof on its own, but the odds row above can still read "under
                 # the 10M" on a channel with tens of millions of views — so say
@@ -613,8 +816,26 @@ class MonetizeVM(QObject):
                        "because older videos still earn views today.").format(
                            v=humanize_count(total_views or 0)),
                     kind="note")
+            if fan_tier:
+                return {"status": "MONETIZED", "certainty": certainty,
+                        "checks": checks, "format_used": format_used,
+                        "fan_funding_only": True, "ads_only": False,
+                        "headline": tr("Monetized (Fan Funding Only)"),
+                        "reason": tr("This channel has unlocked YPP Tier 1 "
+                                     "(Memberships/Thanks), but needs 1,000 "
+                                     "subscribers to earn ad revenue.")}
+            if ads_only:
+                return {"status": "MONETIZED", "certainty": certainty,
+                        "checks": checks, "format_used": format_used,
+                        "fan_funding_only": False, "ads_only": True,
+                        "headline": tr("This channel is probably monetized."),
+                        "reason": tr("YouTube served ads on its videos, but "
+                                     "nothing that only Partner Program channels "
+                                     "can switch on is live. The ads may have been "
+                                     "inserted by YouTube itself.")}
             return {"status": "MONETIZED", "certainty": certainty, "checks": checks,
                     "format_used": format_used,
+                    "fan_funding_only": False, "ads_only": False,
                     "headline": tr("This channel is monetized."),
                     "reason": tr("{n} monetization feature(s) that only Partner "
                                  "Program channels can switch on were found live on "
@@ -636,9 +857,16 @@ class MonetizeVM(QObject):
             score -= 6
 
         if score >= 60:
-            certainty = min(88, 55 + score // 3)
+            # Numbers alone can't see a rejection (Reused Content, copyright,
+            # policy), so a no-proof "yes" tops out at _ODDS_CAP: 60 -> 64 %,
+            # the 98 maximum -> 71 %.
+            certainty = min(_ODDS_CAP, 52 + score // 5)
+            add(False, "odds_policy",
+                tr("High views suggest eligibility, but channels can be rejected "
+                   "for Reused Content or policy issues."), kind="note")
             return {"status": "MONETIZED", "certainty": certainty, "checks": checks,
                     "format_used": format_used,
+                    "fan_funding_only": False, "ads_only": False,
                     "headline": tr("This channel is monetized."),
                     "reason": tr("It meets the subscriber and watch-time bars and "
                                  "shows an active upload history; no opt-in feature "
@@ -653,6 +881,7 @@ class MonetizeVM(QObject):
         gap = (tr("the channel is under 1,000 subscribers") if not subs_ok else missing)
         return {"status": "NOT_MONETIZED", "certainty": certainty, "checks": checks,
                 "format_used": format_used,
+                "fan_funding_only": False, "ads_only": False,
                 "headline": tr("This channel is not monetized."),
                 "reason": tr("Nothing that requires the Partner Program is switched "
                              "on, and {gap} — so ad revenue is very unlikely to be "
@@ -774,8 +1003,14 @@ class MonetizeVM(QObject):
             snip.get("description", "") or "",
             branding.get("keywords", "") or "",
             topics=topics)
-        rpm_short = estimate_rpm(niche_row, snip.get("country", ""), True)
-        rpm_long = estimate_rpm(niche_row, snip.get("country", ""), False)
+        # Priced on the AUDIENCE's market, not the creator's passport (see
+        # _infer_target_market), and long-form gets the mid-roll multiplier.
+        target_market, market_inferred, content_lang = self._infer_target_market(
+            snip, recent, branding)
+        dur_mult, avg_long_secs = self._duration_multiplier(recent)
+        rpm_short = estimate_rpm(niche_row, target_market, True)
+        rpm_long = self._scale_rpm(
+            estimate_rpm(niche_row, target_market, False), dur_mult)
         # ── Shorts vs long-form share of the PROJECTED views ─────────────
         # The old model took the recent-50 Shorts share and applied it to every
         # projected view, back catalogue included. On a channel that has pivoted
@@ -832,6 +1067,12 @@ class MonetizeVM(QObject):
             "channel_age_days": age_days,
             "revenue_format_used": revenue_format_used,
             "rpm_short": rpm_short, "rpm_long": rpm_long,
+            # v1.0.15: cached so retranslate() re-renders them offline
+            "target_market": target_market,
+            "market_inferred": market_inferred,
+            "content_lang": content_lang,
+            "duration_multiplier": dur_mult,
+            "avg_long_seconds": avg_long_secs,
         }
         return self._assemble(self._ctx)
 
@@ -859,15 +1100,35 @@ class MonetizeVM(QObject):
         # display model stays the dominant format, but the money is blended
         rpm_model = rpm_short if revenue_format_used == "short" else rpm_long
 
+        # The verdict comes first now: a fan-funding-only channel (500-999
+        # subs) earns $0 from ads, so every revenue figure below depends on it.
+        monetization = self._verdict(subs, recent, mode, ctx["format_used"],
+                                     ctx["is_shorts"], ctx["signals"],
+                                     total_views=total_views,
+                                     channel_age_days=ctx.get("channel_age_days"),
+                                     short_share=short_share,
+                                     lifetime_short_share=ctx.get(
+                                         "lifetime_short_share"))
+        no_ad_revenue = bool(monetization.get("fan_funding_only"))
+        ad_gate_note = tr("Requires 1,000 subscribers for ad revenue")
+        # Every $ figure goes through here, so the $0 rule can't be missed.
+        _cash = (lambda v: "$0") if no_ad_revenue else _money
+
         def _blended(tier):
+            if no_ad_revenue:
+                return 0.0
             return (monthly * short_share / 1000 * rpm_short["rpm"][tier]
                     + monthly * (1.0 - short_share) / 1000 * rpm_long["rpm"][tier])
 
         def _blended_daily(tier):
+            if no_ad_revenue:
+                return 0.0
             return (daily * short_share / 1000 * rpm_short["rpm"][tier]
                     + daily * (1.0 - short_share) / 1000 * rpm_long["rpm"][tier])
 
         def _blended_yearly(tier):
+            if no_ad_revenue:
+                return 0.0
             return (yearly * short_share / 1000 * rpm_short["rpm"][tier]
                     + yearly * (1.0 - short_share) / 1000 * rpm_long["rpm"][tier])
 
@@ -883,15 +1144,15 @@ class MonetizeVM(QObject):
                 # are one band's floor, middle and ceiling, not three scenarios,
                 # and the label is what says so.
                 "label": tr(_TIER_LABELS.get(tier, tier)),
-                "note": tr(_TIER_NOTES.get(tier, "")),
+                "note": ad_gate_note if no_ad_revenue else tr(_TIER_NOTES.get(tier, "")),
                 # The RPM each row was actually computed from. Printing it turns
                 # the row from a number to trust into a calculation to check:
                 # views ÷ 1000 × this = the figure beside it.
                 "rpmText": "$%.2f" % eff_rate,
                 "isMid": tier == "mid",
-                "daily": _money(_blended_daily(tier)),
-                "monthly": _money(_blended(tier)),
-                "yearly": _money(_blended_yearly(tier)),
+                "daily": _cash(_blended_daily(tier)),
+                "monthly": _cash(_blended(tier)),
+                "yearly": _cash(_blended_yearly(tier)),
             })
 
         # The headline RANGE ("$644 - $10K a month"): wider than the three tier
@@ -899,22 +1160,28 @@ class MonetizeVM(QObject):
         # bound accounts for. Raw floats ride along so the page can count up
         # to them; the strings are what it lands on.
         def _span(views):
+            if no_ad_revenue:
+                return {"low": 0.0, "mid": 0.0, "high": 0.0,
+                        "lowText": "$0", "midText": "$0", "highText": "$0",
+                        "text": "$0", "note": ad_gate_note}
             lo, mid, hi = earnings_range(views, short_share, rpm_short, rpm_long)
             return {"low": lo, "mid": mid, "high": hi,
                     "lowText": money_compact(lo), "midText": money_compact(mid),
                     "highText": money_compact(hi),
-                    "text": "%s - %s" % (money_compact(lo), money_compact(hi))}
+                    "text": "%s - %s" % (money_compact(lo), money_compact(hi)),
+                    "note": ""}
 
         earnings = {"daily": _span(daily), "monthly": _span(monthly),
                     "yearly": _span(yearly)}
 
-        monetization = self._verdict(subs, recent, mode, ctx["format_used"],
-                                     ctx["is_shorts"], ctx["signals"],
-                                     total_views=total_views,
-                                     channel_age_days=ctx.get("channel_age_days"),
-                                     short_share=short_share,
-                                     lifetime_short_share=ctx.get(
-                                         "lifetime_short_share"))
+        _market_code = str(ctx.get("target_market", snip.get("country", "")) or "")
+        _market_inferred = bool(ctx.get("market_inferred", False))
+        if not _market_code:
+            _market_label = tr("N/A")
+        elif _market_inferred:
+            _market_label = tr("{c} (Inferred)").format(c=_market_code)
+        else:
+            _market_label = _market_code
 
         thumbs = snip.get("thumbnails", {})
         thumb_url = (thumbs.get("high") or thumbs.get("medium")
@@ -940,6 +1207,10 @@ class MonetizeVM(QObject):
                 "headline": monetization["headline"],
                 "reason": monetization["reason"],
                 "certainty": monetization["certainty"],
+                # v1.0.15 (additive): 500-999 subs, fan funding but no ads /
+                # the only proof was an ad slot YouTube may have placed itself
+                "fanFundingOnly": no_ad_revenue,
+                "adsOnly": bool(monetization.get("ads_only")),
             },
             "checks": monetization["checks"],
             "revenue": revenue_rows,
@@ -949,12 +1220,14 @@ class MonetizeVM(QObject):
             # purpose: it is the middle of the niche's published band, which is
             # what a creator should plan against.
             "headline": {
-                "value": _money(_blended("mid")),
+                "value": _cash(_blended("mid")),
                 "label": tr("Likely per month"),
                 # The range around it, so the headline is never mistaken for a
                 # precise number.
-                "range": "%s – %s" % (_money(_blended("low")), _money(_blended("high"))),
-                "yearly": _money(_blended_yearly("mid")),
+                "range": ("$0" if no_ad_revenue else
+                          "%s – %s" % (_money(_blended("low")), _money(_blended("high")))),
+                "yearly": _cash(_blended_yearly("mid")),
+                "note": ad_gate_note if no_ad_revenue else "",
             },
             "views": {
                 "daily": humanize_count(int(daily)),
@@ -972,6 +1245,12 @@ class MonetizeVM(QObject):
                 "rpmHigh": f"${rpm_short['rpm']['high']:.3f} / ${rpm_long['rpm']['high']:.2f}",
                 "cpmLow": f"${rpm_model['cpm']['low']:.2f}",
                 "cpmHigh": f"${rpm_model['cpm']['high']:.2f}",
+                # v1.0.15 (additive): long-form RPM × this (mid-roll density),
+                # and the market the RPM was priced on
+                "durationMultiplier": round(float(ctx.get("duration_multiplier", 1.0) or 1.0), 2),
+                "targetMarket": _market_label,
+                "targetMarketCode": _market_code,
+                "targetInferred": _market_inferred,
             },
         }
 

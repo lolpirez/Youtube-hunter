@@ -83,10 +83,84 @@ ScrollView {
     // started a 720 ms cover zoom, and that zoom re-renders the card's layered
     // thumbnail + mask on EVERY frame, which is what made long grids feel
     // stiff instead of smooth.
-    readonly property bool gliding: wheelAnim.running || toTopAnim.running
-                                    || _pixelMoving
-                                    || (contentItem !== null && contentItem !== undefined
-                                        && contentItem.moving === true)
+    //
+    // v1.0.9: `gliding` turns on at once but turns OFF 140 ms after the content
+    // really stops. Every grid card binds it (scrollIdle), so each on/off flip
+    // re-ran ~25 hover bindings on all 24 cards. A fast wheel spin used to flip
+    // it between notches, and the hover state of the card under the pointer
+    // popped in the instant a glide ended; now one spin is one long "gliding".
+    //
+    // v1.0.11 "hover comes back at once":
+    //   * `moving` is no longer part of it. Flickable keeps `moving` up through
+    //     its own wheel momentum, rebound and movement-ending timers, which
+    //     could hold `gliding` (and so every card's hover) off for seconds
+    //     after the content had visibly stopped. dragging / flicking cover a
+    //     real drag or fling.
+    //   * a touchpad / free-spin / "smooth" wheel keeps sending pixel deltas
+    //     long after the user let go (OS inertia, up to ~10 s on a free-spin
+    //     wheel), and kept doing so with the page pinned at its top or bottom.
+    //     Only deltas that really move the content count now.
+    //   * the POINTER wins: `gliding` exists so cards sliding under a resting
+    //     pointer do not light up. Once the wheel has been quiet for
+    //     _pointerQuietMs and the pointer itself moves more than a few px,
+    //     the user is aiming at a card: hover is released at once, even if a
+    //     glide tail or inertia is still settling. The next wheel event that
+    //     moves the content arms it again.
+    readonly property bool _movingNow: wheelFollow.running || toTopAnim.running
+                                       || _pixelMoving
+                                       || (contentItem !== null && contentItem !== undefined
+                                           && (contentItem.dragging === true
+                                               || contentItem.flicking === true))
+    property bool gliding: false
+    property bool _pointerWins: false
+    property point _glideAnchor: Qt.point(0, 0)
+    readonly property int _pointerQuietMs: 150
+    readonly property real _pointerSlopPx: 6
+
+    function _armGlide() {
+        root._pointerWins = false
+        glideSettle.stop()
+        if (!root.gliding) {
+            root._glideAnchor = pointerProbe.point.scenePosition
+            root.gliding = true
+        }
+    }
+    on_MovingNowChanged: {
+        if (_movingNow) { if (!root._pointerWins) root._armGlide() }
+        else glideSettle.restart()
+    }
+    Timer {
+        id: glideSettle
+        interval: 140
+        repeat: false
+        onTriggered: {
+            root.gliding = false
+            root._pointerWins = false
+        }
+    }
+
+    // Passive probe: never blocks the cards' own hover (HoverHandler is not
+    // blocking by default). Content moving under a still pointer does not
+    // change scenePosition, so only real pointer motion gets through.
+    HoverHandler {
+        id: pointerProbe
+        onPointChanged: {
+            if (!root.gliding || root._pointerWins) return
+            const p = pointerProbe.point.scenePosition
+            // still wheeling: a hand on the wheel jiggles the mouse. Follow
+            // it, so only motion AFTER the wheel went quiet can release.
+            if (Date.now() - root._wheelLastMs < root._pointerQuietMs) {
+                root._glideAnchor = p
+                return
+            }
+            const dx = p.x - root._glideAnchor.x
+            const dy = p.y - root._glideAnchor.y
+            if (dx * dx + dy * dy < root._pointerSlopPx * root._pointerSlopPx) return
+            root._pointerWins = true
+            glideSettle.stop()
+            root.gliding = false
+        }
+    }
 
     // Jump back to the top, eased. Called when the content underneath is
     // REPLACED rather than extended — turning a grid page, switching an archive
@@ -95,9 +169,10 @@ ScrollView {
     function toTop() {
         const fl = root.contentItem
         if (!fl) return
-        wheelAnim.stop()
+        wheelFollow.stop()
         root._wheelTarget = 0
         if (fl.contentY <= 0) return
+        root._armGlide()
         toTopAnim.stop()
         toTopAnim.from = fl.contentY
         toTopAnim.to = 0
@@ -126,9 +201,10 @@ ScrollView {
         const pos = item.mapToItem(fl.contentItem ? fl.contentItem : fl, 0, 0)
         const max = Math.max(0, fl.contentHeight - fl.height)
         const target = Math.max(0, Math.min(max, pos.y - m))
-        wheelAnim.stop()
+        wheelFollow.stop()
         root._wheelTarget = target
         if (Math.abs(fl.contentY - target) < 1) return
+        root._armGlide()
         toTopAnim.stop()
         toTopAnim.from = fl.contentY
         toTopAnim.to = target
@@ -154,40 +230,84 @@ ScrollView {
             // long grids. Pixel deltas are now applied directly: no second
             // animation on top of the one the OS already made.
             if (ev.pixelDelta.y !== 0) {
-                wheelAnim.stop()
+                wheelFollow.stop()
+                root._wheelBoost = 1
                 const y = Math.max(0, Math.min(max, fl.contentY - ev.pixelDelta.y))
-                fl.contentY = y
                 root._wheelTarget = y
+                // v1.0.11: an inertia tail pressing against the top / bottom
+                // moves nothing, so it must not hold the cards' hover off
+                if (Math.abs(y - fl.contentY) < 0.5) return
+                fl.cancelFlick()
+                fl.contentY = y
+                root._wheelLastMs = Date.now()
                 root._pixelMoving = true
                 pixelIdle.restart()
+                root._armGlide()
                 return
             }
-
             // A real wheel: scale by the number of notches actually reported
             // (angleDelta is a multiple of 120 — 240 on some mice is TWO).
+            //
+            // v1.0.9 — continuous glide instead of one animation per notch.
+            // Each notch used to restart an OutCubic NumberAnimation from the
+            // current spot; OutCubic starts at 3x its average speed, so a fast
+            // spin surged and braked on every notch ("fast but not smooth").
+            // Now notches only move a TARGET and a per-frame follower eases
+            // contentY toward it (exponential approach, frame-time based, so
+            // it is the same on 60 / 144 Hz). Speed stays continuous across
+            // notches, a quick spin accelerates the way a browser does, and a
+            // reversal turns around at once.
+            if (ev.angleDelta.y === 0) return
             const notches = ev.angleDelta.y / 120
-            const base = wheelAnim.running ? root._wheelTarget : fl.contentY
-            const target = Math.max(0, Math.min(max, base - notches * root.wheelStep))
-            if (Math.abs(target - base) < 0.5) return
-
-            // Duration follows the distance, so the glide keeps a steady speed
-            // instead of re-decelerating from zero on every notch — that is
-            // what makes a fast spin of the wheel feel like one motion.
-            wheelAnim.stop()
+            const now = Date.now()
+            const gap = now - root._wheelLastMs
+            const sameDir = (notches > 0) === (root._wheelLastDir > 0)
+            root._wheelLastMs = now
+            root._wheelLastDir = notches
+            if (!sameDir || gap > root.wheelBoostWindow) root._wheelBoost = 1
+            else root._wheelBoost = Math.min(root.wheelBoostMax, root._wheelBoost + root.wheelBoostStep)
+            const base = (wheelFollow.running && sameDir) ? root._wheelTarget : fl.contentY
+            // rounded: a glide that comes to rest between two pixels leaves
+            // every native-rendered label slightly soft
+            const target = Math.round(Math.max(0, Math.min(max, base - notches * root.wheelStep * root._wheelBoost)))
+            if (Math.abs(target - fl.contentY) < 0.5) return
+            fl.cancelFlick()
             root._wheelTarget = target
-            wheelAnim.from = fl.contentY
-            wheelAnim.to = target
-            wheelAnim.duration = Math.max(80, Math.min(300,
-                Math.abs(target - fl.contentY) * (root.wheelDuration / root.wheelStep)))
-            wheelAnim.start()
+            root._armGlide()
+            if (!wheelFollow.running) wheelFollow.start()
         }
     }
-    NumberAnimation {
-        id: wheelAnim
-        target: root.contentItem
-        property: "contentY"
-        // overridden per event by the handler above (distance-proportional)
-        duration: Tokens.durMed
-        easing.type: Easing.OutCubic
+
+    // ── wheel glide engine (v1.0.9) ──
+    // tau = the follower's time constant: ~95 % of a notch is covered in 3 tau.
+    // Derived from wheelDuration so a page that tuned its glide keeps the feel.
+    property real wheelTau: Math.max(0.045, root.wheelDuration / 3000)
+    // A notch that lands within wheelBoostWindow ms of the previous one (same
+    // direction) travels further, up to wheelBoostMax x wheelStep.
+    property int wheelBoostWindow: 90
+    property real wheelBoostStep: 0.18
+    property real wheelBoostMax: 2.6
+    property real _wheelBoost: 1
+    property real _wheelLastMs: 0
+    property real _wheelLastDir: 0
+    FrameAnimation {
+        id: wheelFollow
+        onTriggered: {
+            const fl = root.contentItem
+            // a drag, a flick or the scrollbar handle owns contentY now
+            if (!fl || fl.dragging || fl.flicking || vbar.pressed) { wheelFollow.stop(); return }
+            const max = Math.max(0, fl.contentHeight - fl.height)
+            const target = Math.max(0, Math.min(max, root._wheelTarget))
+            root._wheelTarget = target
+            const y = fl.contentY
+            const d = target - y
+            // v1.0.11: snap the last pixel. The exponential tail spent its
+            // final ~50 ms crawling through sub-pixel steps nobody can see,
+            // and `gliding` (no hover) lasted that much longer.
+            if (Math.abs(d) < 1.0) { fl.contentY = target; wheelFollow.stop(); return }
+            const dt = Math.min(0.05, Math.max(0.001, wheelFollow.frameTime))
+            fl.contentY = y + d * (1 - Math.exp(-dt / root.wheelTau))
+        }
     }
+
 }

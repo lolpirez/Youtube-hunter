@@ -10,7 +10,7 @@
 
 [نصب](docs/INSTALL.md) · [افزونه مرورگر](docs/EXTENSION.md) · [ساخت از سورس](#ساخت-از-سورس) · [تغییرات](CHANGELOG.md)
 
-![Version](https://img.shields.io/badge/version-1.0.1-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-1.0.2-22c55e?style=flat-square)
 ![Platform](https://img.shields.io/badge/Windows-10%201809%2B%20%7C%2011%20(x64)-0ea5e9?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab?style=flat-square&logo=python&logoColor=white)
 ![Qt](https://img.shields.io/badge/Qt%20Quick-6.12-41cd52?style=flat-square&logo=qt&logoColor=white)
@@ -25,12 +25,12 @@ YouTube Hunter یک فضای کار دسکتاپ برای افرادی است ک
 این یک اپلیکیشن بومی ویندوز است (Python + Qt Quick/QML). همه‌چیز روی سیستم خودتان اجرا می‌شود: کلید API، دانلودها و آرشیو شما. یک **افزونه Chrome/Edge** همراه آن، همان پنل دانلود و برش را روی صفحه یوتیوب قرار می‌دهد و اپلیکیشن دسکتاپ کار را در پس‌زمینه انجام می‌دهد.
 
 <div align="center">
-<img src="screenshots/scraper.png?v=ocean" width="880" alt="صفحه Scraper">
+<img src="screenshots/scraper.png" width="880" alt="صفحه Scraper">
 </div>
 
 ## دانلود و نصب
 
-1. **[آخرین نسخه](../../releases/latest)** را باز کنید و **`YouTubeHunter-Setup-1.0.1-x64.exe`** را دانلود کنید.
+1. **[آخرین نسخه](../../releases/latest)** را باز کنید و **`YouTubeHunter-Setup-1.0.2-x64.exe`** را دانلود کنید.
 2. آن را اجرا کنید. نصب **برای هر کاربر** در `%LOCALAPPDATA%\Programs\YouTube Hunter` انجام می‌شود — بدون درخواست مدیر، بدون UAC و بدون نوشتن چیزی در `Program Files`.
 3. **YouTube Hunter** را از منوی Start یا میانبر دسکتاپ اجرا کنید.
 
@@ -102,15 +102,15 @@ YouTube Hunter یک فضای کار دسکتاپ برای افرادی است ک
 
 | Niche Finder | Video Cutter |
 |---|---|
-| ![Niche Finder](screenshots/niche-finder.png?v=ocean) | ![Video Cutter](screenshots/video-cutter.png?v=ocean) |
+| ![Niche Finder](screenshots/niche-finder.png) | ![Video Cutter](screenshots/video-cutter.png) |
 
 | Content Lab | Settings |
 |---|---|
-| ![Content Lab](screenshots/content-lab.png?v=ocean) | ![Settings](screenshots/settings.png?v=ocean) |
+| ![Content Lab](screenshots/content-lab.png) | ![Settings](screenshots/settings.png) |
 
 | Niche Scan | Scraper |
 |---|---|
-| ![Niche Scan](screenshots/niche-scan.png?v=ocean) | ![Scraper](screenshots/scraper.png?v=ocean) |
+| ![Niche Scan](screenshots/niche-scan.png) | ![Scraper](screenshots/scraper.png) |
 
 ## ویندوزهای پشتیبانی‌شده
 
@@ -199,7 +199,7 @@ installer.iss             Inno Setup script (bundles the app, the extension, the
 
 ## نسخه
 
-**1.0.1** — Scraper به یک مسیر سریع با تخته نتایج زنده مجهز شده است (مرتب‌سازی بر اساس Outlier، جست‌وجوی عنوان، deep scan، بازه انتشار، کلیدهای Transcript و نوع فایل) و هر بار هشت ویدیو با دکمه **Show more** نشان می‌دهد؛ کارت‌های ذخیره‌شده Niche Scan بازطراحی شده‌اند؛ AI Chat اکنون «Hunter» است؛ نوار عنوان پروژه را در Telegram دنبال می‌کند؛ Settings کارت‌هایش را در پس‌زمینه می‌سازد و Main.qml هنگام راه‌اندازی precompile می‌شود، در حالی که صفحه لودینگ فعلی بدون تغییر می‌ماند. Search Archive فقط کارت‌های نزدیک محدوده دید را رندر می‌کند، بخش‌های سرد را پشت اسکلت باز می‌کند، تصاویر بندانگشتی را یک‌جا آزاد می‌کند و سنگین‌ترین افکت‌های hover را تا توقف اسکرول به تعویق می‌اندازد؛ شبکه Niche Finder هم همین رندر محدود به محدوده دید و نمایش یک‌جای کل شبکه را دارد. کلید Transcripts دیگر قرمز چشمک نمی‌زند. Monetize Checker صفحه‌های YouTube را به‌صورت gzip و موازی می‌گیرد، دو ویدیو را به‌جای چهار ویدیو بررسی می‌کند و سیگنال‌ها را ۲۰ دقیقه کش می‌کند؛ نتیجه یک بررسی کامل به‌جای چند دقیقه، در چند ثانیه برمی‌گردد. درآمد هم اکنون به تفکیک فرمت محاسبه می‌شود: ۳۰ روز آینده بر اساس فرمت خودِ هر آپلود و کاتالوگ قدیمی با سهم شورتی که به دوران شورت محدود شده است؛ بنابراین کانالی که به شورت روی آورده، دیگر کل تاریخچه‌اش با نرخ استخر شورت قیمت‌گذاری نمی‌شود.
+**1.0.2** — بلوپرینت‌های Content Lab فقط همان چیزی را می‌سازند که روی صفحه است: کاور و پرده باز برای اولین رنگ ساخته می‌شوند و بقیه پرده‌ها یکی‌یکی در زمان بیکاری بار می‌شوند؛ بنابراین اولین بلوپرینت در حدود ۱ ثانیه آماده می‌شود (قبلاً ۲.۴ تا ۳.۶ ثانیه) و سوئیچ بین ایده‌ها در ۰.۲ تا ۰.۹ ثانیه می‌نشیند. مجموعه آیکون‌ها بازطراحی شده (Aurora Pro)؛ هر دو شبکه ویدیویی با چرخ گلدان‌دار اسکرول می‌شوند و hover به‌محض نشانه‌گیری برمی‌گردد؛ پیکر دانلود فوراً فرمت را عوض می‌کند؛ Niche Finder با دستور‌های هدف («Pick a hunt») و Fine-tune شروع می‌شود؛ greenlight ایده‌های AI از اسکیمای v10 «Masterplan» پیروی می‌کند. Scraper وقتی YouTube IP را بلاک می‌کند اعلان دسکتاپ می‌فرستد و بلاک را به‌صورت کارت شیشه‌ای نشان می‌دهد. Monetize Checker نرخ RPM را بر اساس مخاطب قیمت می‌گذارد و از برنامه واقعی Partner Program پیروی می‌کند؛ زنگ اعلان‌ها همان لحظه کلیک پر می‌شود؛ تنظیمات در پس‌زمینه ذخیره می‌شوند؛ My channel یک کارت شناسنامه کانال است (Format، Channel، Stage، Voice، Limits)؛ و AI Chat پاسخ‌های طولانی را آرام‌تر رندر می‌کند.
 
 ## مجوز
 

@@ -227,6 +227,8 @@ _SCORE_LABELS = {
     "novelty": "Novelty", "feasibility": "Feasibility",
 }
 _TITLE_MAX = 70
+# v10: the masterplan rule, mobile search / Home cut a title near 60
+_TITLE_MAX_V10 = 60
 
 
 def _rows(value, fields, n=10):
@@ -251,7 +253,8 @@ def _v5(d):
                       "why": str(p.get("why") or "")})
     cp = d.get("core_promise") if isinstance(d.get("core_promise"), dict) else {}
     promise = {k: str(cp.get(k) or "").strip()
-               for k in ("promise", "payoff", "payoff_time", "differentiator")}
+               for k in ("promise", "payoff", "payoff_time", "differentiator",
+                         "stakes", "loop")}
     sg = d.get("style_guide") if isinstance(d.get("style_guide"), dict) else {}
     style = {
         "look": str(sg.get("look") or ""),
@@ -290,7 +293,10 @@ def _v5(d):
         "hasScoreParts": len(parts) == len(_SCORE_LABELS),
         "promise": {"promise": promise["promise"], "payoff": promise["payoff"],
                     "payoffTime": promise["payoff_time"],
-                    "differentiator": promise["differentiator"]},
+                    "differentiator": promise["differentiator"],
+                    # v10: what skipping it costs; how a Short loops
+                    "stakes": promise["stakes"],
+                    "loop": promise["loop"] if d.get("format") != "long" else ""},
         "hasPromise": bool(promise["promise"] or promise["payoff"]),
         "styleGuide": style,
         "hasStyle": bool(style["look"] or style["palette"] or style["typography"]
@@ -334,6 +340,8 @@ def _v6(d):
         "searchQueries": as_list(dc.get("search_queries"))[:6],
         "suggestedBeside": as_list(dc.get("suggested_beside"))[:3],
         "browseTrigger": str(dc.get("browse_trigger") or "").strip(),
+        # v10: said out loud early, so YouTube's transcript indexes them
+        "spokenKeywords": as_list(dc.get("spoken_keywords"))[:6],
     }
     dl = d.get("delivery") if isinstance(d.get("delivery"), dict) else {}
     delivery = {
@@ -362,7 +370,7 @@ def _v6(d):
         "hasWhyNow": bool(why_now["shelfLife"] or why_now["window"] or why_now["why"]),
         "discovery": discovery,
         "hasDiscovery": bool(discovery["searchQueries"] or discovery["suggestedBeside"]
-                             or discovery["browseTrigger"]),
+                             or discovery["browseTrigger"] or discovery["spokenKeywords"]),
         "delivery": delivery,
         "hasDelivery": bool(delivery["tone"] or delivery["pace"] or delivery["energy"]
                             or delivery["emphasis"] or delivery["avoid"]),
@@ -405,6 +413,41 @@ def _v7(d):
     }
 
 
+_SPECTRUM_LABELS = {"Broad": "Broad audience", "Niche": "Niche audience"}
+_LANE_LABELS = {"Browse": "Built for Home / feed", "Search": "Built for search",
+                "Suggested": "Built for Suggested"}
+
+
+def _v10(d):
+    """The v10 "Masterplan" target block, flattened (empty on older records)."""
+    tg = d.get("target") if isinstance(d.get("target"), dict) else {}
+    spec = str(tg.get("spectrum") or "").strip()
+    lane = str(tg.get("lane") or "").strip()
+    target = {
+        "spectrum": spec if spec in _SPECTRUM_LABELS else "",
+        "spectrumLabel": tr(_SPECTRUM_LABELS[spec]) if spec in _SPECTRUM_LABELS else "",
+        "lane": lane if lane in _LANE_LABELS else "",
+        "laneLabel": tr(_LANE_LABELS[lane]) if lane in _LANE_LABELS else "",
+        "both": str(tg.get("both") or "").strip(),
+    }
+    return {"target": target,
+            "hasTarget": bool(target["spectrum"] or target["lane"] or target["both"])}
+
+
+_BYE_WORDS = ("thanks for watching", "thank you for watching", "see you next time",
+              "see you in the next", "bye", "that's it for today", "that's all for today",
+              "ممنون که", "خداحافظ", "تا ویدیوی بعد", "می‌بینمتون")
+_STOP = {"the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "it", "this",
+         "that", "you", "your", "i", "my", "with", "how", "why", "what", "از", "و", "به", "در",
+         "که", "این", "را", "با", "برای"}
+
+
+def _words(t):
+    import re as _re
+    return {w for w in _re.findall(r"[\w\u0600-\u06FF]+", str(t or "").lower())
+            if len(w) > 2 and w not in _STOP}
+
+
 def _audit(d, out):
     """Model-free checks on the blueprint the model wrote — what a producer
     would catch reading it before the shoot. Nothing here asks the model
@@ -429,10 +472,12 @@ def _audit(d, out):
         add(tr("Every beat has words to say"), ok,
             "" if ok else tr("{n} beat(s) are stage directions").format(n=max(0, len(need) - len(spoken))))
     titles = out.get("titles") or []
+    v10 = int(out.get("schemaVersion") or 0) >= 10
+    t_max = _TITLE_MAX_V10 if v10 else _TITLE_MAX
     if titles:
-        long_n = sum(1 for t in titles if len(t) > _TITLE_MAX)
+        long_n = sum(1 for t in titles if len(t) > t_max)
         add(tr("Titles fit on mobile"), long_n == 0,
-            "" if not long_n else tr("{n} over {m} characters").format(n=long_n, m=_TITLE_MAX))
+            "" if not long_n else tr("{n} over {m} characters").format(n=long_n, m=t_max))
     hook = str(out.get("hookPreview") or "")
     if hook:
         words = len(hook.split())
@@ -440,15 +485,42 @@ def _audit(d, out):
         add(tr("Hook fits in the first 3 seconds"), words <= limit,
             "" if words <= limit else tr("{n} words, aim for {m}").format(n=words, m=limit))
     add(tr("Three thumbnails to test"), len(out.get("thumbnails") or []) >= 3)
+    v8 = int(out.get("schemaVersion") or 0) >= 8
+    if v8:
+        n_open = len((out.get("hook") or {}).get("spoken") or [])
+        add(tr("Three opening lines to test"), n_open >= 3,
+            "" if n_open >= 3 else tr("{n} of 3").format(n=n_open))
     if out.get("hasRefs"):
         cited = sum(1 for e in out.get("evidence") or [] if e.get("ref"))
         add(tr("Claims cite your real data"), cited >= 2,
             tr("{n} cited").format(n=cited))
     csv_day = any((c.get("bestDay") or "—") != "—" for c in (out.get("pulse") or {}).get("csv") or [])
-    if out.get("hasPublishPlan"):
+    if out.get("hasPublishPlan") and not v8:
         add(tr("Upload slot from your own data"), csv_day,
             "" if csv_day else tr("general guidance — add a CSV export to ground it"))
     add(tr("Score explained part by part"), out.get("hasScoreParts"))
+    if v10:
+        # title + thumbnail must split the job, not say the same words twice
+        t_words = set()
+        for t in titles:
+            t_words |= _words(t)
+        repeats = 0
+        for th in out.get("thumbnails") or []:
+            w = _words(th.get("text") if isinstance(th, dict) else "")
+            if w and w <= t_words:
+                repeats += 1
+        add(tr("Thumbnail text adds to the title"), repeats == 0,
+            "" if not repeats else tr("{n} thumbnail(s) repeat the title").format(n=repeats))
+        loops = sum(1 for r in out.get("rehooks") or []
+                    if "loop" in str(r.get("device") or "").lower())
+        need = 2 if out.get("isLong") else 1
+        add(tr("Open loops keep them watching"), loops >= need,
+            tr("{n} planted").format(n=loops))
+        line = str(((out.get("endScreen") or {}).get("line")) or "").lower()
+        if line:
+            bye = any(b in line for b in _BYE_WORDS)
+            add(tr("Ends on a bridge, not a goodbye"), not bye,
+                "" if not bye else tr("the last line says goodbye"))
     sections = ["hasScript", "hasShots", "hasCompetitors", "hasAudience", "hasEvidence",
                 "hasRehooks", "hasPublishPlan", "hasRisks", "hasSeriesNext", "hasPromise",
                 "hasStyle", "hasOnScreen", "hasProduction", "hasAbPlan", "hasPlaybook",
@@ -465,6 +537,22 @@ def _audit(d, out):
     if int(out.get("schemaVersion") or 0) >= 7:
         sections = [k for k in sections if k != "hasPlaybook"]
         sections += ["hasPackagingBrief", "hasLite", "hasFunnel"]
+    # v8 "Essentials" (v1.0.5): completeness is measured against the lean
+    # set the greenlight now asks for, not the 40-field v7 dossier.
+    if v8:
+        sections = ["hasScript", "hasRehooks", "hasCta", "hasRisks", "hasSeriesNext",
+                    "hasSeo" if out.get("isLong") else "hasCaptionPack"]
+        if out.get("hasRefs"):
+            sections.append("hasEvidence")
+    # v9 "Universal" (v1.0.6): the make-it pack counts too — what it promises,
+    # what to capture, what to prep and the fast version.
+    if int(out.get("schemaVersion") or 0) >= 9:
+        sections += ["hasPromise", "hasShots", "hasProduction", "hasLite"]
+    # v10 "Masterplan" (v1.0.14): who it targets, how it is found, how title
+    # and thumbnail pair, the audio cues and the end bridge count too.
+    if v10:
+        sections += ["hasTarget", "hasDiscovery", "hasPackagingBrief", "hasStyle",
+                     "hasEndScreen"]
     have = sum(1 for k in sections if out.get(k))
     passed = sum(1 for c in checks if c["ok"])
     return {"checks": checks, "passed": passed, "total": len(checks),
@@ -621,6 +709,8 @@ def idea_for_qml(d):
         "source": d.get("source", ""),
         "audience": d.get("audience", ""),
         "pillar": d.get("pillar", ""),
+        # v9: the format this greenlight was written for ("Cooking", "Vlog" …)
+        "channelType": str(d.get("channel_type") or "").strip(),
         "difficulty": d.get("difficulty", "") or "Medium",
         "difficultyLabel": _difficulty_label(d.get("difficulty")),
         "thumbnails": thumbs,
@@ -634,6 +724,8 @@ def idea_for_qml(d):
         },
         "hook": {
             "focusTag": hook.get("focus_tag", ""),
+            # v8: three opening lines (said, or shown on a no-voice channel)
+            "spoken": as_list(hook.get("spoken")),
             "visual": hook_visual,
             "text": hook_text,
             "reasoning": hook.get("reasoning", ""),
@@ -717,19 +809,23 @@ def idea_for_qml(d):
         # Pre-v3 records lack the script / shots / competitors: a full banner.
         "isLegacy": schema_v < 3,
         # v3 records have everything but the v4 pack: a quiet "upgrade" line.
-        "canUpgrade": 3 <= schema_v < CONTENT_LAB_SCHEMA_VERSION,
+        "canUpgrade": 3 <= schema_v < 7,
         "isFavorite": bool(d.get("is_favorite")),
     }
     out.update(_v5(d))
     out.update(_v6(d))
     out.update(_v7(d))
+    out.update(_v10(d))
     # v7: SEO keywords were the same phrases as discovery.search_queries, so a
     # v7 record no longer asks for them; the SEO section shows the queries.
-    if not out["seo"]["keywords"] and out.get("discovery", {}).get("searchQueries"):
+    # v10 shows Discovery itself, so the SEO block no longer repeats them.
+    if not out["seo"]["keywords"] and schema_v < 10 \
+            and out.get("discovery", {}).get("searchQueries"):
         out["seo"]["keywords"] = list(out["discovery"]["searchQueries"])
     out["hasSeo"] = bool(out["seo"]["keywords"] or out["seo"]["tags"]
                          or out["seo"]["description"])
-    out["titleRows"] = [{"text": t, "chars": len(t), "long": len(t) > _TITLE_MAX} for t in titles]
+    _tmax = _TITLE_MAX_V10 if schema_v >= 10 else _TITLE_MAX
+    out["titleRows"] = [{"text": t, "chars": len(t), "long": len(t) > _tmax} for t in titles]
     # The PDF / clipboard keep reading scriptCopyText; v5 rows also carry what
     # is on screen, so the copy carries it too.
     out["scriptCopyText"] = "\n".join(

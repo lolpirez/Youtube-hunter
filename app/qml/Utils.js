@@ -83,3 +83,18 @@ function ageHue(i, isDark) {
     var set = isDark ? _AGE_DARK : _AGE_LIGHT
     return set[Math.max(0, Math.min(set.length - 1, i))]
 }
+
+
+// ── icon lookups (v1.0.9 perf) ──
+// IconGlyph asks "does this name have an SVG?" for every glyph it builds; the
+// set never changes while the app runs (app.ui.icons discovers it once), so
+// one answer per name is kept here, in the shared pragma-library copy.
+var _iconSvgCache = ({})
+function iconHasSvg(icons, name) {
+    var v = _iconSvgCache[name]
+    if (v === undefined) {
+        v = !!(icons && icons.hasSvg(name))
+        _iconSvgCache[name] = v
+    }
+    return v
+}

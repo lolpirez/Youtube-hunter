@@ -1068,7 +1068,7 @@ Item {
                                 implicitWidth: 204
                                 implicitHeight: 204
                                 readonly property real c: width / 2
-                                readonly property int segs: 48
+                                readonly property int segs: 36
                                 readonly property real segOuter: c - 4
                                 readonly property real segLen: 12
                                 readonly property real innerR: segOuter - segLen - 9
@@ -1109,6 +1109,8 @@ Item {
                                     anchors.fill: parent
                                     antialiasing: true
                                     smooth: true
+                                    layer.enabled: true
+                                    layer.smooth: true
                                     opacity: Dashboard.isRunning ? 1 : 0
                                     visible: opacity > 0.01
                                     Behavior on opacity { NumberAnimation { duration: Tokens.durSlow } }
@@ -1480,32 +1482,88 @@ Item {
                     }
                 }
 
-                // ── transcript pause banner ─────────────────────────────
+                // ── transcript pause banner (v1.0.13: modern glass card) ──
                 // The scrape stops ASKING YouTube for transcripts the moment
                 // YouTube blocks the IP, and waits here: the user either skips
                 // the rest or switches their VPN node and confirms. Showing the
                 // two cases apart matters — "this video has no captions" is
                 // final, a blocked IP is one click away from fixed, and the
                 // old behaviour could not tell them apart.
-                Rectangle {
+                //
+                // v1.0.13: redesigned as a glass card with a shield icon that
+                // pulses, a gentle shake on arrival, and the two action buttons
+                // large enough to tap without aiming — the old flat Rectangle
+                // was easy to miss on a busy page.
+                C.GlassPanel {
+                    id: ipBanner
                     Layout.fillWidth: true
                     visible: Dashboard.transcriptPaused && Dashboard.isRunning
-                    radius: Tokens.radiusMd
-                    color: U.withAlpha(Theme.error, 0.10)
-                    border.width: 1
-                    border.color: U.withAlpha(Theme.error, 0.45)
-                    implicitHeight: trPauseCol.implicitHeight + Tokens.space3 * 2
+                    radius_: Tokens.radiusXl
+                    elevation: 0.7
+                    border.color: U.withAlpha(Theme.error, 0.50)
+                    implicitHeight: trPauseCol.implicitHeight + Tokens.space5 * 2
+
+                    // arrival: shake + fade
+                    onVisibleChanged: if (visible) ipBannerIn.restart()
+                    opacity: 1
+                    transform: Translate { id: ipShift; x: 0 }
+                    SequentialAnimation {
+                        id: ipBannerIn
+                        ParallelAnimation {
+                            NumberAnimation { target: ipBanner; property: "opacity"; from: 0; to: 1; duration: 300; easing.type: Easing.OutCubic }
+                        }
+                        // shake: left-right-settle
+                        SequentialAnimation {
+                            NumberAnimation { target: ipShift; property: "x"; to: -6; duration: 50 }
+                            NumberAnimation { target: ipShift; property: "x"; to: 6; duration: 60 }
+                            NumberAnimation { target: ipShift; property: "x"; to: -4; duration: 50 }
+                            NumberAnimation { target: ipShift; property: "x"; to: 3; duration: 45 }
+                            NumberAnimation { target: ipShift; property: "x"; to: 0; duration: 60; easing.type: Easing.OutCubic }
+                        }
+                    }
+
+                    // error glow at the top edge
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 1
+                        height: 3
+                        radius: 2
+                        color: Theme.error
+                        opacity: 0.65
+                    }
 
                     RowLayout {
                         anchors.fill: parent
-                        anchors.margins: Tokens.space3
-                        spacing: Tokens.space3
-                        C.IconGlyph {
-                            name: "warning"
-                            size: 20
-                            glyphColor: Theme.error
+                        anchors.margins: Tokens.space5
+                        spacing: Tokens.space4
+
+                        // pulsing shield icon
+                        Item {
                             Layout.alignment: Qt.AlignTop
+                            Layout.topMargin: Tokens.space1
+                            implicitWidth: 44; implicitHeight: 44
+                            Rectangle {
+                                id: shieldBg
+                                anchors.centerIn: parent
+                                width: 44; height: 44; radius: 22
+                                color: U.withAlpha(Theme.error, Theme.isDark ? 0.18 : 0.12)
+                                SequentialAnimation on scale {
+                                    running: ipBanner.visible
+                                    loops: Animation.Infinite
+                                    NumberAnimation { from: 1.0; to: 1.12; duration: 800; easing.type: Easing.InOutSine }
+                                    NumberAnimation { from: 1.12; to: 1.0; duration: 800; easing.type: Easing.InOutSine }
+                                }
+                            }
+                            C.IconGlyph {
+                                anchors.centerIn: parent
+                                name: "warning"
+                                size: 24
+                                glyphColor: Theme.error
+                            }
                         }
+
                         ColumnLayout {
                             id: trPauseCol
                             Layout.fillWidth: true
@@ -1514,44 +1572,71 @@ Item {
                             C.AppText {
                                 Layout.fillWidth: true
                                 wrapMode: Text.Wrap
-                                weight: Tokens.weightBold
-                                font.pixelSize: Tokens.fontCaption + 1
-                                color: Theme.text_strong
-                                text: I18n.tr("Transcripts paused — YouTube has stopped answering for this IP.")
+                                weight: Tokens.weightExtraBold
+                                font.pixelSize: Tokens.fontBody
+                                color: Theme.error
+                                text: I18n.tr("IP Blocked — Transcripts Paused")
                             }
                             C.AppText {
                                 Layout.fillWidth: true
                                 wrapMode: Text.Wrap
-                                font.pixelSize: Tokens.fontCaption
+                                font.pixelSize: Tokens.fontCaption + 1
                                 color: Theme.on_surface_var
-                                text: I18n.tr("So far: {f} with transcripts · {b} blocked · {n} without any")
-                                          .replace("{f}", Dashboard.transcriptFound)
-                                          .replace("{b}", Dashboard.transcriptBlocked)
-                                          .replace("{n}", Dashboard.transcriptNone)
+                                text: I18n.tr("YouTube has stopped answering for this IP. Switch the VPN and re-check, or skip transcripts for the rest of this run.")
                             }
+
+                            // stats row
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Layout.topMargin: Tokens.space1
+                                spacing: Tokens.space4
+                                Row {
+                                    spacing: 4
+                                    C.IconGlyph { name: "check_circle"; size: 13; glyphColor: Theme.secondary_container; anchors.verticalCenter: parent.verticalCenter }
+                                    C.AppText { mono: true; font.pixelSize: Tokens.fontCaption; color: Theme.secondary_container; text: Dashboard.transcriptFound; anchors.verticalCenter: parent.verticalCenter }
+                                    C.AppText { font.pixelSize: Tokens.fontCaption; color: Theme.outline; text: I18n.tr("found"); anchors.verticalCenter: parent.verticalCenter }
+                                }
+                                Row {
+                                    spacing: 4
+                                    C.IconGlyph { name: "error"; size: 13; glyphColor: Theme.error; anchors.verticalCenter: parent.verticalCenter }
+                                    C.AppText { mono: true; font.pixelSize: Tokens.fontCaption; color: Theme.error; text: Dashboard.transcriptBlocked; anchors.verticalCenter: parent.verticalCenter }
+                                    C.AppText { font.pixelSize: Tokens.fontCaption; color: Theme.outline; text: I18n.tr("blocked"); anchors.verticalCenter: parent.verticalCenter }
+                                }
+                                Row {
+                                    spacing: 4
+                                    C.IconGlyph { name: "remove"; size: 13; glyphColor: Theme.outline; anchors.verticalCenter: parent.verticalCenter }
+                                    C.AppText { mono: true; font.pixelSize: Tokens.fontCaption; color: Theme.outline; text: Dashboard.transcriptNone; anchors.verticalCenter: parent.verticalCenter }
+                                    C.AppText { font.pixelSize: Tokens.fontCaption; color: Theme.outline; text: I18n.tr("none"); anchors.verticalCenter: parent.verticalCenter }
+                                }
+                            }
+
                             C.AppText {
                                 Layout.fillWidth: true
                                 visible: Dashboard.transcriptIpNote !== ""
                                 wrapMode: Text.Wrap
                                 font.pixelSize: Tokens.fontCaption
+                                weight: Tokens.weightBold
                                 color: Theme.warn
                                 text: Dashboard.transcriptIpNote
                             }
+
+                            // action buttons — large, clear
                             RowLayout {
                                 Layout.fillWidth: true
-                                spacing: Tokens.space2
-                                C.PrimaryButton {
-                                    variant: "ghost"
-                                    text: I18n.tr("Skip transcripts")
-                                    onClicked: Dashboard.transcriptSkipRest()
-                                }
+                                Layout.topMargin: Tokens.space2
+                                spacing: Tokens.space3
                                 C.PrimaryButton {
                                     variant: "primary"
                                     enabled: !Dashboard.transcriptChecking
                                     text: Dashboard.transcriptChecking
                                           ? I18n.tr("Checking IP…")
-                                          : I18n.tr("New IP — re-check")
+                                          : I18n.tr("⟳  New IP — re-check")
                                     onClicked: Dashboard.transcriptRetryIp()
+                                }
+                                C.PrimaryButton {
+                                    variant: "ghost"
+                                    text: I18n.tr("⏭  Skip transcripts")
+                                    onClicked: Dashboard.transcriptSkipRest()
                                 }
                                 Item { Layout.fillWidth: true }
                             }

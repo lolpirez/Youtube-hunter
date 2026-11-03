@@ -265,7 +265,7 @@ Item {
                     width: 6; height: 6; radius: 3
                     color: am.live ? Theme.primary : Theme.secondary_container
                     SequentialAnimation on opacity {
-                        running: am.live && am.visible
+                        running: am.live && am.visible && page.visible && Tokens.appActive
                         loops: Animation.Infinite
                         NumberAnimation { to: 0.3; duration: 600; easing.type: Easing.InOutSine }
                         NumberAnimation { to: 1.0; duration: 600; easing.type: Easing.InOutSine }
@@ -1396,7 +1396,7 @@ Item {
                                     text: modelData + (index === Chat.stepIndex ? "…" : "")
                                     color: index === Chat.stepIndex ? Theme.on_surface : Theme.on_surface_var
                                     SequentialAnimation on opacity {
-                                        running: index === Chat.stepIndex && Chat.phase === "thinking"
+                                        running: index === Chat.stepIndex && Chat.phase === "thinking" && page.visible && Tokens.appActive
                                         loops: Animation.Infinite
                                         NumberAnimation { to: 0.55; duration: 650; easing.type: Easing.InOutSine }
                                         NumberAnimation { to: 1.0; duration: 650; easing.type: Easing.InOutSine }
@@ -1418,7 +1418,7 @@ Item {
                         width: 9; height: 9; radius: 4.5
                         color: Theme.primary
                         SequentialAnimation on opacity {
-                            running: Chat.phase === "streaming"
+                            running: Chat.phase === "streaming" && page.visible && Tokens.appActive
                             loops: Animation.Infinite
                             NumberAnimation { to: 0.3; duration: 500 }
                             NumberAnimation { to: 1.0; duration: 500 }

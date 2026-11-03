@@ -100,6 +100,7 @@ import re as _re
 
 # Arabic-script letters (Persian included) + the presentation-form blocks.
 _FA_CHARS = _re.compile(r"[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]")
+_LATIN_CHARS = _re.compile(r"[A-Za-z]")
 
 
 def install_persian_fallback():
@@ -130,10 +131,16 @@ def is_mostly_persian(text, share=0.25):
     IRANYekanX WEIGHT family on an English UI — the glyph fallback above
     alone only ever yields the Regular face."""
     t = text or ""
+    # v1.0.7: judge from the opening stretch only. QML re-asks on every text
+    # change (a streaming AI Chat answer ~20x a second), and a per-character
+    # Python loop over a long reply cost real frame time; the first ~1.5 K
+    # characters say which script the text is written in just as well.
+    if len(t) > 1500:
+        t = t[:1500]
     if not t or not _FA_CHARS.search(t):
         return False
     fa = len(_FA_CHARS.findall(t))
-    latin = sum(1 for ch in t if ("a" <= ch <= "z") or ("A" <= ch <= "Z"))
+    latin = len(_LATIN_CHARS.findall(t))
     return fa >= share * max(1, fa + latin)
 
 

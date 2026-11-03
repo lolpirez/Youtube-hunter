@@ -350,6 +350,29 @@ def _parse_anthropic_stream(raw_text):
             "stop_reason": stop_reason}
 
 
+def _http_error_message(e):
+    """The provider's own error text from an HTTPError (read once)."""
+    try:
+        raw = e.read().decode("utf-8", "replace")
+    except Exception:
+        return str(e)
+    try:
+        err_body = json.loads(raw)
+        err = err_body.get("error", {}) if isinstance(err_body, dict) else {}
+        if isinstance(err, dict):
+            return err.get("message") or raw[:300] or str(e)
+        return str(err) or raw[:300]
+    except Exception:
+        return raw[:300] or str(e)
+
+
+def _is_output_cap_message(msg):
+    m = str(msg or "").lower().replace(" ", "").replace("_", "")
+    return any(k in m for k in ("maxtokens", "maxcompletiontokens", "maxoutputtokens",
+                                "outputtokens", "maximumtokens", "completiontokens",
+                                "toolarge", "toomanytokens", "contextlength"))
+
+
 def _openai_style_chat(endpoint, api_key, model, prompt, system_instruction,
                         timeout, extra_headers=None, provider_label="AI",
                         proxy=None, max_tokens=2048, stream=False, effort=None):
@@ -415,23 +438,47 @@ def _openai_style_chat(endpoint, api_key, model, prompt, system_instruction,
         return request_with_retry(
             build, timeout, proxy, provider_label=provider_label).decode("utf-8")
 
+    def post_capped(body):
+        """POST, stepping the output cap down when the model rejects it.
+        Many OpenAI-compatible models max out at 4k / 8k output tokens and
+        answer a bigger `max_tokens` with a 400 instead of clamping it."""
+        try:
+            return post(body)
+        except urllib.error.HTTPError as e:
+            msg = _http_error_message(e)
+            e._yh_msg = msg
+            if e.code not in (400, 413, 422) or not _is_output_cap_message(msg):
+                raise
+            last = e
+            for cap in (8192, 4096):
+                cur = int(body.get("max_tokens") or body.get("max_completion_tokens") or 0)
+                if cur and cur <= cap:
+                    continue
+                for k in ("max_tokens", "max_completion_tokens"):
+                    if k in body:
+                        body[k] = cap
+                try:
+                    return post(body)
+                except urllib.error.HTTPError as e2:
+                    e2._yh_msg = _http_error_message(e2)
+                    last = e2
+                    if not _is_output_cap_message(e2._yh_msg):
+                        raise
+            raise last
+
     try:
         body, applied = make_body(True)
         try:
-            raw_text = post(body)
+            raw_text = post_capped(body)
         except urllib.error.HTTPError as e:
             # A router that does not forward `reasoning_effort` answers 400:
             # the effort setting must never be the reason a call fails.
             if not (applied and _effort.should_retry_plain(e.code)):
                 raise
-            raw_text = post(make_body(False)[0])
+            raw_text = post_capped(make_body(False)[0])
         payload = _parse_openai_style_payload(raw_text)
     except urllib.error.HTTPError as e:
-        try:
-            err_body = json.loads(e.read().decode("utf-8"))
-            msg = (err_body.get("error", {}) or {}).get("message", str(e))
-        except Exception:
-            msg = str(e)
+        msg = getattr(e, "_yh_msg", None) or _http_error_message(e)
         raise RuntimeError(
             tr("{provider} API error ({code}): {msg}").format(
                 provider=provider_label, code=e.code, msg=msg)) from e
