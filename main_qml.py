@@ -131,6 +131,18 @@ from app.qml_backend.vm.usage_vm import UsageVM
 from app.qml_backend.web_bridge import WebBridge, bridge_running
 from app.qml_backend.vm.extension_setup_vm import ExtensionSetupVM
 
+# Qt 6.12's QML disk cache has two layers: runtime bytecode (.qmlc) and an
+# ahead-of-time compiled-code path. On this build the AOT path intermittently
+# hands new QML objects an incomplete member table: the log floods with
+# "Cannot find member data" / "Property '_x' is not a function" and bindings
+# silently fall back to defaults (fonts lose their weight). It is timing
+# dependent and hits cold starts hardest, which is why a freshly extracted
+# copy of the app shows it while a long-running install usually does not.
+# Bytecode-only caching keeps the warm start just as fast and removes the
+# faulty path. Must be set before the first QQmlEngine exists; an explicit
+# override in the environment still wins.
+os.environ.setdefault("QML_DISK_CACHE", "qmlc")
+
 
 def main():
     # v1.1.2: keep the UI responsive while a worker thread does heavy Python

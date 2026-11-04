@@ -7,6 +7,17 @@ Version numbering restarted at **1.0.0** for the public release.
 
 ---
 
+## Unreleased (v1.0.7): quiet log on a fresh install
+
+- **"Cannot find member data" / "Property '_x' is not a function" gone.**
+  Qt 6.12's QML disk cache also feeds ahead-of-time compiled units into the
+  engine; on some cold starts those units bound new objects to an incomplete
+  member table — ~1,800 warnings per launch and a few font weights silently
+  falling back to defaults. The runtime cache now stores bytecode only;
+  warm starts stay at ~1.4 s.
+
+---
+
 ## Unreleased (v1.0.6): no more waiting after an IP block, Fast vs Thorough for real
 
 - **Resumes instantly after an IP block.** Transcript workers used to sleep up
