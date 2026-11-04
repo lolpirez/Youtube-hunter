@@ -18,7 +18,13 @@ import "../Utils.js" as U
 //   │            order ▾   format [All|Long|Sh] │ │ receipt: source ·   │
 //   │ 3 Output   file name · save folder        │ │ amount · order · …  │
 //   └───────────────────────────────────────────┘ │ [ Start scraping ]  │
-//   transcript banner · live log                  └─────────────────────┘
+//   results board · live log                      └─────────────────────┘
+//
+// v1.0.4: the "IP blocked" card moved from below the run card (where it was
+// easy to scroll past) to the TOP of the page, right under the header, and
+// the page scrolls up to it the moment a run pauses. The header pill turns
+// red too, the rail's Scraper row gets a pulsing dot and other pages show a
+// floating "Transcripts paused" pill (Main.qml), so a block is never silent.
 //
 // The signature is the gauge: while you set the recipe it previews the SIZE
 // of the run (log scale, 50 → a sliver, 5 000 → a full ring), and the moment
@@ -106,6 +112,18 @@ Item {
         if (m) return "▶ " + m[1]
         return u.replace(/^https?:\/\/(www\.)?/, "").substring(0, 28)
     }
+
+    readonly property bool _blocked: Dashboard.transcriptPaused && Dashboard.isRunning
+
+    function _scrollTop() {
+        const f = scroller.contentItem
+        if (!f || f.contentY === undefined || f.contentY <= 0) return
+        scroller._wheelTarget = 0
+        topAnim.target = f
+        topAnim.from = f.contentY
+        topAnim.restart()
+    }
+    NumberAnimation { id: topAnim; property: "contentY"; to: 0; duration: 460; easing.type: Easing.OutCubic }
 
     Component.onCompleted: Dashboard.refreshQuota()
     onVisibleChanged: if (visible && !Dashboard.isRunning) Dashboard.refreshQuota()
@@ -217,6 +235,7 @@ Item {
     }
 
     C.SmoothScrollView {
+        id: scroller
         anchors.fill: parent
 
         Item {
@@ -248,9 +267,10 @@ Item {
                         radius: Tokens.radiusPill
                         implicitHeight: 34
                         implicitWidth: engRow.implicitWidth + Tokens.space4 * 2
-                        color: Dashboard.isRunning ? U.withAlpha(Theme.primary, 0.12) : Theme.surface
+                        readonly property color _tint: page._blocked ? Theme.error : Theme.primary
+                        color: Dashboard.isRunning ? U.withAlpha(_tint, 0.12) : Theme.surface
                         border.width: 1
-                        border.color: Dashboard.isRunning ? U.withAlpha(Theme.primary, 0.40) : Theme.border
+                        border.color: Dashboard.isRunning ? U.withAlpha(_tint, 0.40) : Theme.border
                         Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durMed } }
                         Row {
                             id: engRow
@@ -263,7 +283,7 @@ Item {
                                     id: engHalo
                                     anchors.centerIn: parent
                                     width: 8; height: 8; radius: 4
-                                    color: Dashboard.isRunning ? Theme.primary : Theme.secondary_container
+                                    color: page._blocked ? Theme.error : Dashboard.isRunning ? Theme.primary : Theme.secondary_container
                                     opacity: 0
                                 }
                                 ParallelAnimation {
@@ -275,20 +295,33 @@ Item {
                                 Rectangle {
                                     anchors.centerIn: parent
                                     width: 8; height: 8; radius: 4
-                                    color: Dashboard.isRunning ? Theme.primary : Theme.secondary_container
+                                    color: page._blocked ? Theme.error : Dashboard.isRunning ? Theme.primary : Theme.secondary_container
                                 }
                             }
                             C.AppText {
                                 anchors.verticalCenter: parent.verticalCenter
-                                text: Dashboard.isRunning
+                                text: page._blocked
+                                      ? I18n.tr("Paused · IP blocked")
+                                      : Dashboard.isRunning
                                       ? I18n.tr("Scraping · {p}%").replace("{p}", Dashboard.progress)
                                       : I18n.tr("Engine ready")
                                 weight: Tokens.weightDemiBold
                                 font.pixelSize: Tokens.fontCaption
-                                color: Dashboard.isRunning ? Theme.primary : Theme.on_surface_var
+                                color: page._blocked ? Theme.error : Dashboard.isRunning ? Theme.primary : Theme.on_surface_var
                             }
                         }
                     }
+                }
+
+                // ── v1.0.4: IP-blocked card + transcript coverage, top of page ──
+                C.TranscriptBlockCard {
+                    id: blockCard
+                    Layout.fillWidth: true
+                    onShownChanged: if (shown) page._scrollTop()
+                }
+                C.TranscriptCoverage {
+                    Layout.fillWidth: true
+                    onFillRequested: page._start()
                 }
 
                 GridLayout {
@@ -1019,6 +1052,40 @@ Item {
                                         }
                                     }
                                 }
+
+                                // v1.0.5/v1.0.6: transcript accuracy. Fast = speed, an IP
+                                // block never stops the run (refused ones are parked and
+                                // retried once). Thorough = completeness: double-checks
+                                // "no captions", re-fetches short ones, waits blocks out
+                                // (auto-resume on a new IP) and retries until complete.
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    visible: page._txOn
+                                    spacing: Tokens.space2
+                                    RowLayout {
+                                        spacing: Tokens.space2
+                                        C.IconGlyph { name: "target"; size: 14; glyphColor: Theme.on_surface_var }
+                                        FieldLabel { text: I18n.tr("Transcript accuracy") }
+                                    }
+                                    C.SlideSegment {
+                                        Layout.fillWidth: true
+                                        equal: true
+                                        cellHeight: 36
+                                        enabledCells: !Dashboard.isRunning
+                                        model: [I18n.tr("Fast"), I18n.tr("Thorough")]
+                                        currentIndex: Settings.transcriptModeIndex
+                                        onActivated: (i) => Settings.applyTranscriptMode(i)
+                                    }
+                                    C.AppText {
+                                        Layout.fillWidth: true
+                                        wrapMode: Text.WordWrap
+                                        font.pixelSize: Tokens.fontCaption
+                                        color: Theme.outline
+                                        text: Settings.transcriptModeIndex === 1
+                                              ? I18n.tr("Every video gets its transcript: re-checks \"no captions\", re-fetches short ones, waits out IP blocks (resumes by itself on a new IP) and keeps retrying until nothing is missing. Saves .txt copies. Slower.")
+                                              : I18n.tr("Quickest. Never stops for an IP block: refused captions are skipped, retried once at the end, and the next run fills them from cache.")
+                                    }
+                                }
                             }
                         }
                     }
@@ -1331,7 +1398,8 @@ Item {
                                     ReceiptRow {
                                         icon: "subject"
                                         label: I18n.tr("Transcripts")
-                                        value: page._txOn ? I18n.tr("On") : I18n.tr("Off")
+                                        value: !page._txOn ? I18n.tr("Off")
+                                               : (Settings.transcriptModeIndex === 1 ? I18n.tr("Thorough") : I18n.tr("Fast"))
                                         valueColor: page._txOn ? Theme.text_strong : Theme.outline
                                     }
                                     ReceiptRow {
@@ -1477,168 +1545,6 @@ Item {
                                     color: Theme.outline
                                     Layout.alignment: Qt.AlignVCenter
                                 }
-                            }
-                        }
-                    }
-                }
-
-                // ── transcript pause banner (v1.0.13: modern glass card) ──
-                // The scrape stops ASKING YouTube for transcripts the moment
-                // YouTube blocks the IP, and waits here: the user either skips
-                // the rest or switches their VPN node and confirms. Showing the
-                // two cases apart matters — "this video has no captions" is
-                // final, a blocked IP is one click away from fixed, and the
-                // old behaviour could not tell them apart.
-                //
-                // v1.0.13: redesigned as a glass card with a shield icon that
-                // pulses, a gentle shake on arrival, and the two action buttons
-                // large enough to tap without aiming — the old flat Rectangle
-                // was easy to miss on a busy page.
-                C.GlassPanel {
-                    id: ipBanner
-                    Layout.fillWidth: true
-                    visible: Dashboard.transcriptPaused && Dashboard.isRunning
-                    radius_: Tokens.radiusXl
-                    elevation: 0.7
-                    border.color: U.withAlpha(Theme.error, 0.50)
-                    implicitHeight: trPauseCol.implicitHeight + Tokens.space5 * 2
-
-                    // arrival: shake + fade
-                    onVisibleChanged: if (visible) ipBannerIn.restart()
-                    opacity: 1
-                    transform: Translate { id: ipShift; x: 0 }
-                    SequentialAnimation {
-                        id: ipBannerIn
-                        ParallelAnimation {
-                            NumberAnimation { target: ipBanner; property: "opacity"; from: 0; to: 1; duration: 300; easing.type: Easing.OutCubic }
-                        }
-                        // shake: left-right-settle
-                        SequentialAnimation {
-                            NumberAnimation { target: ipShift; property: "x"; to: -6; duration: 50 }
-                            NumberAnimation { target: ipShift; property: "x"; to: 6; duration: 60 }
-                            NumberAnimation { target: ipShift; property: "x"; to: -4; duration: 50 }
-                            NumberAnimation { target: ipShift; property: "x"; to: 3; duration: 45 }
-                            NumberAnimation { target: ipShift; property: "x"; to: 0; duration: 60; easing.type: Easing.OutCubic }
-                        }
-                    }
-
-                    // error glow at the top edge
-                    Rectangle {
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 1
-                        height: 3
-                        radius: 2
-                        color: Theme.error
-                        opacity: 0.65
-                    }
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: Tokens.space5
-                        spacing: Tokens.space4
-
-                        // pulsing shield icon
-                        Item {
-                            Layout.alignment: Qt.AlignTop
-                            Layout.topMargin: Tokens.space1
-                            implicitWidth: 44; implicitHeight: 44
-                            Rectangle {
-                                id: shieldBg
-                                anchors.centerIn: parent
-                                width: 44; height: 44; radius: 22
-                                color: U.withAlpha(Theme.error, Theme.isDark ? 0.18 : 0.12)
-                                SequentialAnimation on scale {
-                                    running: ipBanner.visible
-                                    loops: Animation.Infinite
-                                    NumberAnimation { from: 1.0; to: 1.12; duration: 800; easing.type: Easing.InOutSine }
-                                    NumberAnimation { from: 1.12; to: 1.0; duration: 800; easing.type: Easing.InOutSine }
-                                }
-                            }
-                            C.IconGlyph {
-                                anchors.centerIn: parent
-                                name: "warning"
-                                size: 24
-                                glyphColor: Theme.error
-                            }
-                        }
-
-                        ColumnLayout {
-                            id: trPauseCol
-                            Layout.fillWidth: true
-                            spacing: Tokens.space2
-
-                            C.AppText {
-                                Layout.fillWidth: true
-                                wrapMode: Text.Wrap
-                                weight: Tokens.weightExtraBold
-                                font.pixelSize: Tokens.fontBody
-                                color: Theme.error
-                                text: I18n.tr("IP Blocked — Transcripts Paused")
-                            }
-                            C.AppText {
-                                Layout.fillWidth: true
-                                wrapMode: Text.Wrap
-                                font.pixelSize: Tokens.fontCaption + 1
-                                color: Theme.on_surface_var
-                                text: I18n.tr("YouTube has stopped answering for this IP. Switch the VPN and re-check, or skip transcripts for the rest of this run.")
-                            }
-
-                            // stats row
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Layout.topMargin: Tokens.space1
-                                spacing: Tokens.space4
-                                Row {
-                                    spacing: 4
-                                    C.IconGlyph { name: "check_circle"; size: 13; glyphColor: Theme.secondary_container; anchors.verticalCenter: parent.verticalCenter }
-                                    C.AppText { mono: true; font.pixelSize: Tokens.fontCaption; color: Theme.secondary_container; text: Dashboard.transcriptFound; anchors.verticalCenter: parent.verticalCenter }
-                                    C.AppText { font.pixelSize: Tokens.fontCaption; color: Theme.outline; text: I18n.tr("found"); anchors.verticalCenter: parent.verticalCenter }
-                                }
-                                Row {
-                                    spacing: 4
-                                    C.IconGlyph { name: "error"; size: 13; glyphColor: Theme.error; anchors.verticalCenter: parent.verticalCenter }
-                                    C.AppText { mono: true; font.pixelSize: Tokens.fontCaption; color: Theme.error; text: Dashboard.transcriptBlocked; anchors.verticalCenter: parent.verticalCenter }
-                                    C.AppText { font.pixelSize: Tokens.fontCaption; color: Theme.outline; text: I18n.tr("blocked"); anchors.verticalCenter: parent.verticalCenter }
-                                }
-                                Row {
-                                    spacing: 4
-                                    C.IconGlyph { name: "remove"; size: 13; glyphColor: Theme.outline; anchors.verticalCenter: parent.verticalCenter }
-                                    C.AppText { mono: true; font.pixelSize: Tokens.fontCaption; color: Theme.outline; text: Dashboard.transcriptNone; anchors.verticalCenter: parent.verticalCenter }
-                                    C.AppText { font.pixelSize: Tokens.fontCaption; color: Theme.outline; text: I18n.tr("none"); anchors.verticalCenter: parent.verticalCenter }
-                                }
-                            }
-
-                            C.AppText {
-                                Layout.fillWidth: true
-                                visible: Dashboard.transcriptIpNote !== ""
-                                wrapMode: Text.Wrap
-                                font.pixelSize: Tokens.fontCaption
-                                weight: Tokens.weightBold
-                                color: Theme.warn
-                                text: Dashboard.transcriptIpNote
-                            }
-
-                            // action buttons — large, clear
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Layout.topMargin: Tokens.space2
-                                spacing: Tokens.space3
-                                C.PrimaryButton {
-                                    variant: "primary"
-                                    enabled: !Dashboard.transcriptChecking
-                                    text: Dashboard.transcriptChecking
-                                          ? I18n.tr("Checking IP…")
-                                          : I18n.tr("⟳  New IP — re-check")
-                                    onClicked: Dashboard.transcriptRetryIp()
-                                }
-                                C.PrimaryButton {
-                                    variant: "ghost"
-                                    text: I18n.tr("⏭  Skip transcripts")
-                                    onClicked: Dashboard.transcriptSkipRest()
-                                }
-                                Item { Layout.fillWidth: true }
                             }
                         }
                     }

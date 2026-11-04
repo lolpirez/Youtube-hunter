@@ -27,7 +27,7 @@ from PySide6.QtCore import QObject, Property, QTimer, Signal, Slot
 
 from app.config import load_app_config, save_app_config
 from app.constants import FORMAT_EXT, SORT_MAP, SORT_SUFFIX
-from app.core.exports import read_checkpoint_rows, write_export
+from app.core.exports import read_checkpoint_rows, write_export, write_transcript_files
 from app.core.niche.helpers import detect_short
 from app.core.quota import (api_quota_remaining, clean_api_keys,
                             key_quota_remaining, quota_reset_local_str)
@@ -37,9 +37,9 @@ from app.core.scrape_pipeline import (ChunkFeed, KeyRing, MetadataAhead,
                                       iter_upload_pages)
 from app.core.signals import SignalEmitter
 from app.core.transcripts import (fetch_transcript, get_public_ip,
-                                  reset_breaker,
-                                  set_throttle_listener, set_turbo,
-                                  transcript_stats)
+                                  probe_transcript, reset_breaker,
+                                  set_abort_check, set_throttle_listener,
+                                  set_turbo, transcript_stats, tx_epoch)
 from app.qml_backend.desktop_notifier import announce
 from app.core.utils import local_path_from_url, parse_iso8601_duration
 from app.core.youtube_api import (
@@ -62,6 +62,39 @@ _RECENT_MAX = 8
 # scrape look IP-banned when the rest of the channel was fine.
 _TR_BLOCK_CONFIRM = 3
 
+# v1.0.4: what a row's transcript_status says when no transcript came back.
+# "Not Available" stays reserved for "YouTube says this video has no captions"
+# (final). A refusal or a network failure is NOT that, and the export must
+# never let the two look the same again: they used to be indistinguishable, so
+# a 100-video run with 40 refusals read like "40 videos have no subtitles".
+_TX_BLOCKED = "Blocked by YouTube"
+_TX_FAILED = "Failed (retry later)"
+_TX_SKIPPED = "Skipped"
+_TX_UNRESOLVED = (_TX_BLOCKED, _TX_FAILED, _TX_SKIPPED)
+
+# Auto cool-down while paused on a blocked IP: YouTube's caption limit is
+# usually a rate limit that lifts by itself, so a paused run retries on the
+# SAME IP after this many seconds (one step longer each time it is blocked
+# again in the same run). New IP still resumes instantly.
+# v1.0.6: shorter steps, because the pause watcher below usually resumes
+# earlier on its own (new IP detected, or a probe gets an answer).
+_TR_COOLDOWNS = (60, 120, 240, 420)
+# Breather before the fast mode's single second pass (soft limits lift fast).
+_TR_SECOND_PASS_BREATHER = 3.0
+# v1.0.5 Thorough transcript mode, v1.0.6 "until nothing is missing": retry
+# rounds keep going while videos are still refused (a hard block pauses the
+# run and waits instead of burning rounds), with growing breathers. A video
+# that keeps failing for a non-IP reason (PO-token-only track, broken player
+# answer) stops after _TR_THOROUGH_ERROR_TRIES and keeps its honest label.
+_TR_THOROUGH_BREATHERS = (4.0, 15.0, 30.0, 60.0, 90.0, 120.0)
+_TR_THOROUGH_MAX_ROUNDS = 10
+_TR_THOROUGH_ERROR_TRIES = 4
+_TR_THOROUGH_MAX_WORKERS = 3
+# Pause watcher (thorough): how often it looks for a new public IP, and how
+# often it sends one gentle probe to see if YouTube answers again.
+_TR_WATCH_IP_EVERY = 4.0
+_TR_WATCH_PROBE_EVERY = 20.0
+
 
 def _as_int(v):
     try:
@@ -71,6 +104,14 @@ def _as_int(v):
             return int(float(v))
         except (TypeError, ValueError):
             return 0
+
+
+def _duration_secs(iso):
+    """ISO-8601 video length in seconds, 0 when unknown (thorough mode)."""
+    try:
+        return float(parse_iso8601_duration(iso or "") or 0)
+    except Exception:              # noqa: BLE001
+        return 0.0
 
 
 def _result_row(row):
@@ -130,6 +171,10 @@ class DashboardVM(QObject):
     # switch their VPN node and continue. Properties below notify QML.
     transcriptStateChanged = Signal()
     transcriptIpChecked = Signal(bool)  # worker → GUI: (ip differs from the blocked one)
+    _trPausedSig = Signal()             # worker → GUI: a block wave just paused the run
+    _trAutoResume = Signal(str)         # watcher → GUI: the block is over (log line)
+    resultsPatched = Signal("QVariantList")    # [{vid, tx}] second-pass fixes for the board
+    transcriptSummaryChanged = Signal()
 
     # v3.54 — results board, pre-flight and quick picks (Scraper page)
     resultsReset = Signal()
@@ -160,6 +205,9 @@ class DashboardVM(QObject):
         # stuck; an existing config keeps whatever the user chose.
         self._thread_count = int(cfg.get("thread_count", 3) or 3)
         self._transcripts_enabled = bool(cfg.get("transcripts_enabled", True))
+        # v1.0.5: "fast" (default) or "thorough", see transcripts.fetch_transcript
+        self._tr_thorough = (cfg.get("transcript_mode") or "fast") == "thorough"
+        self._tx_secs = {}             # video id -> length in s (thorough check)
 
         self._is_running = False
         self._stop_requested = False
@@ -186,6 +234,9 @@ class DashboardVM(QObject):
         self._emit.popup_signal.connect(self.popup)
         self._emit.done_popup_signal.connect(self.donePopup)
         self.transcriptIpChecked.connect(self._on_ip_checked)
+        self._trPausedSig.connect(self._on_tr_paused)
+        self._trAutoResume.connect(self._on_auto_resume)
+        self.resultsPatched.connect(self._on_results_patched)
 
         # ── transcript gate (pause on a blocked IP) ───────────────────────
         # Open = fetch transcripts freely. YouTube rate-limits / IP-blocks the
@@ -208,6 +259,19 @@ class DashboardVM(QObject):
         self._tr_skipped = 0
         self._tr_block_streak = 0      # consecutive refusals, see _TR_BLOCK_CONFIRM
         self._tr_ip_note_key = ""      # stored untranslated, like _status_key
+        # v1.0.4
+        self._tr_waves = 0             # block waves this run (cool-down step)
+        self._tr_cooldown = 0          # seconds until the same-IP auto-retry
+        self._tr_recovering = False    # second pass over refused videos
+        self._tr_summary = {}          # last run's coverage (post-run strip)
+        # v1.0.6
+        self._tr_confirm = _TR_BLOCK_CONFIRM   # refusals in a row that confirm a block
+        self._tr_fast_noted = False    # fast mode: block wave already logged
+        self._tr_probe_vid = ""        # the video a thorough pause probes with
+        self._tr_err_tries = {}        # vid -> "error" answers (thorough rounds)
+        self._tr_cd_timer = QTimer(self)
+        self._tr_cd_timer.setInterval(1000)
+        self._tr_cd_timer.timeout.connect(self._on_cooldown_tick)
 
         # ── v3.54 results board ───────────────────────────────────────────
         # Every kept row is streamed to the page while the run is going, in
@@ -287,10 +351,38 @@ class DashboardVM(QObject):
     def transcriptIpNote(self):
         return tr(self._tr_ip_note_key) if self._tr_ip_note_key else ""
 
+    @Property(int, notify=transcriptStateChanged)
+    def transcriptSkipped(self):
+        return self._tr_skipped
+
+    @Property(str, notify=transcriptStateChanged)
+    def transcriptBlockedIp(self):
+        return self._tr_blocked_ip
+
+    @Property(int, notify=transcriptStateChanged)
+    def transcriptCooldown(self):
+        """Seconds until the paused run retries on the same IP (0 = not armed)."""
+        return self._tr_cooldown
+
+    @Property(bool, notify=transcriptStateChanged)
+    def transcriptRecovering(self):
+        """True during the second pass over videos YouTube refused earlier."""
+        return self._tr_recovering
+
+    @Property("QVariantMap", notify=transcriptSummaryChanged)
+    def transcriptSummary(self):
+        """Coverage of the LAST finished run: {total, found, none, missing,
+        skipped}. Empty while running / before the first run."""
+        return dict(self._tr_summary)
+
     @Slot()
     def transcriptSkipRest(self):
-        """"Keep going WITHOUT transcripts" — releases the paused workers and
-        short-circuits every later fetch for this run."""
+        """"Finish without transcripts": releases the paused workers and
+        short-circuits every later fetch for this run. The rows keep an honest
+        label in the export (Blocked by YouTube / Skipped), never "Not
+        Available"."""
+        self._tr_cd_timer.stop()
+        self._tr_cooldown = 0
         self._tr_skip_rest = True
         self._tr_paused = False
         self._tr_ip_note_key = ""
@@ -311,6 +403,100 @@ class DashboardVM(QObject):
         self.transcriptStateChanged.emit()
         threading.Thread(target=self._ip_check_worker, daemon=True).start()
 
+    @Slot()
+    def transcriptRetryNow(self):
+        """Skip the rest of the cool-down and probe the SAME IP now."""
+        if not self._tr_paused or self._tr_checking:
+            return
+        self._resume_transcripts("⏱  " + tr("Retrying on the same IP now."))
+
+    def _resume_transcripts(self, log_line):
+        self._tr_cd_timer.stop()
+        self._tr_cooldown = 0
+        reset_breaker()            # fresh pace + give the fast path another go
+        self._tr_paused = False
+        self._tr_ip_note_key = ""
+        self._reset_block_streak()
+        self._tr_gate.set()
+        if log_line:
+            self._emit.log_signal.emit(log_line)
+        self.transcriptStateChanged.emit()
+
+    @Slot()
+    def _on_tr_paused(self):
+        """GUI thread: arm the same-IP auto-retry for this block wave."""
+        if not self._tr_paused or not self._is_running:
+            return
+        step = min(max(self._tr_waves - 1, 0), len(_TR_COOLDOWNS) - 1)
+        self._tr_cooldown = _TR_COOLDOWNS[step]
+        self._tr_cd_timer.start()
+        self.transcriptStateChanged.emit()
+        threading.Thread(target=self._tr_watch, args=(self._tr_waves,),
+                         daemon=True, name="tx-watch").start()
+
+    def _tr_watch(self, wave):
+        """v1.0.6, worker thread: while a Thorough run is paused on a block,
+        notice BY ITSELF that it is over, so nobody has to press a button.
+
+          * every few seconds: the public IP. Switching the VPN node resumes
+            within ~4 s (it used to need "Check new IP", and before that a
+            sequential 3-endpoint lookup of up to ~18 s).
+          * every ~20 s: one gentle, unpaced probe with the video that hit the
+            block. An answer (text or "no captions") means the limit lifted.
+        """
+        if not self._tr_blocked_ip:
+            self._tr_blocked_ip = get_public_ip() or ""
+            self.transcriptStateChanged.emit()
+        last_ip = last_probe = time.monotonic()
+
+        def _still_paused():
+            return (self._tr_paused and self._is_running and not self._stop_requested
+                    and not self._tr_skip_rest and self._tr_waves == wave)
+
+        while _still_paused():
+            time.sleep(0.5)
+            if not _still_paused() or self._tr_checking:
+                continue
+            now = time.monotonic()
+            if now - last_ip >= _TR_WATCH_IP_EVERY:
+                last_ip = now
+                ip = get_public_ip(timeout=4) or ""
+                if not self._tr_blocked_ip and ip:
+                    self._tr_blocked_ip = ip
+                    self.transcriptStateChanged.emit()
+                elif ip and ip != self._tr_blocked_ip and _still_paused():
+                    self._trAutoResume.emit(
+                        "🌐  " + tr("New IP detected ({ip}): resuming transcripts.").format(ip=ip))
+                    return
+            if now - last_probe >= _TR_WATCH_PROBE_EVERY and self._tr_probe_vid:
+                last_probe = time.monotonic()
+                res = probe_transcript(self._tr_probe_vid)
+                if res in ("ok", "none") and _still_paused():
+                    self._trAutoResume.emit(
+                        "✅  " + tr("YouTube is answering again: resuming transcripts."))
+                    return
+
+    @Slot(str)
+    def _on_auto_resume(self, line):
+        if self._tr_paused and self._is_running and not self._tr_checking:
+            self._resume_transcripts(line)
+
+    @Slot()
+    def _on_cooldown_tick(self):
+        if not self._tr_paused or not self._is_running:
+            self._tr_cd_timer.stop()
+            self._tr_cooldown = 0
+            self.transcriptStateChanged.emit()
+            return
+        if self._tr_checking:
+            return                 # an IP check is deciding right now
+        self._tr_cooldown = max(0, self._tr_cooldown - 1)
+        if self._tr_cooldown == 0:
+            self._resume_transcripts(
+                "⏱  " + tr("Cool-down over: retrying transcripts on the same IP."))
+            return
+        self.transcriptStateChanged.emit()
+
     def _ip_check_worker(self):
         ip = ""
         try:
@@ -324,16 +510,11 @@ class DashboardVM(QObject):
     def _on_ip_checked(self, changed):
         self._tr_checking = False
         if changed:
-            reset_breaker()        # new IP: give the fast library path another go
-            self._tr_paused = False
-            self._tr_ip_note_key = ""
-            self._reset_block_streak()
-            self._tr_gate.set()
-            self._emit.log_signal.emit("🌐  " + tr("IP changed — resuming transcripts."))
-        else:
-            self._tr_ip_note_key = ("Still the same IP — switch the VPN node, "
-                                    "then press New IP again.")
-            self._emit.log_signal.emit("⚠️  " + tr(self._tr_ip_note_key))
+            self._resume_transcripts("🌐  " + tr("IP changed — resuming transcripts."))
+            return
+        self._tr_ip_note_key = ("Still the same IP — switch the VPN node, "
+                                "then press Check new IP again.")
+        self._emit.log_signal.emit("⚠️  " + tr(self._tr_ip_note_key))
         self.transcriptStateChanged.emit()
 
     def _pause_transcripts(self, vid):
@@ -344,87 +525,144 @@ class DashboardVM(QObject):
             if self._tr_paused:
                 return
             self._tr_paused = True
+            self._tr_waves += 1
             self._tr_gate.clear()
-        self._tr_blocked_ip = get_public_ip() or ""
+            self._tr_probe_vid = vid
+            self._tr_blocked_ip = ""       # the watcher looks it up (in parallel)
+        # Tell the UI FIRST: the IP lookup below can take up to ~18 s through a
+        # slow proxy, and the card used to wait for it before appearing.
+        self.transcriptStateChanged.emit()
+        self._trPausedSig.emit()
         self._emit.log_signal.emit("─" * 72)
         self._emit.log_signal.emit(
-            "📝  " + tr("Transcripts so far: {found} found · {none} without.").format(
-                found=self._tr_found,
-                none=self._tr_none + self._tr_blocked + self._tr_skipped))
+            "📝  " + tr("Transcripts so far: {found} found · {none} without captions · "
+                       "{wait} waiting for a retry.").format(
+                found=self._tr_found, none=self._tr_none, wait=self._tr_blocked))
         self._emit.log_signal.emit(
             "🚫  " + tr("YouTube has stopped answering transcripts for this IP (at {vid}).")
             .format(vid=vid))
         self._emit.log_signal.emit(
-            "    " + tr("Switch the VPN node and press New IP, or skip the rest without transcripts."))
-        self.transcriptStateChanged.emit()
+            "    " + tr("Switch the VPN node (detected automatically within seconds), "
+                       "or wait: the run checks by itself and resumes the moment "
+                       "YouTube answers again."))
         # v1.0.13: desktop notification so the user sees the block even when
         # outside the app (another tab, minimised, lock screen).
         announce("error",
                  tr("Transcripts paused — IP blocked"),
-                 tr("YouTube has stopped answering transcripts. "
-                    "Switch the VPN node and press New IP, or skip."),
+                 tr("YouTube has stopped answering transcripts. Switch the VPN "
+                    "node and press Check new IP, or let it retry after a cool-down."),
                  page=0, icon="warning", source=tr("Scraper"),
                  group="ip-block", force=True)
+        self.transcriptStateChanged.emit()
 
-    def _bump(self, which):
+    def _bump(self, which, delta=1):
         with self._tr_lock:
-            setattr(self, "_tr_" + which, getattr(self, "_tr_" + which) + 1)
+            key = "_tr_" + which
+            setattr(self, key, max(0, getattr(self, key) + delta))
 
     def _reset_block_streak(self):
         with self._tr_lock:
             self._tr_block_streak = 0
 
-    def _transcript_of(self, vid):
+    def _await_gate(self):
+        """Hold a worker while the run is paused (Stop-aware). v1.0.6: called
+        BEFORE every fetch too, so a paused run sends no doomed requests and
+        nothing is mid-flight on the old IP when the gate opens again."""
+        while self._tr_paused and not self._stop_requested and not self._tr_skip_rest:
+            if self._tr_gate.wait(0.25):
+                break
+
+    def _note_fast_block(self):
+        """Fast mode met a block wave: say so once, do NOT stop."""
+        with self._tr_lock:
+            if self._tr_fast_noted:
+                return
+            self._tr_fast_noted = True
+        self._emit.log_signal.emit(
+            "⚡  " + tr("Fast mode: YouTube is refusing captions on this IP right now. "
+                       "Not stopping: videos keep coming, refused captions are skipped "
+                       "and retried at the end. Thorough mode waits a block out."))
+
+    def _transcript_of(self, vid, retry=False):
         """fetch_transcript + the gate. Runs on scrape worker threads.
 
-        Returns ("Skipped", "N/A", "") for rows the user chose to skip, so the
-        export can tell them apart from videos that were actually attempted."""
+        Returns (status, text, kind). Every video lands in exactly ONE counter:
+          found    — transcript text came back
+          none     — YouTube says the video has no captions (final)
+          blocked  — refused / failed: waiting for the second pass
+          skipped  — the user chose "Finish without transcripts"
+        `retry=True` is the second pass: the video already sits in `blocked`
+        and moves out of it whatever the answer is now.
+
+        v1.0.6: Fast never pauses (a confirmed block is logged once and the
+        video parked); Thorough pauses and waits. A refusal whose fetch began
+        before the IP changed / the run resumed is retried, not counted.
+        """
+        if retry:
+            self._bump("blocked", -1)
+        self._await_gate()
         if self._tr_skip_rest:
             self._bump("skipped")
             self.transcriptStateChanged.emit()
-            return ("Skipped", "N/A", "")
-        status, text, err = fetch_transcript(vid)
-        if status.startswith("Available"):
-            self._reset_block_streak()
-            self._bump("found")
-            self.transcriptStateChanged.emit()
-            return status, text, err
-        if err == "blocked" and not self._tr_skip_rest:
-            self._bump("blocked")
-            with self._tr_lock:
-                self._tr_block_streak += 1
-                confirmed = self._tr_block_streak >= _TR_BLOCK_CONFIRM
-            self.transcriptStateChanged.emit()
-            if not confirmed:
-                # This video was refused by every path, but the next one may
-                # answer: only a run of refusals is an IP-level block.
-                return ("Not Available", "N/A", "blocked")
-            self._pause_transcripts(vid)
-            # Hold this worker (and the rest of the wave) until the user
-            # decides. Polled so Stop still works while paused.
-            while self._tr_paused and not self._stop_requested:
-                if self._tr_gate.wait(0.25):
-                    break
-            if self._tr_skip_rest:
-                self._bump("skipped")
-                self.transcriptStateChanged.emit()
-                return ("Skipped", "N/A", "")
-            if self._stop_requested:
-                self.transcriptStateChanged.emit()
-                return ("Not Available", "N/A", "blocked")
-            # Resumed on a NEW IP: retry this very video, then carry on.
-            status, text, err = fetch_transcript(vid)
+            return (_TX_SKIPPED, "N/A", "skipped")
+        thorough = self._tr_thorough
+        secs = self._tx_secs.get(vid, 0)
+        ep = tx_epoch()
+        status, text, err = fetch_transcript(vid, thorough=thorough, expect_secs=secs)
+        resumed_once = False
+        while True:
+            if status.startswith("Available") and not (text and text != "N/A"):
+                # "found" with no text must never reach the export as found
+                status, err = "Not Available", "error"
             if status.startswith("Available"):
                 self._reset_block_streak()
+                self._tr_fast_noted = False
                 self._bump("found")
                 self.transcriptStateChanged.emit()
-                return status, text, err
-        if err != "blocked":
-            # A real answer (captions or "none") proves the endpoint is alive.
+                return status, text, ""
+            if err == "blocked":
+                if (tx_epoch() != ep and not resumed_once and not self._tr_skip_rest
+                        and not self._stop_requested):
+                    # refused on the OLD IP / before the resume: ask again now
+                    resumed_once = True
+                    self._await_gate()
+                    ep = tx_epoch()
+                    status, text, err = fetch_transcript(
+                        vid, thorough=thorough, expect_secs=secs)
+                    continue
+                with self._tr_lock:
+                    self._tr_block_streak += 1
+                    confirmed = self._tr_block_streak >= self._tr_confirm
+                if confirmed and not thorough:
+                    self._note_fast_block()
+                elif confirmed and not resumed_once and not self._tr_skip_rest \
+                        and not self._stop_requested:
+                    self._pause_transcripts(vid)
+                    # Hold this worker (and the rest of the wave) until the
+                    # watcher, the user or the cool-down resumes the run.
+                    self._await_gate()
+                    if not self._tr_skip_rest and not self._stop_requested:
+                        # Resumed (new IP / YouTube answers): retry this video.
+                        resumed_once = True
+                        ep = tx_epoch()
+                        status, text, err = fetch_transcript(
+                            vid, thorough=thorough, expect_secs=secs)
+                        continue
+                # Refused, and not resolved now: parked for the second pass.
+                self._bump("blocked")
+                self.transcriptStateChanged.emit()
+                return (_TX_BLOCKED, "N/A", "blocked")
+            if err == "error":
+                # A network / player failure says nothing about the IP either
+                # way: no streak change, parked for the second pass.
+                self._bump("blocked")
+                self.transcriptStateChanged.emit()
+                return (_TX_FAILED, "N/A", "error")
+            # A real answer ("no captions") proves the endpoint is alive.
             self._reset_block_streak()
-        self._bump("none")
-        self.transcriptStateChanged.emit()
-        return status, text, err
+            self._bump("none")
+            self.transcriptStateChanged.emit()
+            return ("Not Available", "N/A", "none")
 
     # ── form properties ────────────────────────────────────────────────
     @Property(str, notify=saveFolderChanged)
@@ -576,6 +814,22 @@ class DashboardVM(QObject):
         self._pending.append(compact)
         if not self._flush_timer.isActive():
             self._flush_timer.start()
+
+    @Slot("QVariantList")
+    def _on_results_patched(self, patches):
+        """Second-pass fixes: keep the compact rows (what a re-opened page
+        reads back through results()) in step with the board."""
+        want = {}
+        for p in patches or []:
+            try:
+                want[str(p.get("vid") or "")] = bool(p.get("tx"))
+            except AttributeError:
+                continue
+        if not want:
+            return
+        for r in self._results:
+            if r.get("vid") in want:
+                r["tx"] = want[r["vid"]]
 
     @Slot()
     def _flush_results(self):
@@ -743,6 +997,11 @@ class DashboardVM(QObject):
     def _on_finished(self):
         self._is_running = False
         self._stop_requested = False
+        self._tr_cd_timer.stop()
+        self._tr_cooldown = 0
+        self._tr_paused = False
+        self._tr_recovering = False
+        self.transcriptStateChanged.emit()
         self._scrape_thread = None
         self._flush_timer.stop()
         self._flush_results()
@@ -774,6 +1033,7 @@ class DashboardVM(QObject):
         except (TypeError, ValueError):
             pass
         self._transcripts_enabled = bool(cfg.get("transcripts_enabled", self._transcripts_enabled))
+        self._tr_thorough = (cfg.get("transcript_mode") or "fast") == "thorough"
         # v3.54: the export format used to be read once at startup, so a
         # format picked in Settings only applied after a restart.
         fmt = cfg.get("export_format", self._export_format) or "csv"
@@ -907,8 +1167,19 @@ class DashboardVM(QObject):
         self._tr_checking = False
         self._tr_blocked_ip = ""
         self._tr_found = self._tr_blocked = self._tr_none = self._tr_skipped = 0
+        self._tx_secs = {}
         self._tr_block_streak = 0
+        self._tr_confirm = _TR_BLOCK_CONFIRM
+        self._tr_fast_noted = False
+        self._tr_probe_vid = ""
+        self._tr_err_tries = {}
         self._tr_ip_note_key = ""
+        self._tr_waves = 0
+        self._tr_cooldown = 0
+        self._tr_recovering = False
+        self._tr_cd_timer.stop()
+        self._tr_summary = {}
+        self.transcriptSummaryChanged.emit()
         self.transcriptStateChanged.emit()
         # fresh results board
         self._flush_timer.stop()
@@ -1068,6 +1339,7 @@ class DashboardVM(QObject):
         # transcripts and shut the pool down on Stop, quota or error.
         tx_pool = None
         tx_queue = deque()
+        retry_rows = []          # (vid, row) refused / failed: second pass
         meta = None
         try:
             emit.log_signal.emit("═" * 72)
@@ -1177,6 +1449,17 @@ class DashboardVM(QObject):
                 for _r in resume_rows:
                     if isinstance(_r, dict) and _r.get("video_id"):
                         self._bus.row.emit((_result_row(_r), _r))
+                        # a resumed run fills the gaps an earlier block left
+                        self._tx_secs[_r["video_id"]] = _duration_secs(_r.get("duration"))
+                        _st = str(_r.get("transcript_status") or "")
+                        _tx = _r.get("transcript")
+                        if (_st in _TX_UNRESOLVED
+                                or (_st.startswith("Available") and not (_tx and _tx != "N/A"))
+                                or (self._tr_thorough and self._transcripts_enabled
+                                    and _st == "Not Available")):
+                            # thorough also re-checks restored "no captions"
+                            retry_rows.append((_r["video_id"], _r))
+                            self._bump("blocked")
             feed = ChunkFeed(pages, skip=done_ids)
             # search + format filter: every extra id page costs 100 units, so
             # nothing is fetched ahead there.
@@ -1232,9 +1515,13 @@ class DashboardVM(QObject):
             # the previous page's transcripts are still downloading. Results are
             # still emitted strictly in queue order, so the export order is
             # unchanged.
-            tx_prof = set_turbo(self._thread_count)
+            thorough = transcripts_on and self._tr_thorough
+            tx_prof = set_turbo(self._thread_count, thorough=thorough)
             reset_breaker()
+            set_abort_check(lambda: self._stop_requested)
             tx_workers = tx_prof["workers"] if transcripts_on else 0
+            if thorough:
+                tx_workers = min(tx_workers, _TR_THOROUGH_MAX_WORKERS)
             tx_pool = (ThreadPoolExecutor(max_workers=tx_workers, thread_name_prefix="tx")
                        if tx_workers > 1 else None)
             tx_queue.clear()                    # (vid, row, future), submit order
@@ -1244,7 +1531,16 @@ class DashboardVM(QObject):
                     ("⚡  " if tx_prof["turbo"] else "📝  ")
                     + tr("Transcripts: {n} in parallel{t}").format(
                         n=max(1, tx_workers),
-                        t=("  ·  TURBO" if tx_prof["turbo"] else "")))
+                        t=("  ·  TURBO" if tx_prof["turbo"] and not thorough else "")))
+                emit.log_signal.emit(
+                    ("🎯  " + tr("Transcript mode: Thorough. Every video gets its transcript: "
+                                "\"no captions\" is double-checked, short ones are re-fetched, "
+                                "IP blocks are waited out (resumes by itself on a new IP) and "
+                                "refused ones are retried until nothing is missing."))
+                    if thorough else
+                    ("⚡  " + tr("Transcript mode: Fast. Never stops for an IP block: refused "
+                                "captions are skipped, retried once at the end, and the next "
+                                "run fills the gaps from cache.")))
                 set_throttle_listener(
                     lambda gap: emit.log_signal.emit(
                         "⏳  " + tr("YouTube is limiting caption downloads — pacing "
@@ -1279,9 +1575,11 @@ class DashboardVM(QObject):
                     try:
                         status, text, _err = fut.result()
                     except Exception:
-                        status, text = "Not Available", "N/A"
+                        status, text, _err = _TX_FAILED, "N/A", "error"
                     row["transcript_status"] = status
                     row["transcript"] = text
+                    if _err in ("blocked", "error"):
+                        retry_rows.append((vid, row))
                     _emit_video_result(vid, row)
 
             status_gate = Throttle(0.25)   # status line: ≤ 4 updates / s
@@ -1308,8 +1606,12 @@ class DashboardVM(QObject):
                         status_tag = tr("✅ Metadata Saved")
                     elif ts.startswith("Available"):
                         status_tag = tr("✅ Transcript Found")
+                    elif ts in (_TX_BLOCKED, _TX_FAILED):
+                        status_tag = tr("⏳ Transcript refused — queued for a retry")
+                    elif ts == _TX_SKIPPED:
+                        status_tag = tr("⏭ Transcript skipped (Video Saved)")
                     else:
-                        status_tag = tr("⚠️ No Transcript (Video Saved)")
+                        status_tag = tr("➖ No captions on YouTube (Video Saved)")
                     emit.log_signal.emit(f"   📹 {prefix}  {status_tag}")
                 else:
                     failed += 1
@@ -1365,6 +1667,8 @@ class DashboardVM(QObject):
                                                  "videos": channel_videos})
                             break
                 rows_by_id = {vid: _row_from_item(vid, items[vid]) for vid in chunk if vid in items}
+                for _vid, _row in rows_by_id.items():
+                    self._tx_secs[_vid] = _duration_secs(_row.get("duration"))
                 # Newest-first uploads + a date window: a page where EVERY video
                 # is older than the window means the rest of the channel is too.
                 if (cutoff and sort_order == "date" and not use_search and rows_by_id
@@ -1404,6 +1708,8 @@ class DashboardVM(QObject):
                             status, text, _err = self._transcript_of(vid)
                             row["transcript_status"] = status
                             row["transcript"] = text
+                            if _err in ("blocked", "error"):
+                                retry_rows.append((vid, row))
                             _emit_video_result(vid, row)
                     else:
                         for vid in available_vids:
@@ -1441,6 +1747,36 @@ class DashboardVM(QObject):
 
             _drain(keep=0)
             meta.close()
+
+            # ── v1.0.4 second pass: nothing refused is silently dropped ──
+            # Refusals that never formed a 3-in-a-row wave (a throttled IP lets
+            # some captions through and refuses others), the 1-2 videos ahead of
+            # every confirmed wave, and network failures used to stay
+            # "Not Available" for good. They are all retried here, through the
+            # same gate: a hard block pauses the run again and shows the card.
+            if transcripts_on:
+                # safety net: a row marked found must carry text
+                _seen = {id(r) for _v, r in retry_rows}
+                for _row in data:
+                    _tx = _row.get("transcript")
+                    if (str(_row.get("transcript_status") or "").startswith("Available")
+                            and not (_tx and _tx != "N/A") and id(_row) not in _seen):
+                        _row["transcript_status"], _row["transcript"] = _TX_FAILED, "N/A"
+                        retry_rows.append((_row.get("video_id"), _row))
+                        self._bump("found", -1)
+                        self._bump("blocked")
+            if thorough:
+                breathers = [_TR_THOROUGH_BREATHERS[min(i, len(_TR_THOROUGH_BREATHERS) - 1)]
+                             for i in range(_TR_THOROUGH_MAX_ROUNDS)]
+            else:
+                breathers = [_TR_SECOND_PASS_BREATHER]
+            for _round, _breather in enumerate(breathers, start=1):
+                if not (transcripts_on and retry_rows and not self._tr_skip_rest
+                        and not self._stop_requested):
+                    break
+                self._second_pass(retry_rows, tx_pool, emit, breather=_breather,
+                                  round_no=_round, rounds=0 if thorough else 1)
+
             if tx_pool is not None:
                 tx_pool.shutdown(wait=False)
                 tx_pool = None
@@ -1452,8 +1788,17 @@ class DashboardVM(QObject):
                                  if d.get("transcript_status", "").startswith("Available"))
             emit.log_signal.emit("  " + tr("✅ Success: {ok}   ❌ Failed: {fail}   📝 Transcripts: {tc}/{total}").format(
                 ok=len(data), fail=failed, tc=transcript_count, total=max(len(data), 1)))
-            if self._tr_skipped:
-                emit.log_signal.emit("  ⏭  " + tr("Transcripts skipped: {n}").format(n=self._tr_skipped))
+            cov = self._coverage(data) if transcripts_on else {}
+            if cov:
+                emit.log_signal.emit("  " + tr("📝 Coverage: {f} with transcript · {n} have no captions "
+                                               "· {m} refused by YouTube · {s} skipped").format(
+                    f=cov["found"], n=cov["none"], m=cov["missing"], s=cov["skipped"]))
+                if cov["missing"] or cov["skipped"]:
+                    emit.log_signal.emit("  ↻  " + tr("Run the same scrape again to fill the gaps: "
+                                                     "saved transcripts come from the cache instantly, "
+                                                     "only the missing ones are fetched."))
+                self._tr_summary = cov
+                self.transcriptSummaryChanged.emit()
             if transcripts_on:
                 tr_stats = transcript_stats()
                 if tr_stats["cache"] or tr_stats["live"]:
@@ -1475,6 +1820,23 @@ class DashboardVM(QObject):
                 write_export(data, out_path, self._export_format)
                 kb = os.path.getsize(out_path) / 1024
                 emit.log_signal.emit("✅  " + tr("Saved  |  {kb} KB  |  {n} rows").format(kb=f"{kb:.1f}", n=len(data)))
+                if self._export_format in ("csv", "xlsx") and any(
+                        isinstance(d.get("transcript"), str) and len(d["transcript"]) > 32000
+                        for d in data):
+                    emit.log_signal.emit("   ℹ️  " + tr(
+                        "Long transcripts continue in the transcript_part2, "
+                        "transcript_part3 … columns (Excel holds 32,767 characters "
+                        "per cell). Nothing was cut."))
+                if thorough:
+                    try:
+                        tx_dir = os.path.splitext(out_path)[0] + "_transcripts"
+                        n_txt = write_transcript_files(data, tx_dir)
+                        if n_txt:
+                            emit.log_signal.emit("   📝  " + tr(
+                                "{n} transcripts also saved as .txt files → {p}").format(
+                                    n=n_txt, p=tx_dir))
+                    except Exception as _exc:     # noqa: BLE001 — extra only
+                        log_crash("transcript txt export: " + str(_exc))
                 try:
                     ck = self._checkpoint_path(sort_order)
                     if os.path.exists(ck):
@@ -1488,11 +1850,14 @@ class DashboardVM(QObject):
                 emit.log_signal.emit("\n" + "═" * 72)
                 emit.log_signal.emit("  🎉  " + tr("Scraping completed successfully!"))
                 emit.log_signal.emit("═" * 72)
-                emit.done_popup_signal.emit(
-                    tr("Done!"),
-                    tr("Scraped {n} videos ({suffix})  ·  Transcripts: {tc}/{n}").format(
-                        n=len(data), suffix=suffix, tc=transcript_count),
-                    out_path)
+                done_msg = tr("Scraped {n} videos ({suffix})  ·  Transcripts: {tc}/{n}").format(
+                    n=len(data), suffix=suffix, tc=transcript_count)
+                gaps = (cov.get("missing", 0) + cov.get("skipped", 0)) if cov else 0
+                if gaps:
+                    done_msg += "\n\n" + tr("{m} transcripts are missing because YouTube refused "
+                                             "them (marked \"Blocked by YouTube\" / \"Skipped\" in "
+                                             "the file). Run the same scrape again to fill them in.").format(m=gaps)
+                emit.done_popup_signal.emit(tr("Done!"), done_msg, out_path)
             else:
                 emit.log_signal.emit("❌  " + tr("No data to save."))
                 emit.popup_signal.emit(tr("Error"), tr("No data was extracted."), "error")
@@ -1505,7 +1870,7 @@ class DashboardVM(QObject):
                 try:
                     _st, _tx, _e = _f.result()
                 except Exception:
-                    _st, _tx = "Not Available", "N/A"
+                    _st, _tx = _TX_FAILED, "N/A"
                 _row["transcript_status"], _row["transcript"] = _st, _tx
                 data.append(_row)
             if data:
@@ -1527,7 +1892,7 @@ class DashboardVM(QObject):
                 try:
                     _st, _tx, _e = _f.result()
                 except Exception:
-                    _st, _tx = "Not Available", "N/A"
+                    _st, _tx = _TX_FAILED, "N/A"
                 _row["transcript_status"], _row["transcript"] = _st, _tx
                 data.append(_row)
             if data:
@@ -1548,6 +1913,7 @@ class DashboardVM(QObject):
                                       "resume this scrape later.").format(e=exc), "error")
         finally:
             set_throttle_listener(None)
+            set_abort_check(None)
             # Leave the shared pacer at its safe start, not on a cool-down left
             # over from this run: the AI Chat fetches transcripts through the
             # same gate between scrapes.
@@ -1557,6 +1923,104 @@ class DashboardVM(QObject):
             if tx_pool is not None:
                 tx_pool.shutdown(wait=False, cancel_futures=True)
             emit.finished_signal.emit()
+
+    def _second_pass(self, retry_rows, tx_pool, emit, breather=_TR_SECOND_PASS_BREATHER,
+                     round_no=1, rounds=1):
+        """Retry every refused / failed transcript once more, in run order.
+        Rows are patched in place (they are the same dicts as in `data`), and
+        the results board gets the transcript flags it missed. Thorough mode
+        calls this up to three times with growing breathers."""
+        pending, retry_rows[:] = list(retry_rows), []
+        n = len(pending)
+        emit.log_signal.emit("─" * 72)
+        if rounds == 0:
+            emit.log_signal.emit("🔁  " + tr("Retry round {r}: {n} transcripts still missing, "
+                                            "after a {s:.0f}s breather …").format(
+                r=round_no, n=n, s=breather))
+        elif rounds > 1:
+            emit.log_signal.emit("🔁  " + tr("Retry round {r}/{t}: {n} transcripts, after a "
+                                            "{s:.0f}s breather …").format(
+                r=round_no, t=rounds, n=n, s=breather))
+        else:
+            emit.log_signal.emit("🔁  " + tr("Second pass: retrying {n} transcripts YouTube "
+                                            "refused or failed earlier …").format(n=n))
+        self._tr_recovering = True
+        self.transcriptStateChanged.emit()
+        reset_breaker()
+        self._reset_block_streak()
+        # a handful of leftovers can never make "3 in a row": confirm on fewer
+        self._tr_confirm = max(1, min(_TR_BLOCK_CONFIRM, n))
+        deadline = time.monotonic() + breather
+        while time.monotonic() < deadline:
+            if self._stop_requested:
+                raise ScrapeCancelled()
+            time.sleep(0.2)
+        recovered, patched = 0, []
+        try:
+            if tx_pool is not None:
+                futs = [(vid, row, tx_pool.submit(self._transcript_of, vid, True))
+                        for vid, row in pending]
+            else:
+                futs = [(vid, row, None) for vid, row in pending]
+            for i, (vid, row, fut) in enumerate(futs, 1):
+                if fut is None:
+                    if self._stop_requested:
+                        raise ScrapeCancelled()
+                    res = self._transcript_of(vid, True)
+                else:
+                    while True:
+                        try:
+                            res = fut.result(timeout=0.25)
+                            break
+                        except FutTimeout:
+                            if self._stop_requested:
+                                raise ScrapeCancelled()
+                        except Exception:      # noqa: BLE001
+                            res = (_TX_FAILED, "N/A", "error")
+                            break
+                status, text, kind = res
+                row["transcript_status"] = status
+                row["transcript"] = text
+                if status.startswith("Available"):
+                    recovered += 1
+                    patched.append({"vid": vid, "tx": True})
+                elif kind == "error" and rounds == 0:
+                    # thorough: not an IP problem, so do not loop on it forever
+                    tries = self._tr_err_tries.get(vid, 0) + 1
+                    self._tr_err_tries[vid] = tries
+                    if tries < _TR_THOROUGH_ERROR_TRIES:
+                        retry_rows.append((vid, row))
+                elif kind in ("blocked", "error"):
+                    retry_rows.append((vid, row))
+                if len(patched) >= 10:
+                    self.resultsPatched.emit(patched)
+                    patched = []
+                if i % 10 == 0 or i == n:
+                    emit.status_signal.emit(tr("Second pass {i}/{n} · {ok} recovered").format(
+                        i=i, n=n, ok=recovered))
+        finally:
+            self._tr_confirm = _TR_BLOCK_CONFIRM
+            if patched:
+                self.resultsPatched.emit(patched)
+            self._tr_recovering = False
+            self.transcriptStateChanged.emit()
+        emit.log_signal.emit("✅  " + tr("Second pass: {ok}/{n} transcripts recovered.").format(
+            ok=recovered, n=n))
+
+    @staticmethod
+    def _coverage(data):
+        cov = {"total": len(data), "found": 0, "none": 0, "missing": 0, "skipped": 0}
+        for d in data:
+            st = str(d.get("transcript_status") or "")
+            if st.startswith("Available"):
+                cov["found"] += 1
+            elif st in (_TX_BLOCKED, _TX_FAILED):
+                cov["missing"] += 1
+            elif st == _TX_SKIPPED:
+                cov["skipped"] += 1
+            else:
+                cov["none"] += 1
+        return cov
 
     def _save_checkpoint(self, data, sort_order):
         try:

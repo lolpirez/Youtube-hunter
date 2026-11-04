@@ -80,6 +80,26 @@ _CAPTION_FLOORS = {
 }
 
 
+# v1.0.6: the two transcript modes behave differently when YouTube pushes back.
+#   fast      speed first. An IP block never stops the run: one short retry,
+#             then the video is parked (retried at the end / next run). While
+#             the caption endpoint is refusing, the circuit breaker skips the
+#             doomed requests outright and probes every few seconds.
+#   thorough  completeness first. Gentler start, more retries, the full yt-dlp
+#             client ladder, and the scraper waits a block out.
+_MODE_PROFILES = {
+    False: {"timeout": 8, "rate_retries": 1, "cool": 3.0, "ceil": 2.5,
+            "probe": 8.0, "ladder": ([],)},
+    True: {"timeout": 15, "rate_retries": 3, "cool": 8.0, "ceil": 4.0,
+           "probe": 20.0, "ladder": None},
+}
+_MODE = {"thorough": False}
+
+
+def _mp():
+    return _MODE_PROFILES[bool(_MODE["thorough"])]
+
+
 def turbo_profile(thread_count):
     """{"workers", "ytdlp_slots", "caption_floor", "turbo"} for a level."""
     try:
@@ -91,9 +111,11 @@ def turbo_profile(thread_count):
             "caption_floor": _CAPTION_FLOORS[n], "turbo": n >= 6}
 
 
-def set_turbo(thread_count):
-    """Apply a Worker Threads value before a scrape. Returns the profile."""
+def set_turbo(thread_count, thorough=False):
+    """Apply a Worker Threads value (and the transcript mode) before a scrape.
+    Returns the profile."""
     global _CAPTION_SLOTS
+    _MODE["thorough"] = bool(thorough)
     prof = turbo_profile(thread_count)
     # A fresh semaphore: fetches still holding the old one finish normally.
     _CAPTION_SLOTS = threading.Semaphore(prof["ytdlp_slots"])
@@ -134,23 +156,33 @@ def _session():
 # the breaker again.
 _BREAKER_TRIP = 4
 _BREAKER_COOLDOWN = 90.0
-_breaker = {"fails": 0, "open_until": 0.0}
+_breaker = {"fails": 0, "open_until": 0.0, "probe_at": 0.0}
 _breaker_lock = threading.Lock()
 
 
 def _library_allowed():
+    """Closed breaker: always. Open: one probe every few seconds (half-open),
+    so a block that lifts, or a VPN switch, is noticed without a reset."""
     import time as _t
     with _breaker_lock:
-        return _t.monotonic() >= _breaker["open_until"]
+        now = _t.monotonic()
+        if now >= _breaker["open_until"]:
+            return True
+        if now >= _breaker["probe_at"]:
+            _breaker["probe_at"] = now + _mp()["probe"]
+            return True
+        return False
 
 
 def _library_result(kind):
     import time as _t
     with _breaker_lock:
-        if kind == "blocked":
+        if kind in ("blocked", "rate"):
             _breaker["fails"] += 1
             if _breaker["fails"] >= _BREAKER_TRIP:
-                _breaker["open_until"] = _t.monotonic() + _BREAKER_COOLDOWN
+                now = _t.monotonic()
+                _breaker["open_until"] = now + _BREAKER_COOLDOWN
+                _breaker["probe_at"] = now + _mp()["probe"]
                 _breaker["fails"] = 0
         elif kind in ("", "none"):
             _breaker["fails"] = 0
@@ -158,10 +190,12 @@ def _library_result(kind):
 
 
 def reset_breaker():
-    """Called when the user switches IP / starts a new scrape."""
+    """Called when the user switches IP / the run resumes / a new scrape.
+    Also wakes every worker sleeping in the pacer (see _caption_wait)."""
     with _breaker_lock:
         _breaker["fails"] = 0
         _breaker["open_until"] = 0.0
+        _breaker["probe_at"] = 0.0
     _caption_reset()          # a new IP starts from the safe pace again
 
 
@@ -176,33 +210,124 @@ def _join_transcript(entries):
     return " ".join(parts)
 
 
-def get_public_ip(timeout=6):
+def get_public_ip(timeout=5):
     """Best-effort lookup of this machine's current public IP address.
-    Tries a few plain-text endpoints in case one is down or itself
-    blocked; returns None (never raises) if all of them fail — callers
-    treat that as "couldn't verify" rather than "IP unchanged"."""
+    Asks a few plain-text endpoints AT THE SAME TIME and takes the first
+    answer (v1.0.6: they used to be tried one after another, up to ~18 s
+    through a slow proxy before the block card could even compare IPs).
+    Returns None (never raises) if all of them fail: callers treat that as
+    "couldn't verify" rather than "IP unchanged"."""
+    import queue as _queue
     endpoints = (
         "https://api.ipify.org",
         "https://ifconfig.me/ip",
         "https://icanhazip.com",
     )
-    for url in endpoints:
+    proxy = configured_proxy()
+    answers = _queue.Queue()
+
+    def _one(url):
+        ip = None
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             # Through the configured proxy: the whole point of this lookup is to
             # report the IP YouTube actually sees, and on a proxied setup a
             # direct request reports the wrong one.
-            with _urlopen(req, timeout, configured_proxy()) as resp:
-                ip = resp.read().decode("utf-8", "ignore").strip()
-                if ip and re.match(r"^[0-9a-fA-F:.]+$", ip):
-                    return ip
-        except Exception:
-            continue
+            with _urlopen(req, timeout, proxy) as resp:
+                got = resp.read().decode("utf-8", "ignore").strip()
+                if got and re.match(r"^[0-9a-fA-F:.]+$", got):
+                    ip = got
+        except Exception:      # noqa: BLE001
+            ip = None
+        answers.put(ip)
+
+    for url in endpoints:
+        threading.Thread(target=_one, args=(url,), daemon=True).start()
+    deadline = _time.monotonic() + timeout + 1.0
+    for _ in endpoints:
+        left = deadline - _time.monotonic()
+        if left <= 0:
+            break
+        try:
+            ip = answers.get(timeout=left)
+        except _queue.Empty:
+            break
+        if ip:
+            return ip
     return None
 
 
-def fetch_transcript(video_id):
+def _looks_short(text, expect_secs):
+    """Thorough mode: a transcript far too short for the video's length is
+    probably a fragment (a tiny manual track next to a full auto one, or a
+    truncated payload). Speech runs ~12-15 characters a second; under ~0.8
+    a second on a video of 2+ minutes is worth a second source."""
+    try:
+        secs = float(expect_secs or 0)
+    except (TypeError, ValueError):
+        secs = 0
+    if secs < 120 or not text or text == "N/A":
+        return False
+    return len(text) < secs * 0.8
+
+
+def _thorough_recheck(video_id, proxy, status, text, err_kind, expect_secs):
+    """Thorough mode: do not take one endpoint's word for it.
+
+      * "no captions" from the fast InnerTube client is double-checked with the
+        library's watch-page list AND yt-dlp's default client (the android
+        client behind the fast path sometimes answers without the caption
+        list: age gate, PO-token tracks, a half-bot-checked IP).
+      * a suspiciously short transcript is fetched again from the other
+        sources (auto track first) and the LONGEST text wins.
+    """
+    has_text = bool(text and text != "N/A")
+    if err_kind == "none" and not has_text:
+        lib = _library_list(video_id, proxy, trim=False)
+        if lib[1] and lib[1] != "N/A":
+            return lib
+        fb = None
+        try:
+            with _CAPTION_SLOTS:
+                fb = _ytdlp_quick(video_id, proxy)
+        except Exception:      # noqa: BLE001
+            fb = None
+        if fb:
+            return ("Available (Auto)", fb, "")
+        # Both confirmations failed or agreed: the fast client's answer stands
+        # (reporting "blocked" here would raise the IP-block card for videos
+        # that simply have no captions).
+        return ("Not Available", "N/A", "none")
+    if has_text and _looks_short(text, expect_secs):
+        best = (status, text, err_kind)
+        for alt in (lambda: _library_list(video_id, proxy, trim=False, prefer_generated=True),
+                    lambda: _library_list(video_id, proxy, trim=False)):
+            try:
+                got = alt()
+            except Exception:  # noqa: BLE001
+                continue
+            if got[1] and got[1] != "N/A" and len(got[1]) > len(best[1]):
+                best = (got[0], got[1], "")
+        if _looks_short(best[1], expect_secs):
+            try:
+                with _CAPTION_SLOTS:
+                    fb = _ytdlp_quick(video_id, proxy)
+            except Exception:  # noqa: BLE001
+                fb = None
+            if fb and len(fb) > len(best[1]):
+                best = ("Available (Auto)", fb, "")
+        return best
+    return (status, text, err_kind)
+
+
+def fetch_transcript(video_id, thorough=False, expect_secs=0):
     """Fetch a transcript. Returns (status, text, err_kind) and NEVER raises.
+
+    `thorough` (v1.0.5, the Scraper's "Thorough" transcript mode): a cached
+    "no captions" is checked again, a fast-path "no captions" is confirmed by
+    two other sources, and a transcript that looks too short for the video
+    (`expect_secs`, the video's length) is re-fetched and the longest kept.
+    Slower, but it is the mode that does not miss captions that exist.
     err_kind: "" ok/none · "blocked" IP/rate blocked · "error" other.
 
     The fast path, in order:
@@ -224,6 +349,10 @@ def fetch_transcript(video_id):
     if not video_id:
         return ("Not Available", "N/A", "none")
     hit = cached_transcript(video_id)
+    if hit is not None and thorough:
+        # thorough: only a real cached TEXT that does not look cut is trusted
+        if hit[2] == "none" or _looks_short(hit[1], expect_secs):
+            hit = None
     if hit is not None:
         _bump_stat("cache")
         return hit
@@ -234,14 +363,21 @@ def fetch_transcript(video_id):
         status, text, err_kind = _library_quick(video_id, proxy, trim=False)
         _library_result(err_kind)
     else:
+        if not thorough:
+            # v1.0.6 fast mode: the caption endpoint is refusing this IP right
+            # now (breaker open). Every request would be refused too, and the
+            # yt-dlp ladder used to spend 30-90 s per video proving it. Park
+            # the video at once; the breaker probes every few seconds.
+            return ("Not Available", "N/A", "blocked")
         status, text, err_kind = ("Not Available", "N/A", "blocked")
 
     if not (text and text != "N/A") and err_kind in ("blocked", "error"):
         fb = None
         try:
             with _CAPTION_SLOTS:
-                fb = _ytdlp_quick(video_id, proxy)
-                if fb is None:
+                # fast: one light rung (default client), never the full ladder
+                fb = _ytdlp_quick(video_id, proxy, ladder=None if thorough else ([],))
+                if fb is None and thorough:
                     # Nothing answered the light lookup: walk the full ladder.
                     fb = _fetch_via_ytdlp_inner(video_id, proxy) or None
         except Exception:      # noqa: BLE001 — never raise out of this API
@@ -261,6 +397,13 @@ def fetch_transcript(video_id):
         # would hit the same endpoint and only add minutes per video; report
         # it as a block so the scrape pauses for a new IP / a cool-down.
         return ("Not Available", "N/A", "blocked")
+
+    if thorough:
+        try:
+            status, text, err_kind = _thorough_recheck(
+                video_id, proxy, status, text, err_kind, expect_secs)
+        except Exception:      # noqa: BLE001 — never raise out of this API
+            pass
 
     if text and text != "N/A":
         _cache_put(video_id, status, text, "")
@@ -635,10 +778,25 @@ def cached_transcript(video_id):
     if text and text != "N/A":
         if len(text) == _LEGACY_TEXT_CAP:
             return None         # older build cut it mid-sentence: fetch again
+        if _is_trimmed_fragment(text):
+            return None         # a 3k preview / chat head+tail, not the track
         return (status, text, "")
     if kind == "none" and (_time.time() - float(at or 0)) < _NONE_TTL:
         return ("Not Available", "N/A", "none")
     return None                 # a stale "none" or a past error: try again
+
+
+def _is_trimmed_fragment(text):
+    """True for the shortened copies older builds could leave in the cache:
+    the legacy 3,000-character preview (ends with "…") and the chat's
+    head + " [...] " + tail cut. Serving those as the export's transcript
+    made a long video's text stop after a few paragraphs."""
+    n = len(text)
+    if n == 3001 and text.endswith("…"):
+        return True
+    if n <= _ENDS_HEAD + _ENDS_TAIL + 16 and " [...] " in text:
+        return True
+    return False
 
 
 def has_cached_transcript(video_id):
@@ -828,16 +986,49 @@ def _pick_innertube_track(tracks):
 # floor) and backs off hard on a 429. A 429 (or a rate-limited timedtext 403)
 # is treated as temporary, not as an IP ban: it is retried after the shared
 # cool-down, and only a persistent refusal pauses the scrape.
-_CAPTION_START = 0.9          # seconds between transcript starts
-_CAPTION_CEIL = 8.0
-_CAPTION_RATE_RETRIES = 2     # retries after a 429 before reporting blocked
+_CAPTION_START = 0.9          # seconds between transcript starts (thorough floor)
+_CAPTION_CEIL = 8.0           # kept for reference; the mode profile sets the ceiling
+_CAPTION_RATE_RETRIES = 2     # legacy default; the mode profile decides
 _caption_lock = threading.Lock()
+# v1.0.6: the pacer sleeps on a Condition, not time.sleep(). The old sleep
+# could not be interrupted: after a 429 the gap jumped to 8 s and every worker
+# had already booked a slot N x 8 s ahead, so after a new IP / Retry the
+# workers went on sleeping 30-60 s before the first request. A reset now bumps
+# the epoch and wakes them, and they re-book from the fresh pace at once.
+_caption_cv = threading.Condition(_caption_lock)
+_caption_epoch = 0
 _caption_next = 0.0
 _caption_gap = _CAPTION_START
 _caption_floor = _CAPTION_START
 _caption_streak = 0
+_cool_until = 0.0             # one short shared cool-down per throttle episode
 _throttle_listener = None
 _throttle_announced = False
+_abort_check = None
+
+
+def set_abort_check(fn):
+    """fn() -> True when the scrape is stopping: paced waits return early."""
+    global _abort_check
+    _abort_check = fn
+
+
+def _aborted():
+    fn = _abort_check
+    if fn is None:
+        return False
+    try:
+        return bool(fn())
+    except Exception:          # noqa: BLE001
+        return False
+
+
+def tx_epoch():
+    """Changes on every pacer reset (new IP, resume, new scrape). The scraper
+    compares it around a fetch: a refusal that started before the IP changed
+    belongs to the old IP and is retried instead of counted."""
+    with _caption_lock:
+        return _caption_epoch
 
 
 def set_throttle_listener(fn):
@@ -861,50 +1052,82 @@ def _announce_throttle(gap):
         pass
 
 
+def _start_gap():
+    """Fast starts AT the level's floor (it does not care about refusals, the
+    AIMD below backs off if YouTube complains). Thorough starts gentler."""
+    if _MODE["thorough"]:
+        return max(1.2, _caption_floor)
+    return max(0.45, _caption_floor)
+
+
 def _caption_reset(floor=None):
-    """New scrape / new IP: back to the safe starting pace. With no `floor`,
-    keep the level's ceiling (reset_breaker on an IP change)."""
+    """New scrape / new IP / resume: back to the starting pace, and wake every
+    worker sleeping on an old reservation. With no `floor`, keep the level's
+    ceiling (reset_breaker on an IP change)."""
     global _caption_next, _caption_gap, _caption_floor, _caption_streak
-    global _throttle_announced
-    with _caption_lock:
+    global _throttle_announced, _cool_until, _caption_epoch
+    with _caption_cv:
         if floor is not None:
             _caption_floor = float(floor)
-        _caption_gap = max(_CAPTION_START, _caption_floor)
+        _caption_gap = _start_gap()
         _caption_next = 0.0
+        _cool_until = 0.0
         _caption_streak = 0
         _throttle_announced = False
+        _caption_epoch += 1
+        _caption_cv.notify_all()
 
 
-def _caption_wait():
-    """Reserve the next transcript start and sleep until its slot is due."""
+def _caption_wait(paced=True):
+    """Reserve the next transcript start and wait until its slot is due.
+    Returns False when the scrape is stopping. Wakes up (and re-books) the
+    moment the pacer is reset."""
     global _caption_next
-    with _caption_lock:
-        now = _time.monotonic()
-        slot = max(now, _caption_next)
+    if not paced:
+        return True
+    with _caption_cv:
+        epoch = _caption_epoch
+        slot = max(_time.monotonic(), _caption_next, _cool_until)
         _caption_next = slot + _caption_gap
-    wait = slot - _time.monotonic()
-    if wait > 0:
-        _time.sleep(wait)
+        while True:
+            now = _time.monotonic()
+            if slot <= now:
+                return True
+            _caption_cv.wait(min(slot - now, 0.25))
+            if _caption_epoch != epoch:
+                epoch = _caption_epoch
+                slot = max(_time.monotonic(), _caption_next, _cool_until)
+                _caption_next = slot + _caption_gap
+            if _aborted():
+                return False
 
 
 def _caption_success():
-    """A run of successes lets the shared pace creep toward the level floor."""
+    """AIMD, recovery side: every 3 successes the gap shrinks 15 % toward the
+    level floor (the old 7 % per 5 successes needed ~150 videos to recover
+    from one throttle episode, so a whole run crawled after a single 429)."""
     global _caption_gap, _caption_streak, _throttle_announced
     with _caption_lock:
         _caption_streak += 1
-        if _caption_streak >= 5 and _caption_gap > _caption_floor:
-            _caption_gap = max(_caption_floor, _caption_gap * 0.93)
+        if _caption_streak >= 3 and _caption_gap > _caption_floor:
+            _caption_gap = max(_caption_floor, _caption_gap * 0.85)
             _caption_streak = 0
             _throttle_announced = False    # a later episode may be logged again
 
 
 def _caption_throttled():
-    """429/403: slow the shared gate down, tell the log once, return the gap."""
-    global _caption_gap, _caption_next, _caption_streak
+    """429/403/"Sorry" page: one short shared cool-down for this episode and a
+    moderately slower pace (x1.5, capped by the mode: 2.5 s fast, 4 s
+    thorough; the old x1.8 up to 8 s queued workers for a minute)."""
+    global _caption_gap, _caption_next, _caption_streak, _cool_until
     with _caption_lock:
-        _caption_gap = min(_CAPTION_CEIL, max(1.2, _caption_gap * 1.8))
+        prof = _mp()
+        _caption_gap = min(prof["ceil"], max(1.0, _caption_gap * 1.5))
         _caption_streak = 0
-        _caption_next = max(_caption_next, _time.monotonic() + _caption_gap)
+        now = _time.monotonic()
+        if _cool_until <= now:             # new episode: one breather, not one per worker
+            _cool_until = now + prof["cool"]
+        _caption_next = max(_caption_next, _cool_until)
         gap = _caption_gap
     _bump_stat("throttled")
     _announce_throttle(gap)
@@ -920,9 +1143,13 @@ def _caption_rate_limited(response):
     return "html" in ctype or head[:2] in (b"<!", b"<h")
 
 
-def _innertube_quick(video_id, proxy, trim=True):
+def _innertube_quick(video_id, proxy, trim=True, paced=True, rate_retries=None):
     """Player endpoint only. Returns (status, text, err_kind) like the library
-    path; "none" means YouTube said there is no caption track."""
+    path; "none" means YouTube said there is no caption track. `paced=False`
+    (the pause-time probe) skips the shared pacer."""
+    prof = _mp()
+    timeout = prof["timeout"]
+    limit = prof["rate_retries"] if rate_retries is None else int(rate_retries)
     key = _innertube_key(proxy)
     if not key:
         return ("Not Available", "N/A", "error")
@@ -931,12 +1158,13 @@ def _innertube_quick(video_id, proxy, trim=True):
     idx, refreshed, rate_tries, last_kind = 0, False, 0, "error"
     while idx < len(_INNERTUBE_CONTEXTS):
         ctx = _INNERTUBE_CONTEXTS[idx]
-        _caption_wait()
+        if not _caption_wait(paced):
+            return ("Not Available", "N/A", "error")
         try:
             r = _http_session(proxy).post(
                 _INNERTUBE_PLAYER.format(key=key),
                 json={"context": ctx, "videoId": video_id},
-                timeout=_INNERTUBE_TIMEOUT)
+                timeout=timeout)
         except Exception:      # noqa: BLE001 — let the library path try
             return ("Not Available", "N/A", "error")
         if r.status_code in (400, 401) and not refreshed:
@@ -951,7 +1179,7 @@ def _innertube_quick(video_id, proxy, trim=True):
                         key_version = _innertube["version"]
                     continue        # retry this client with the fresh key
         if r.status_code in (403, 429):
-            if rate_tries < _CAPTION_RATE_RETRIES:
+            if rate_tries < limit:
                 rate_tries += 1
                 _caption_throttled()
                 continue
@@ -1001,7 +1229,7 @@ def _innertube_quick(video_id, proxy, trim=True):
             # No fmt=json3 here: YouTube's default XML carries the same cues
             # the library returns, while json3 drops some formatting-only
             # segments (and the export would differ from older scrapes).
-            cr = _http_session(proxy).get(url, timeout=_INNERTUBE_TIMEOUT)
+            cr = _http_session(proxy).get(url, timeout=timeout)
         except Exception:      # noqa: BLE001
             last_kind = "error"
             idx += 1
@@ -1010,7 +1238,7 @@ def _innertube_quick(video_id, proxy, trim=True):
             # 403/429, or YouTube's "Sorry" page arriving with HTTP 200 (never
             # cache that as a transcript). It is a rate limit first and only a
             # real block if it survives the shared cool-down and retries.
-            if rate_tries < _CAPTION_RATE_RETRIES:
+            if rate_tries < limit:
                 rate_tries += 1
                 _caption_throttled()
                 continue
@@ -1054,6 +1282,13 @@ def _library_quick(video_id, proxy, trim=True):
         return (f_status, f_text, f_kind)
     # "error": the library may still get through with its own key/cookies
     # (age gate, a client that answered badly, a transient player failure).
+    return _library_list(video_id, proxy, trim=trim)
+
+
+def _library_list(video_id, proxy, trim=True, prefer_generated=False):
+    """youtube-transcript-api's own list() + fetch(). Returns (status, text,
+    err_kind). `prefer_generated` asks for the auto (ASR) track first: thorough
+    mode uses it when the manual track looks like a fragment."""
     try:
         api_cls, has_new, block_errs, _no_tr = _yta()
         import youtube_transcript_api as mod
@@ -1066,7 +1301,8 @@ def _library_quick(video_id, proxy, trim=True):
                               ("TranscriptsDisabled", "NoTranscriptFound"))
                   if isinstance(e, type))
     try:
-        _caption_wait()        # the fallback is two more YouTube requests
+        if not _caption_wait():    # the fallback is two more YouTube requests
+            return ("Not Available", "N/A", "error")
         if has_new:
             tlist = _library_api(api_cls, proxy).list(video_id)
         else:
@@ -1075,8 +1311,14 @@ def _library_quick(video_id, proxy, trim=True):
         if not tracks:
             return ("Not Available", "N/A", "none")
         track = None
+        if prefer_generated:
+            try:
+                track = tlist.find_generated_transcript(_TRANSCRIPT_LANGS)
+            except Exception:  # noqa: BLE001
+                track = next((t for t in tracks if getattr(t, "is_generated", False)), None)
         try:
-            track = tlist.find_transcript(_TRANSCRIPT_LANGS)
+            if track is None:
+                track = tlist.find_transcript(_TRANSCRIPT_LANGS)
         except Exception:      # noqa: BLE001 — none of ours: take the video's own
             # the original-language track first (manual beats generated)
             track = next((t for t in tracks if not getattr(t, "is_generated", False)),
@@ -1095,10 +1337,10 @@ def _library_quick(video_id, proxy, trim=True):
         return ("Not Available", "N/A", "error")
 
 
-def _ytdlp_quick(video_id, proxy=""):
-    """A light yt-dlp caption lookup: three rungs, no manifests, tight
-    timeouts. Returns text, "" (the player answered: no captions) or None
-    (nothing answered)."""
+def _ytdlp_quick(video_id, proxy="", ladder=None):
+    """A light yt-dlp caption lookup: three rungs (fast mode: only the default
+    client), no manifests, tight timeouts. Returns text, "" (the player
+    answered: no captions) or None (nothing answered)."""
     from app.core.runtime_deps import js_runtime_opts
     from app.core.utils import ensure_yt_dlp_ready
     try:
@@ -1116,7 +1358,13 @@ def _ytdlp_quick(video_id, proxy=""):
     if proxy:
         base["proxy"] = proxy
     url = f"https://www.youtube.com/watch?v={video_id}"
-    for clients in _QUICK_LADDER:
+    # v1.0.4: only the DEFAULT client is trusted to say "no captions". The
+    # android / tv rungs often answer a bot-checked IP with a stripped player
+    # response that simply lacks the caption list, and that used to be cached
+    # as "this video has no subtitles" for 3 days. Now such an answer is
+    # "unknown" (None) unless the default client agreed, so the scraper
+    # retries it instead of writing it off.
+    for clients in (ladder or _QUICK_LADDER):
         yt_args = {"skip": ["dash", "hls", "translated_subs"]}
         if clients:
             yt_args["player_client"] = clients
@@ -1130,10 +1378,14 @@ def _ytdlp_quick(video_id, proxy=""):
             continue
         subs, auto = info.get("subtitles") or {}, info.get("automatic_captions") or {}
         if not (subs or auto):
-            return ""           # the player answered: there really are none
+            if not clients:
+                return ""       # the default player answered: there really are none
+            continue            # a fallback client's silence proves nothing
         track, _is_auto = _pick_caption_track(subs, auto)
         if not track:
-            return ""
+            if not clients:
+                return ""
+            continue
         by_ext = {}
         for fmt in track:
             ext = (fmt.get("ext") or "").lower()
@@ -1146,9 +1398,19 @@ def _ytdlp_quick(video_id, proxy=""):
         req = urllib.request.Request(chosen["url"], headers={"User-Agent": "Mozilla/5.0"})
         with _urlopen(req, 15, proxy) as resp:
             raw = resp.read().decode("utf-8", "replace")
+        # YouTube's "Sorry" / consent page can arrive with HTTP 200. Never let
+        # that HTML become (and be cached as) a transcript: treat it as a
+        # refusal, which the scraper retries.
+        head = raw[:200].lstrip().lower()
+        if head.startswith("<!doctype html") or head.startswith("<html"):
+            _caption_throttled()
+            return None
         text = _caption_payload_text(raw, (chosen.get("ext") or "").lower())
-        return re.sub(r"\s+", " ", html.unescape(text)).strip()
-    return None                 # no rung answered at all: unknown, not "none"
+        text = re.sub(r"\s+", " ", html.unescape(text)).strip()
+        if not text:
+            continue            # empty payload: let the next rung try
+        return text
+    return None                 # no rung answered for sure: unknown, not "none"
 
 
 def fetch_transcript_quick(video_id):
@@ -1180,3 +1442,23 @@ def fetch_transcript_quick(video_id):
     if text and text != "N/A":
         return (status, _trim_ends(text), err_kind)
     return (status, text, err_kind)
+
+
+def probe_transcript(video_id):
+    """v1.0.6: one unpaced, retry-free InnerTube check, used while a Thorough
+    run is paused on a block to notice by itself that YouTube answers again.
+    Returns "ok" (text came back, and is cached so the worker's retry is
+    instant), "none" (the endpoint answered: no captions, also alive),
+    "blocked" / "rate" (still refused) or "error" (unknown)."""
+    video_id = str(video_id or "").strip()
+    if not video_id:
+        return "error"
+    try:
+        status, text, kind = _innertube_quick(video_id, configured_proxy(), trim=False,
+                                              paced=False, rate_retries=0)
+    except Exception:          # noqa: BLE001
+        return "error"
+    if text and text != "N/A":
+        _cache_put(video_id, status, text, "")
+        return "ok"
+    return kind or "none"

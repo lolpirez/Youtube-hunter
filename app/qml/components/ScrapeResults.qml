@@ -106,6 +106,17 @@ Item {
         target: Dashboard
         function onResultsReset() { root._reset() }
         function onResultsAppended(batch) { root._append(batch) }
+        // v1.0.4: the second pass recovered transcripts for rows already shown
+        function onResultsPatched(patches) {
+            const want = {}
+            for (let i = 0; i < patches.length; ++i) want[patches[i].vid] = !!patches[i].tx
+            for (let j = 0; j < root._all.length; ++j) {
+                const r = root._all[j]
+                if (want.hasOwnProperty(r.vid)) r.tx = want[r.vid]
+            }
+            rebuildTimer.interval = Dashboard.isRunning ? 1200 : 60
+            if (!rebuildTimer.running) rebuildTimer.start()
+        }
         function onRunningChanged() { if (!Dashboard.isRunning) root._rebuild() }
     }
     Component.onCompleted: {

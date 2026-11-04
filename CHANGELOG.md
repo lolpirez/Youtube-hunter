@@ -7,6 +7,36 @@ Version numbering restarted at **1.0.0** for the public release.
 
 ---
 
+## Unreleased (v1.0.6): no more waiting after an IP block, Fast vs Thorough for real
+
+- **Resumes instantly after an IP block.** Transcript workers used to sleep up
+  to a minute on old pacing slots even after the IP changed. They now wake
+  the moment the run resumes, and the pace recovers ~6x faster.
+- **Fast never stops for a block.** Refused captions are skipped at once (no
+  more 30-90 s per video in the fallback ladder), metadata keeps streaming,
+  one retry pass at the end.
+- **Thorough gets everything.** It waits a block out and resumes by itself
+  when your IP changes (checked every few seconds) or YouTube answers again,
+  then keeps retrying until no transcript is missing.
+  Details in docs/CHANGES-v1.0.6-transcripts-speed.md.
+
+---
+
+## Unreleased (v1.0.5): transcripts that never go missing in Excel, Thorough mode
+
+- **"Transcript found" but empty in the CSV: fixed.** The text was in the
+  file, Excel broke it: cells over 32,767 characters spill into the next rows
+  and shift the following videos. Long transcripts now continue in
+  transcript_part2, transcript_part3 ... columns (nothing cut, one row per
+  video); transcripts starting with "-" no longer show as #NAME?; xlsx no
+  longer truncates; the app's own readers merge the parts back.
+- **Transcript accuracy: Fast / Thorough** on the Scraper page. Thorough
+  double-checks every "no captions", re-fetches transcripts that look too
+  short, retries refusals in 3 rounds and saves a .txt per transcript.
+  Details in docs/CHANGES-v1.0.5-transcripts-thorough.md.
+
+---
+
 ## Unreleased (v1.0.3) — strict Country sections, scrollable download dialog
 
 - **Filtered searches keep only their matches.** "1M-10M views, 10K-500K
@@ -47,6 +77,30 @@ Version numbering restarted at **1.0.0** for the public release.
   and Download stay pinned) and jumps to the unfolded list.
 - **"Show all" no longer folds shut when you pick a language** (the probe
   re-sends the same track list after every pick).
+- **Transcripts are complete now, or honestly marked.** A refused transcript
+  is no longer written off as "Not Available": refusals that never formed a
+  3-in-a-row block (a throttled IP lets some captions through), the videos
+  just ahead of every confirmed block and network failures are all parked and
+  retried in a **second pass** at the end of the run. Whatever is still
+  refused is exported as `Blocked by YouTube` / `Failed (retry later)` /
+  `Skipped`, never as "no captions". Running the same scrape again fills the
+  gaps (saved transcripts come from the cache instantly).
+- **No more false "no captions".** The yt-dlp fallback only trusts the default
+  client to say a video has no subtitles; the android / tv rungs often answer a
+  bot-checked IP with a stripped player response, which used to be cached as
+  "none" for 3 days. YouTube's "Sorry" HTML page can no longer be saved as a
+  transcript either.
+- **Accurate counters.** found / waiting / no captions / skipped: every video
+  lands in exactly one (a blocked-then-recovered video was counted twice).
+- **New IP-blocked card**, redesigned and moved to the top of the Scraper (the
+  page scrolls to it): why it stopped, the blocked IP, live coverage bar, two
+  numbered steps, *Check new IP & resume*, a same-IP **auto-retry countdown**
+  (2 / 5 / 10 min) with *Retry now*, and *Finish without transcripts*. It
+  appears instantly (it used to wait for the public-IP lookup, up to ~18 s).
+- **A block is never silent elsewhere:** the header pill turns red, the
+  Scraper row in the rail pulses, and other pages show a floating
+  "Transcripts paused · Fix it" pill. After a run with gaps, a strip shows the
+  coverage with a *Fill the gaps* button.
 - Launch splash polish: render-thread motion, aurora backdrop, dot ring,
   comet loader and status line.
 - **Search depth is now "Results to find", and it means matches.** With a

@@ -492,6 +492,17 @@ Window {
                             }
                         }
                     }
+
+                    // ── v1.0.4: "Transcripts paused" pill on every other page ──
+                    // A scrape paused on a blocked IP must never be silent just
+                    // because the user wandered off the Scraper; one click
+                    // brings them back to the card with the fix.
+                    C.BlockAlertPill {
+                        z: 30
+                        anchors.top: parent.top
+                        anchors.topMargin: Tokens.space4
+                        anchors.horizontalCenter: parent.horizontalCenter
+                    }
                 }
             }
         }

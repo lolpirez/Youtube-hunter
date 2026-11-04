@@ -8,6 +8,7 @@ import statistics
 from datetime import datetime
 
 from app.config import CONFIG_PATH
+from app.core.exports import merge_spill_columns
 from app.core.niche.helpers import fmt_duration
 from app.core.utils import humanize_count, parse_iso8601_duration
 from app.i18n import tr
@@ -67,6 +68,16 @@ def save_csv_analysis(path, parsed):
     return entry
 
 
+def _lift_csv_field_limit():
+    lim = 2 ** 31 - 1
+    while lim > 131072:
+        try:
+            csv.field_size_limit(lim)
+            return
+        except OverflowError:       # C long is 32-bit on Windows
+            lim //= 2
+
+
 def _read_export_rows(path):
     """Read a History export back into a list of dict rows, regardless of
     which format it was saved in (csv / jsonl / xlsx / db) — so 'Analyze
@@ -75,8 +86,13 @@ def _read_export_rows(path):
     rows = []
     try:
         if ext == ".csv":
+            # v1.0.5: Python's csv reader refuses any field over 128 KB, and
+            # that error used to make the WHOLE export read as empty (a single
+            # 2-hour transcript was enough). Lift the cap, and glue the
+            # `transcript_part2`... columns long cells are split into.
+            _lift_csv_field_limit()
             with open(path, encoding="utf-8-sig", newline="") as f:
-                rows = [dict(r) for r in csv.DictReader(f)]
+                rows = [merge_spill_columns(dict(r)) for r in csv.DictReader(f)]
         elif ext == ".jsonl":
             with open(path, encoding="utf-8") as f:
                 for line in f:
@@ -95,7 +111,8 @@ def _read_export_rows(path):
                 it = ws.iter_rows(values_only=True)
                 headers = [str(h) if h is not None else "" for h in (next(it, None) or [])]
                 for r in it:
-                    rows.append({headers[i]: r[i] for i in range(min(len(headers), len(r)))})
+                    rows.append(merge_spill_columns(
+                        {headers[i]: r[i] for i in range(min(len(headers), len(r)))}))
             finally:
                 wb.close()
         elif ext == ".db":

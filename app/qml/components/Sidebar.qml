@@ -348,6 +348,7 @@ Rectangle {
                             iconName: modelData.icon
                             text: modelData.label
                             checked: App.currentPage === modelData.page
+                            alert: modelData.page === 0 && Dashboard.transcriptPaused && Dashboard.isRunning
                             // Keep the selected row on screen: a page change
                             // made from the tour or a notification must not
                             // leave the highlight pointing at a row that has

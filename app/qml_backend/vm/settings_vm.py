@@ -134,6 +134,8 @@ class SettingsVM(QObject):
         self._autosave_freq = cfg.get("autosave_freq", 500)
         self._thread_count = int(cfg.get("thread_count", 3) or 3)
         self._transcripts_enabled = bool(cfg.get("transcripts_enabled", True))
+        self._transcript_mode = ("thorough" if cfg.get("transcript_mode") == "thorough"
+                                 else "fast")
         self._save_folder = cfg.get("save_folder", "") or ""
         # Per-kind destinations (Settings → Save locations). Empty means "use
         # the default": Desktop/YouTube for videos, ask-once for thumbnails.
@@ -406,6 +408,27 @@ class SettingsVM(QObject):
             cfg = load_app_config()
             cfg["transcripts_enabled"] = transcripts
             cfg["export_format"] = fmt
+            save_app_config(cfg)
+        except Exception:          # noqa: BLE001
+            pass
+        self.changed.emit()
+
+    # ── v1.0.5: transcript accuracy (Scraper page) ──
+    # 0 = Fast (the old behaviour, quickest), 1 = Thorough (double-checks
+    # "no captions", re-fetches short transcripts, 3 retry rounds, .txt copies).
+    @Property(int, notify=changed)
+    def transcriptModeIndex(self):
+        return 1 if self._transcript_mode == "thorough" else 0
+
+    @Slot(int)
+    def applyTranscriptMode(self, index):
+        mode = "thorough" if int(index) == 1 else "fast"
+        if mode == self._transcript_mode:
+            return
+        self._transcript_mode = mode
+        try:
+            cfg = load_app_config()
+            cfg["transcript_mode"] = mode
             save_app_config(cfg)
         except Exception:          # noqa: BLE001
             pass

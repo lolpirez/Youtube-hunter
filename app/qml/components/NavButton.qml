@@ -24,6 +24,9 @@ AbstractButton {
     // Distance from this button's left edge OUT to the window edge, so the red
     // accent bar can sit flush against it. The Sidebar passes its layout margin.
     property int railInset: 0
+    // v1.0.4: a pulsing red dot that says "this section needs you" (the
+    // Scraper row while a run is paused on a blocked IP).
+    property bool alert: false
 
     // NOT checkable. `checked` is driven purely by the Sidebar's
     // `App.currentPage === page` binding, so the row's highlight can never
@@ -123,6 +126,35 @@ AbstractButton {
     // the expanded row hugs the left with a small inset. Both branches stay
     // instantiated — visibility toggles, nothing is created/destroyed on collapse.
     contentItem: Item {
+        // ── alert dot (v1.0.4) ──
+        Item {
+            visible: root.alert
+            z: 5
+            width: 10; height: 10
+            x: root.collapsed ? parent.width / 2 + 5 : parent.width - width - 6
+            y: root.collapsed ? parent.height / 2 - 14 : (parent.height - height) / 2
+            Rectangle {
+                id: alertHalo
+                anchors.fill: parent
+                radius: width / 2
+                color: Theme.error
+                opacity: 0
+                ParallelAnimation {
+                    running: root.alert && root.visible
+                    loops: Animation.Infinite
+                    ScaleAnimator { target: alertHalo; from: 1; to: 2.6; duration: 1300; easing.type: Easing.OutCubic }
+                    OpacityAnimator { target: alertHalo; from: 0.55; to: 0; duration: 1300; easing.type: Easing.OutCubic }
+                }
+            }
+            Rectangle {
+                anchors.fill: parent
+                radius: width / 2
+                color: Theme.error
+                border.width: 2
+                border.color: Theme.sidebar_bg
+            }
+        }
+
         // ── collapsed: a single centred glyph ──
         Item {
             visible: root.collapsed

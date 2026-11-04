@@ -403,12 +403,16 @@ def read_table(path, limit=20000):
             dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
         except csv.Error:
             dialect = csv.excel_tab if ext == ".tsv" else csv.excel
+        from app.core.analysis.csv_report import _lift_csv_field_limit
+        from app.core.exports import merge_spill_columns
+        _lift_csv_field_limit()      # long transcripts are > 128 KB fields
         rdr = csv.DictReader(io.StringIO(raw), dialect=dialect)
         out = []
         for i, r in enumerate(rdr):
             if i >= limit:
                 break
-            out.append({(k or "").strip(): v for k, v in r.items() if k is not None})
+            out.append(merge_spill_columns(
+                {(k or "").strip(): v for k, v in r.items() if k is not None}))
         return out
     # The app's own export reader handles jsonl / xlsx / db.
     from app.core.analysis.csv_report import _read_export_rows
