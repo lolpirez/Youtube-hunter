@@ -11,6 +11,8 @@ signal pattern the other download VMs use.
 import sys
 import threading
 
+import time
+
 from PySide6.QtCore import QObject, Property, Signal, Slot
 
 from app.core import deno
@@ -357,9 +359,20 @@ class DenoVM(QObject):
     # ── worker bridges (GUI thread) ──────────────────────────────────────
     @Slot(int, int)
     def _on_progress(self, done, total):
+        # v1.0.8 perf: the runtime download reports every 256 KiB chunk, and
+        # `changed` re-evaluates EVERY Deno binding (setup state, texts, PO
+        # token fields...). Only re-emit when the shown percentage moves, the
+        # total changes, or ~0.1 s passed (keeps the byte counter alive).
+        prev_total = self._total
+        prev_pct = int(self._done * 100 / prev_total) if prev_total > 0 else -1
         self._done = done
         self._total = total
-        self.changed.emit()
+        pct = int(done * 100 / total) if total > 0 else -1
+        now = time.monotonic()
+        if (pct != prev_pct or total != prev_total or done >= total
+                or now - getattr(self, "_prog_emit_at", 0.0) >= 0.1):
+            self._prog_emit_at = now
+            self.changed.emit()
 
     @Slot(str)
     def _on_stage(self, text):

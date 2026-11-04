@@ -230,7 +230,7 @@ Rectangle {
                             }
                         }
                     }
-                    C.AppTooltip { visible: headDel.hovered && !card.confirmRemove; text: I18n.tr("Delete this provider") }
+                    C.LazyTooltip { show: headDel.hovered && !card.confirmRemove; text: I18n.tr("Delete this provider") }
                 }
                 C.IconGlyph {
                     name: "expand_more"

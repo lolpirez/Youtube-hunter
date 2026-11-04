@@ -34,6 +34,13 @@ Item {
     readonly property int none: Dashboard.transcriptNone
     readonly property int total: Math.max(1, found + waiting + none + Dashboard.transcriptSkipped)
     readonly property int cooldown: Dashboard.transcriptCooldown
+    // v1.0.7: "blocked" (YouTube refuses this IP) or "offline" (route lost)
+    readonly property bool offline: Dashboard.transcriptPauseReason === "offline"
+    // v1.0.7 IP switch strip: "" | settling | verifying | restricted | refused | offline
+    readonly property string sw: Dashboard.transcriptSwitchState
+    readonly property string swPlace: Dashboard.transcriptSwitchIp
+                                      + (Dashboard.transcriptSwitchCountry !== ""
+                                         ? " · " + Dashboard.transcriptSwitchCountry : "")
     // the longest countdown seen this pause, so the ring drains from full
     property int _cdTotal: 1
     onCooldownChanged: if (cooldown > _cdTotal || !shown) _cdTotal = Math.max(1, cooldown)
@@ -237,7 +244,8 @@ Item {
 
                     C.AppText {
                         Layout.fillWidth: true
-                        text: I18n.tr("YouTube stopped answering this IP")
+                        text: root.offline ? I18n.tr("Can't reach YouTube right now")
+                                           : I18n.tr("YouTube stopped answering this IP")
                         weight: Tokens.weightExtraBold
                         font.pixelSize: Tokens.fontTitle
                         color: Theme.text_strong
@@ -250,7 +258,9 @@ Item {
                         wrapMode: Text.Wrap
                         font.pixelSize: Tokens.fontBody
                         color: Theme.on_surface_var
-                        text: (Dashboard.transcriptBlockedIp !== ""
+                        text: root.offline
+                              ? I18n.tr("The connection to YouTube dropped (VPN off, or switching servers?). Every video so far is saved, and the run continues by itself as soon as a working connection has settled.")
+                              : (Dashboard.transcriptBlockedIp !== ""
                                ? I18n.tr("Too many caption requests came from {ip}, so YouTube is refusing them for now.")
                                      .replace("{ip}", Dashboard.transcriptBlockedIp)
                                : I18n.tr("Too many caption requests came from your connection, so YouTube is refusing them for now."))
@@ -402,6 +412,124 @@ Item {
                 }
             }
 
+            // ── v1.0.7 IP switch: settle countdown, then a verified resume ──
+            // A VPN server switch drops the tunnel for a moment and your own
+            // IP shows through. Nothing resumes on a new IP until it has held
+            // still for a few seconds, is outside the restricted countries and
+            // YouTube answers on it; the strip says what is happening.
+            Rectangle {
+                id: swStrip
+                readonly property bool good: root.sw === "settling" || root.sw === "verifying"
+                readonly property color tint: good ? Theme.primary : Theme.warn
+                Layout.fillWidth: true
+                visible: root.sw !== ""
+                radius: Tokens.radiusMd
+                color: U.withAlpha(tint, 0.10)
+                border.width: 1
+                border.color: U.withAlpha(tint, 0.40)
+                implicitHeight: swCol.implicitHeight + Tokens.space3 * 2
+                Behavior on color { ColorAnimation { duration: Tokens.durMed } }
+
+                ColumnLayout {
+                    id: swCol
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: Tokens.space3
+                    anchors.leftMargin: Tokens.space4
+                    spacing: Tokens.space2
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Tokens.space3
+
+                        // countdown bubble (or a state glyph)
+                        Rectangle {
+                            implicitWidth: 30; implicitHeight: 30; radius: 15
+                            color: U.withAlpha(swStrip.tint, 0.16)
+                            border.width: 1
+                            border.color: U.withAlpha(swStrip.tint, 0.50)
+                            antialiasing: true
+                            C.AppText {
+                                anchors.centerIn: parent
+                                visible: root.sw === "settling"
+                                text: Math.max(0, Dashboard.transcriptSwitchLeft)
+                                mono: true
+                                weight: Tokens.weightExtraBold
+                                font.pixelSize: Tokens.fontBody
+                                color: swStrip.tint
+                                LayoutMirroring.enabled: false
+                            }
+                            C.IconGlyph {
+                                id: swGlyph
+                                anchors.centerIn: parent
+                                visible: root.sw !== "settling"
+                                name: root.sw === "verifying" ? "sync" : "warning"
+                                fill: root.sw !== "verifying"
+                                size: 15
+                                glyphColor: swStrip.tint
+                                RotationAnimator on rotation {
+                                    running: root.sw === "verifying" && root.visible
+                                    from: 0; to: 360
+                                    duration: 900
+                                    loops: Animation.Infinite
+                                }
+                                onVisibleChanged: if (!visible) rotation = 0
+                            }
+                        }
+
+                        C.AppText {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            weight: Tokens.weightDemiBold
+                            font.pixelSize: Tokens.fontCaption + 1
+                            color: swStrip.good ? Theme.text_strong : Theme.warn
+                            text: root.sw === "settling"
+                                  ? I18n.tr("New IP detected: {ip}. Making sure the VPN has settled, resuming in {s}s.")
+                                        .replace("{ip}", root.swPlace)
+                                        .replace("{s}", Math.max(0, Dashboard.transcriptSwitchLeft))
+                                : root.sw === "verifying"
+                                  ? I18n.tr("Checking that YouTube answers on {ip}…").replace("{ip}", root.swPlace)
+                                : root.sw === "restricted"
+                                  ? I18n.tr("Your IP is now {ip}: the VPN looks off or is still reconnecting. Nothing is sent until it is back.")
+                                        .replace("{ip}", root.swPlace)
+                                : root.sw === "refused"
+                                  ? I18n.tr("YouTube refuses {ip} too. Try another VPN server; the run keeps checking by itself.")
+                                        .replace("{ip}", root.swPlace)
+                                  : I18n.tr("No connection right now (VPN switching?). Waiting for it to settle…")
+                        }
+
+                        C.AppText {
+                            visible: root.sw === "settling"
+                            text: I18n.tr("Resume now")
+                            weight: Tokens.weightBold
+                            font.pixelSize: Tokens.fontCaption + 1
+                            color: swNowHover.hovered ? Theme.text_strong : Theme.primary
+                            font.underline: swNowHover.hovered
+                            HoverHandler { id: swNowHover; cursorShape: Qt.PointingHandCursor }
+                            TapHandler { onTapped: Dashboard.transcriptSwitchNow() }
+                        }
+                    }
+
+                    // the settle countdown, draining
+                    Rectangle {
+                        Layout.fillWidth: true
+                        implicitHeight: 4
+                        radius: 2
+                        visible: root.sw === "settling"
+                        color: U.withAlpha(Theme.on_surface, Theme.isDark ? 0.08 : 0.07)
+                        Rectangle {
+                            height: parent.height
+                            radius: 2
+                            color: Theme.primary
+                            width: parent.width * Math.max(0, Dashboard.transcriptSwitchLeft)
+                                   / Math.max(1, Dashboard.transcriptSwitchTotal)
+                            Behavior on width { NumberAnimation { duration: 950; easing.type: Easing.Linear } }
+                        }
+                    }
+                }
+            }
+
             // same-IP note after a check that found no change
             Rectangle {
                 Layout.fillWidth: true
@@ -440,7 +568,9 @@ Item {
                     Layout.fillWidth: true
                     spacing: Tokens.space4
                     Repeater {
-                        model: [I18n.tr("Switch your VPN server"), I18n.tr("That's it: the new IP is detected in seconds")]
+                        model: root.offline
+                               ? [I18n.tr("Turn the VPN on (or pick another server)"), I18n.tr("That's it: it continues by itself")]
+                               : [I18n.tr("Switch your VPN server"), I18n.tr("That's it: the new IP is checked and resumed in seconds")]
                         Row {
                             required property int index
                             required property var modelData

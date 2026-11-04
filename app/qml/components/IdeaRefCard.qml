@@ -408,7 +408,7 @@ Item {
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                 }
-                C.AppTooltip { visible: openHover.containsMouse; text: I18n.tr("Open on YouTube") }
+                C.LazyTooltip { show: openHover.containsMouse; text: I18n.tr("Open on YouTube") }
             }
         }
     }

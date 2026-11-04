@@ -97,6 +97,12 @@ class ContentLabVM(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # v1.0.8 perf: the filtered rail list is built once per resultsChanged
+        # (it used to be re-filtered on EVERY QML read, and the rail, counts
+        # and delegates read it many times per change). The drop runs first:
+        # it is connected before QML binds to the signal.
+        self._ideas_view = None
+        self.resultsChanged.connect(self._drop_ideas_view)
         self.resultsChanged.connect(self.activeChanged)
         self._reload_ai_config()
 
@@ -391,8 +397,13 @@ class ContentLabVM(QObject):
         self.resultsChanged.emit()
         self.csvChanged.emit()
 
+    def _drop_ideas_view(self, *_a):
+        self._ideas_view = None
+
     @Property("QVariantList", notify=resultsChanged)
     def ideas(self):
+        if self._ideas_view is not None:
+            return self._ideas_view
         out = self._ideas
         if self._rail_fav_only:
             out = [i for i in out if i.get("isFavorite")]
@@ -400,6 +411,7 @@ class ContentLabVM(QObject):
             out = [i for i in out if not i.get("isLong")]
         elif self._rail_format == 2:
             out = [i for i in out if i.get("isLong")]
+        self._ideas_view = out
         return out
 
     @Property(int, notify=resultsChanged)

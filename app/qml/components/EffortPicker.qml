@@ -87,7 +87,7 @@ Item {
                         radius: track.radius - 3
                         color: !seg.on && seg.hovered ? U.withAlpha(Theme.on_surface, 0.05) : U.withAlpha(Theme.on_surface, 0)
                     }
-                    C.AppTooltip { visible: seg.hovered && root.compact; text: modelData.hint || "" }
+                    C.LazyTooltip { show: seg.hovered && root.compact; text: modelData.hint || "" }
                     contentItem: Item {
                         Row {
                             anchors.centerIn: parent

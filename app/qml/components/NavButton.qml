@@ -241,8 +241,10 @@ AbstractButton {
         }
     }
 
-    AppTooltip {
-        visible: root.collapsed && root.hovered
+    // v1.0.8 perf: built on first hover (14 rail rows each carried a full
+    // tooltip tree that only shows while the rail is collapsed)
+    LazyTooltip {
+        show: root.collapsed && root.hovered
         delay: 350
         text: root.text
     }

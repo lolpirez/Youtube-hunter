@@ -1,5 +1,6 @@
 """app.qt_logging - Youtube Scrapper."""
 
+import os
 import sys
 
 from PySide6.QtCore import QtMsgType
@@ -98,8 +99,60 @@ def silence_ffmpeg_logs():
         pass
 
 
+# v1.0.7b — QML "member table" guard. A launch that logs this flood came up
+# with half-compiled types (see main_qml.py). Count it; if it happened, the
+# NEXT launch skips the background precompile and the disk cache once, then
+# goes back to normal after a clean launch.
+_QML_BROKEN_MARKERS = ("Cannot find member data", "is not a function")
+_qml_broken_hits = 0
+
+
+def _safe_mode_flag():
+    try:
+        from app.config import CONFIG_PATH
+        return os.path.join(os.path.dirname(CONFIG_PATH), "qml_safe_mode.flag")
+    except Exception:      # noqa: BLE001
+        return ""
+
+
+def qml_safe_mode_wanted():
+    """True when the previous launch hit the half-compiled QML flood, or the
+    user forces it with YH_QML_SAFE=1."""
+    if os.environ.get("YH_QML_SAFE") == "1":
+        return True
+    flag = _safe_mode_flag()
+    return bool(flag) and os.path.exists(flag)
+
+
+def note_qml_launch_result():
+    """Called a few seconds after the window loaded: arm or clear the flag."""
+    flag = _safe_mode_flag()
+    if not flag:
+        return
+    try:
+        if _qml_broken_hits >= 5:
+            with open(flag, "w", encoding="utf-8") as fh:
+                fh.write(str(_qml_broken_hits))
+            if sys.stderr is not None:
+                sys.stderr.write("[yh] QML came up half-compiled this launch "
+                                 f"({_qml_broken_hits} warnings). The next start "
+                                 "uses safe mode automatically.\n")
+        elif os.path.exists(flag):
+            # clean launch: back to the normal (fast, cached) path next time.
+            # v1.0.8: a clean SAFE-mode launch clears it too. It used to keep
+            # the flag, so one bad launch left every later start in safe mode
+            # (no disk cache = slower start) until the file was deleted by
+            # hand. If the flood comes back, the next launch re-arms it.
+            os.remove(flag)
+    except Exception:      # noqa: BLE001 — best-effort
+        pass
+
+
 def _qt_message_filter(mode, context, message):
+    global _qml_broken_hits
     text = message or ""
+    if any(m in text for m in _QML_BROKEN_MARKERS):
+        _qml_broken_hits += 1
     category = getattr(context, "category", "") or ""
     if (category in _QT_MUTED_CATEGORIES
             or text.startswith(_QT_MUTED_CATEGORIES)

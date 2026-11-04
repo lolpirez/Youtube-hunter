@@ -310,7 +310,7 @@ Item {
                                     }
                                 }
                                 HoverHandler { id: engineHover }
-                                C.AppTooltip { visible: engineHover.hovered; text: Ideas.providerCapabilityNote }
+                                C.LazyTooltip { show: engineHover.hovered; text: Ideas.providerCapabilityNote }
                             }
                         }
 
@@ -1088,7 +1088,7 @@ Item {
                                                         }
                                                     }
                                                 }
-                                                C.AppTooltip { visible: secBtn.hovered; text: modelData.title }
+                                                C.LazyTooltip { show: secBtn.hovered; text: modelData.title }
                                             }
                                         }
 

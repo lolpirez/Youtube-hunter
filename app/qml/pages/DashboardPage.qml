@@ -1176,7 +1176,9 @@ Item {
                                     anchors.fill: parent
                                     antialiasing: true
                                     smooth: true
-                                    layer.enabled: true
+                                    // v1.0.8 perf: the offscreen layer only exists while the
+                                    // beam shows (it kept an FBO alive on an idle page)
+                                    layer.enabled: visible
                                     layer.smooth: true
                                     opacity: Dashboard.isRunning ? 1 : 0
                                     visible: opacity > 0.01

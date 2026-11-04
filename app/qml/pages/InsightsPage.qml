@@ -59,11 +59,19 @@ Item {
         scroller.scrollToItem(lensBar, Tokens.space4)
     }
 
-    readonly property bool briefOk: Insights.hasBrief && Insights.brief.ok === true
-    readonly property int claimCount: (Insights.claims || []).length
-    readonly property int observedCount: briefOk ? (Insights.brief.observed || []).length : 0
-    readonly property int inferredCount: briefOk ? (Insights.brief.inferred || []).length : 0
-    readonly property int studioCount: briefOk ? (Insights.brief.requires_studio || []).length : 0
+    // v1.0.8 perf: every read of a Python dict/list property builds a brand
+    // new JS copy. The brief, the claims ledger and the history used to be
+    // read ~40 times across this page (counts, visibility, every Repeater
+    // model, every delegate), i.e. ~40 full conversions per change. Converted
+    // ONCE here per notify and shared.
+    readonly property var _brief: Insights.brief || ({})
+    readonly property var _claims: Insights.claims || []
+    readonly property var _history: Insights.history || []
+    readonly property bool briefOk: Insights.hasBrief && page._brief.ok === true
+    readonly property int claimCount: page._claims.length
+    readonly property int observedCount: briefOk ? (page._brief.observed || []).length : 0
+    readonly property int inferredCount: briefOk ? (page._brief.inferred || []).length : 0
+    readonly property int studioCount: briefOk ? (page._brief.requires_studio || []).length : 0
 
     // v1.1.3: re-read the AI provider on show (AI Ideas / Content Lab do the
     // same), so a key saved in Settings is picked up without a restart.
@@ -1268,14 +1276,14 @@ Item {
                         C.IconGlyph { name: "history"; size: 14; glyphColor: Theme.on_surface_var }
                         Eyebrow { text: I18n.tr("PREVIOUSLY ANALYZED") }
                         C.AppText {
-                            text: String((Insights.history || []).length)
+                            text: String((page._history || []).length)
                             mono: true
                             font.pixelSize: Tokens.fontMicro
                             color: Theme.outline
                         }
                         Item { Layout.fillWidth: true }
                         C.PrimaryButton {
-                            visible: (Insights.history || []).length > histBlock.cap
+                            visible: (page._history || []).length > histBlock.cap
                             variant: "ghost"
                             implicitHeight: 30
                             iconName: histBlock.showAll ? "expand_less" : "expand_more"
@@ -1288,8 +1296,8 @@ Item {
                         Layout.fillWidth: true
                         spacing: Tokens.space2
                         Repeater {
-                            model: histBlock.showAll ? Insights.history
-                                                     : (Insights.history || []).slice(0, histBlock.cap)
+                            model: histBlock.showAll ? page._history
+                                                     : (page._history || []).slice(0, histBlock.cap)
                             // v3.52: saved-scan card. The open one is unmistakable:
                             // accent fill + ring + glow, the kind tile lights up solid,
                             // an indicator bar grows on the leading edge and a check
@@ -1425,7 +1433,7 @@ Item {
                                                 C.IconGlyph { name: "auto_awesome"; fill: true; size: 10; glyphColor: Theme.secondary_container; anchors.verticalCenter: parent.verticalCenter }
                                                 C.AppText { text: "AI"; mono: true; weight: Tokens.weightBold; font.pixelSize: Tokens.fontMicro; color: Theme.secondary_container; anchors.verticalCenter: parent.verticalCenter }
                                             }
-                                            C.AppTooltip { visible: aiTipHover.hovered; text: I18n.tr("AI brief saved: reopening costs nothing") }
+                                            C.LazyTooltip { show: aiTipHover.hovered; text: I18n.tr("AI brief saved: reopening costs nothing") }
                                             HoverHandler { id: aiTipHover }
                                         }
                                     }
@@ -2869,7 +2877,7 @@ Item {
                         readonly property int rawTotal: page.observedCount + page.inferredCount + page.studioCount
                         readonly property int total: Math.max(1, rawTotal)
                         readonly property var intentItems: {
-                            var it = page.briefOk ? (Insights.brief.intent || {}) : {}
+                            var it = page.briefOk ? (page._brief.intent || {}) : {}
                             var defs = [
                                 { l: I18n.tr("VIEWER'S JOB"),   k: "job",     i: "target" },
                                 { l: I18n.tr("THE VIEWER"),     k: "viewer",  i: "user" },
@@ -3144,7 +3152,7 @@ Item {
                         C.GlassPanel {
                             id: rawCard
                             Layout.fillWidth: true
-                            visible: Insights.hasBrief && Insights.brief.ok === false
+                            visible: Insights.hasBrief && page._brief.ok === false
                             radius: Tokens.radiusXl
                             implicitHeight: rawCol.implicitHeight + Tokens.space6 * 2
                             property bool showRaw: false
@@ -3208,7 +3216,7 @@ Item {
                                         glyphSize: 15
                                         implicitWidth: 34; implicitHeight: 34
                                         tip: I18n.tr("Copy raw reply")
-                                        onClicked: clipHelper.put(Insights.brief.fallback_text || "")
+                                        onClicked: clipHelper.put(page._brief.fallback_text || "")
                                     }
                                 }
 
@@ -3233,7 +3241,7 @@ Item {
                                         C.AppText {
                                             id: rawTxt
                                             width: parent.width
-                                            text: Insights.brief.fallback_text || ""
+                                            text: page._brief.fallback_text || ""
                                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                             font.pixelSize: Tokens.fontCaption
                                             lineHeight: 1.35
@@ -3251,7 +3259,7 @@ Item {
                         Rectangle {
                             id: partialNote
                             Layout.fillWidth: true
-                            visible: page.briefOk && Insights.brief.partial === true
+                            visible: page.briefOk && page._brief.partial === true
                             implicitHeight: partialRow.implicitHeight + Tokens.space3 * 2
                             radius: Tokens.radiusLg
                             color: U.withAlpha(Theme.warn, Theme.isDark ? 0.08 : 0.06)
@@ -3336,7 +3344,7 @@ Item {
                                         glyphSize: 15
                                         implicitWidth: 34; implicitHeight: 34
                                         tip: I18n.tr("Copy")
-                                        onClicked: clipHelper.put(Insights.brief.summary || "")
+                                        onClicked: clipHelper.put(page._brief.summary || "")
                                     }
                                     C.IconButton {
                                         iconName: "refresh"
@@ -3369,7 +3377,7 @@ Item {
                                     C.AppText {
                                         Layout.fillWidth: true
                                         Layout.maximumWidth: 1080
-                                        text: Insights.brief.summary || ""
+                                        text: page._brief.summary || ""
                                         wrapMode: Text.WordWrap
                                         weight: Tokens.weightMedium
                                         font.pixelSize: briefLens.compact ? 20 : (content.wide ? 28 : 24)
@@ -3543,7 +3551,7 @@ Item {
                         C.BriefPlaybook {
                             Layout.fillWidth: true
                             visible: page.briefOk
-                            brief: page.briefOk ? Insights.brief : ({})
+                            brief: page.briefOk ? page._brief : ({})
                             compact: briefLens.compact
                             wide: content.wide
                             onCopyRequested: (t) => clipHelper.put(t)
@@ -3668,7 +3676,7 @@ Item {
                                             Layout.preferredWidth: 1
                                             Layout.alignment: Qt.AlignTop
                                             readonly property color tint: page.classTint(modelData.key)
-                                            readonly property var items: Insights.brief[modelData.key] || []
+                                            readonly property var items: page._brief[modelData.key] || []
                                             visible: (briefLens.pick === "" || briefLens.pick === modelData.key) && items.length > 0
                                             implicitHeight: sigInner.implicitHeight + Tokens.space5 * 2
                                             radius: Tokens.radiusLg
@@ -3761,7 +3769,7 @@ Item {
                         ColumnLayout {
                             Layout.fillWidth: true
                             Layout.topMargin: Tokens.space3
-                            visible: page.briefOk && (Insights.brief.opportunities || []).length > 0
+                            visible: page.briefOk && (page._brief.opportunities || []).length > 0
                             spacing: Tokens.space4
                             SectionHead {
                                 title: I18n.tr("Openings worth testing")
@@ -3771,12 +3779,12 @@ Item {
                             GridLayout {
                                 id: bfOppGrid
                                 Layout.fillWidth: true
-                                readonly property int n: (Insights.brief.opportunities || []).length
+                                readonly property int n: (page._brief.opportunities || []).length
                                 columns: content.width < 900 ? 1 : (content.width >= 1240 && n % 3 === 0 ? 3 : 2)
                                 columnSpacing: Tokens.space4
                                 rowSpacing: Tokens.space4
                                 Repeater {
-                                    model: Insights.brief.opportunities || []
+                                    model: page._brief.opportunities || []
                                     C.GlassPanel {
                                         id: oppCard
                                         Layout.fillWidth: true
@@ -3858,7 +3866,7 @@ Item {
                             id: qPanel
                             Layout.fillWidth: true
                             Layout.topMargin: Tokens.space3
-                            visible: page.briefOk && (Insights.brief.audience_questions || []).length > 0
+                            visible: page.briefOk && (page._brief.audience_questions || []).length > 0
                             radius: Tokens.radiusXl
                             implicitHeight: qCol.implicitHeight + Tokens.space6 * 2
                             property int open: 0
@@ -3874,7 +3882,7 @@ Item {
                                     icon: "contact_support"
                                 }
                                 Repeater {
-                                    model: Insights.brief.audience_questions || []
+                                    model: page._brief.audience_questions || []
                                     Rectangle {
                                         id: qRow
                                         Layout.fillWidth: true
@@ -3957,11 +3965,11 @@ Item {
                             id: expPanel
                             Layout.fillWidth: true
                             Layout.topMargin: Tokens.space3
-                            visible: page.briefOk && (Insights.brief.experiments || []).length > 0
+                            visible: page.briefOk && (page._brief.experiments || []).length > 0
                             radius: Tokens.radiusXl
                             elevation: 1.3
                             implicitHeight: expCol.implicitHeight + Tokens.space6 * 2
-                            readonly property var list: Insights.brief.experiments || []
+                            readonly property var list: page._brief.experiments || []
                             property int sel: 0
                             readonly property var cur: list.length > 0 ? list[Math.min(sel, list.length - 1)] : ({})
                             readonly property bool rowMode: content.width >= 1100
@@ -4247,7 +4255,7 @@ Item {
 
                         function confRank(c) { return c === "high" ? 3 : c === "medium" ? 2 : 1 }
                         readonly property var rows: {
-                            var all = Insights.claims || []
+                            var all = page._claims || []
                             var out = []
                             for (var i = 0; i < all.length; i++)
                                 if (filter === "" || all[i].evidenceClass === filter) {
@@ -4263,20 +4271,20 @@ Item {
                             return out
                         }
                         function countOf(cls) {
-                            var all = Insights.claims || []
+                            var all = page._claims || []
                             var n = 0
                             for (var i = 0; i < all.length; i++) if (all[i].evidenceClass === cls) n++
                             return n
                         }
                         function confCount(c) {
-                            var all = Insights.claims || []
+                            var all = page._claims || []
                             var n = 0
                             for (var i = 0; i < all.length; i++) if ((all[i].confidence || "low") === c) n++
                             return n
                         }
                         // distinct videos the whole ledger leans on
                         readonly property int sourceCount: {
-                            var all = Insights.claims || []
+                            var all = page._claims || []
                             var seen = {}, n = 0
                             for (var i = 0; i < all.length; i++) {
                                 var s = all[i].sources || []
@@ -5276,11 +5284,11 @@ Item {
                                 }
                                 ColumnLayout {
                                     Layout.fillWidth: true
-                                    visible: (Insights.brief.limits || []).length > 0
+                                    visible: (page._brief.limits || []).length > 0
                                     spacing: Tokens.space2
                                     Eyebrow { text: I18n.tr("THE MODEL'S OWN CAVEATS"); Layout.topMargin: Tokens.space2 }
                                     Repeater {
-                                        model: Insights.brief.limits || []
+                                        model: page._brief.limits || []
                                         RowLayout {
                                             Layout.fillWidth: true
                                             spacing: Tokens.space2

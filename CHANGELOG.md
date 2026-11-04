@@ -7,6 +7,68 @@ Version numbering restarted at **1.0.0** for the public release.
 
 ---
 
+## Unreleased (v1.0.8): performance pass, safe VPN switching, paged History
+
+- **Performance pass (smoothness inside every section).**
+  - Downloads: live progress ticks are coalesced (~12/s) and the formatted
+    live map is cached per tick. Every row + the overall bar used to rebuild
+    the whole map on every raw yt-dlp tick (O(N^2) with several downloads).
+  - Python dict/list properties are converted to JS once per change and
+    shared, instead of once per binding: Insights (brief/claims/history,
+    ~30 reads), Archive groups, Downloads entries, Content Lab, History,
+    Niche presets. Archive/Niche cards check done/saved/ticked in O(1) maps.
+  - Scraper results board no longer re-sorts every row every 1.2 s while you
+    are on another page; it catches up once when you come back.
+  - Niche radar: full frame rate only while searching, 30 Hz idle sweep.
+  - Blueprint preview: binary search for the active beat (30x/s).
+  - 20 tooltips (sidebar rows, field hints, segment buttons, cards) are built
+    on first hover instead of with the page.
+  - Deno download progress, Niche search progress and status only re-emit
+    when they change; AI Ideas / Content Lab rail list and Archive header
+    stats are cached per change instead of rebuilt on every read.
+  - Scraper gauge: the beam's offscreen layer only exists while it shows.
+- **History is paged.** A long export folder used to grow one endless
+  timeline; it now pages 12 files at a time with the app's shared pager
+  (‹ 1 2 3 ›), a "showing N–M of T" caption, and a jump back to the top on
+  every page turn. Filters and search start again from page 1.
+- **Ocean (blue) is the default accent.** Fresh installs open in the blue
+  theme; an accent you picked yourself is kept.
+- **Fix: pages coming up half-built** (thin text, placeholder icons,
+  "Cannot find member data" / "is not a function" flood in the console).
+  Qt 6.12's disk cache also feeds ahead-of-time compiled units into the
+  engine; on some cold starts those units bound new objects to an incomplete
+  member table. The runtime cache now stores bytecode only (see the v1.0.7
+  entry below), which keeps the same warm-start speed and removes the flood.
+- **Thorough retry rounds: hedged fetch.** A leftover video walked library ->
+  light yt-dlp -> deep yt-dlp one after another (~45-60 s per round). Now the
+  library starts first and, after 1.8 s without text, every yt-dlp rung races
+  next to it on its own pool/slots: a round costs the slowest single source
+  (<= 28 s), and the first text wins.
+- **No more burning rounds on one stubborn video.** A video refused while the
+  others in its round got through (or one of the last 1-2 left) gets 2 retry
+  rounds, then keeps "Blocked by YouTube". Rounds with a real IP-block pause
+  never count. The connection check now runs during the breather.
+- **Thorough follows Worker Threads.** It was capped at 3 workers and a flat
+  1.2 s start pace whatever the level; it now scales with the level (up to 8
+  workers on Turbo) and starts from the level's own pace.
+- **Thorough re-checks run in parallel.** "No captions" is confirmed by the
+  library and yt-dlp at the same time; a short transcript is compared with the
+  auto track from the same player answer first, then one watch page (not two)
+  and yt-dlp side by side.
+- **Verified answers are cached.** A "no captions" / short transcript that a
+  thorough run double-checked is trusted for 14 days, so re-runs skip them.
+- **No full yt-dlp ladder on a blocked IP**, and the ladder now has a 45 s
+  budget (it could hold a worker for minutes).
+- **End-of-run retries are adaptive.** A productive round keeps the short
+  breather (2 s); only a dry round waits longer. Retries also wait for a stable
+  connection first instead of failing into a VPN that is reconnecting.
+- **Deeper in-flight window**, so one slow video no longer stalls the queue.
+- **VPN switch: settle, then resume.** A new IP must hold still for 5 s (shown
+  as a countdown on the pause card, with "Resume now"), sit outside the
+  restricted countries and get an answer from YouTube before the run resumes.
+  Your own IP showing through mid-switch is reported as "VPN looks off" and
+  never resumed on. A VPN that drops mid-run pauses Thorough with a clear
+  "Can't reach YouTube" card instead of failing every video.
 ## Unreleased (v1.0.7): quiet log on a fresh install
 
 - **"Cannot find member data" / "Property '_x' is not a function" gone.**

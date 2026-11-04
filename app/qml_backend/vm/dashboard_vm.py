@@ -13,6 +13,7 @@ legacy app.ui.window.scrape_mixin does. The QWidgets app is untouched.
 
 import base64
 import hashlib
+import math
 import os
 import re
 import threading
@@ -27,6 +28,7 @@ from PySide6.QtCore import QObject, Property, QTimer, Signal, Slot
 
 from app.config import load_app_config, save_app_config
 from app.constants import FORMAT_EXT, SORT_MAP, SORT_SUFFIX
+from app.core import geo as _geo
 from app.core.exports import read_checkpoint_rows, write_export, write_transcript_files
 from app.core.niche.helpers import detect_short
 from app.core.quota import (api_quota_remaining, clean_api_keys,
@@ -86,14 +88,53 @@ _TR_SECOND_PASS_BREATHER = 3.0
 # run and waits instead of burning rounds), with growing breathers. A video
 # that keeps failing for a non-IP reason (PO-token-only track, broken player
 # answer) stops after _TR_THOROUGH_ERROR_TRIES and keeps its honest label.
-_TR_THOROUGH_BREATHERS = (4.0, 15.0, 30.0, 60.0, 90.0, 120.0)
+# v1.0.7: the breathers are ADAPTIVE. A round that recovered a good share of
+# what it retried goes back to the shortest one (the limit has lifted, keep
+# going); only a round that got (almost) nothing climbs the ladder. The old
+# fixed 4 / 15 / 30 / 60 … s steps made the end of a thorough run crawl even
+# when YouTube was answering fine.
+_TR_THOROUGH_BREATHERS = (2.0, 6.0, 15.0, 30.0, 60.0, 90.0)
 _TR_THOROUGH_MAX_ROUNDS = 10
-_TR_THOROUGH_ERROR_TRIES = 4
-_TR_THOROUGH_MAX_WORKERS = 3
+_TR_THOROUGH_ERROR_TRIES = 3
+# v1.0.7b: a round where every leftover is a "Failed" (network / player /
+# PO-token problem of THAT video, not an IP refusal) waits only this long.
+# The breather exists for rate limits; a broken player answer is not fixed by
+# waiting, so the old 2 / 6 / 15 / 30 s steps were pure dead time there.
+_TR_ERROR_ONLY_BREATHER = 1.0
+# v1.0.8: a video YouTube keeps refusing while OTHER videos in the same round
+# come through (or that is one of the last one or two left) is refused for
+# itself, not for the IP: members-only, age-gated, a region lock, a PO-token-
+# only track. It used to be retried in every one of the up to 10 rounds, at
+# ~50 s a round, for nothing. It gets this many retry rounds, then keeps its
+# honest "Blocked by YouTube" label. Rounds where the run paused for a real IP
+# block (the epoch moved) never count.
+_TR_THOROUGH_BLOCK_TRIES = 2
+_TR_THOROUGH_MAX_WORKERS = 3       # legacy, see _thorough_workers()
 # Pause watcher (thorough): how often it looks for a new public IP, and how
 # often it sends one gentle probe to see if YouTube answers again.
-_TR_WATCH_IP_EVERY = 4.0
-_TR_WATCH_PROBE_EVERY = 20.0
+_TR_WATCH_IP_EVERY = 3.0
+_TR_WATCH_PROBE_EVERY = 15.0
+# v1.0.7 "settle before resuming": a new IP is only trusted after it has stayed
+# the same for this many seconds (the card counts it down). Switching a VPN
+# server drops the tunnel for a moment, and the machine's OWN IP shows up in
+# between: the old watcher resumed on it instantly, every request then failed
+# and the run blocked again. While settling the IP is re-read this often.
+_TR_SWITCH_SETTLE = 5
+_TR_WATCH_SETTLE_POLL = 1.5
+# Thorough mode: this many network failures in a row trigger one YouTube
+# reachability check; if YouTube is unreachable the run pauses (VPN dropped)
+# instead of burning every video as "Failed".
+_TR_NET_ERROR_STREAK = 6
+_TR_NET_CHECK_EVERY = 15.0
+
+
+def _thorough_workers(level_workers):
+    """v1.0.7: thorough follows the Worker Threads setting too (it was capped
+    at 3 whatever the level). A quarter fewer than fast, because each thorough
+    video may run a second source; the shared caption pacer still decides how
+    fast requests really go out."""
+    n = int(level_workers or 1)
+    return max(2, n - n // 4) if n > 1 else 1
 
 
 def _as_int(v):
@@ -173,6 +214,7 @@ class DashboardVM(QObject):
     transcriptIpChecked = Signal(bool)  # worker → GUI: (ip differs from the blocked one)
     _trPausedSig = Signal()             # worker → GUI: a block wave just paused the run
     _trAutoResume = Signal(str)         # watcher → GUI: the block is over (log line)
+    _trIpVerdict = Signal(str)          # manual IP check → GUI: ok|same|restricted|refused|offline
     resultsPatched = Signal("QVariantList")    # [{vid, tx}] second-pass fixes for the board
     transcriptSummaryChanged = Signal()
 
@@ -269,6 +311,20 @@ class DashboardVM(QObject):
         self._tr_fast_noted = False    # fast mode: block wave already logged
         self._tr_probe_vid = ""        # the video a thorough pause probes with
         self._tr_err_tries = {}        # vid -> "error" answers (thorough rounds)
+        self._tr_blk_tries = {}        # vid -> isolated refusals (thorough rounds)
+        # v1.0.7 IP switch (see _tr_watch): "" | settling | verifying |
+        # restricted | refused | offline
+        self._tr_switch_state = ""
+        self._tr_switch_ip = ""
+        self._tr_switch_cc = ""        # country label of that IP
+        self._tr_switch_left = 0       # settle countdown (s), GUI-driven
+        self._tr_switch_deadline = 0.0
+        self._tr_bad_ips = set()       # IPs YouTube refused during this run
+        self._tr_pause_reason = "blocked"    # or "offline" (route to YouTube lost)
+        self._tr_ip_note_args = {}
+        self._tr_err_streak = 0        # thorough: network failures in a row
+        self._tr_net_checked = 0.0
+        self._trIpVerdict.connect(self._on_ip_verdict)
         self._tr_cd_timer = QTimer(self)
         self._tr_cd_timer.setInterval(1000)
         self._tr_cd_timer.timeout.connect(self._on_cooldown_tick)
@@ -349,7 +405,12 @@ class DashboardVM(QObject):
 
     @Property(str, notify=transcriptStateChanged)
     def transcriptIpNote(self):
-        return tr(self._tr_ip_note_key) if self._tr_ip_note_key else ""
+        if not self._tr_ip_note_key:
+            return ""
+        try:
+            return tr(self._tr_ip_note_key).format(**self._tr_ip_note_args)
+        except (KeyError, IndexError, ValueError):
+            return tr(self._tr_ip_note_key)
 
     @Property(int, notify=transcriptStateChanged)
     def transcriptSkipped(self):
@@ -363,6 +424,58 @@ class DashboardVM(QObject):
     def transcriptCooldown(self):
         """Seconds until the paused run retries on the same IP (0 = not armed)."""
         return self._tr_cooldown
+
+    # ── v1.0.7 IP switch strip (inside the pause card) ──
+    @Property(str, notify=transcriptStateChanged)
+    def transcriptSwitchState(self):
+        """"" | settling | verifying | restricted | refused | offline"""
+        return self._tr_switch_state
+
+    @Property(str, notify=transcriptStateChanged)
+    def transcriptSwitchIp(self):
+        return self._tr_switch_ip
+
+    @Property(str, notify=transcriptStateChanged)
+    def transcriptSwitchCountry(self):
+        return self._tr_switch_cc
+
+    @Property(int, notify=transcriptStateChanged)
+    def transcriptSwitchLeft(self):
+        return self._tr_switch_left
+
+    @Property(int, constant=True)
+    def transcriptSwitchTotal(self):
+        return _TR_SWITCH_SETTLE
+
+    @Property(str, notify=transcriptStateChanged)
+    def transcriptPauseReason(self):
+        """Why the run is paused: "blocked" (YouTube refuses this IP) or
+        "offline" (the route to YouTube is gone: VPN off / switching)."""
+        return self._tr_pause_reason
+
+    @Slot()
+    def transcriptSwitchNow(self):
+        """Skip the settle countdown: verify the new IP right away."""
+        if self._tr_switch_state == "settling":
+            self._tr_switch_deadline = 0.0
+            self._tr_switch_left = 0
+            self.transcriptStateChanged.emit()
+
+    def _set_switch(self, state, ip="", cc="", left=0):
+        """Worker thread: update the switch strip (one notify per change)."""
+        changed = (state, ip, cc) != (self._tr_switch_state, self._tr_switch_ip,
+                                      self._tr_switch_cc)
+        self._tr_switch_state = state
+        self._tr_switch_ip = ip
+        self._tr_switch_cc = cc
+        if state == "settling":
+            self._tr_switch_left = int(left)
+            self._tr_switch_deadline = time.monotonic() + float(left)
+        else:
+            self._tr_switch_left = 0
+            self._tr_switch_deadline = 0.0
+        if changed or state == "settling":
+            self.transcriptStateChanged.emit()
 
     @Property(bool, notify=transcriptStateChanged)
     def transcriptRecovering(self):
@@ -400,6 +513,7 @@ class DashboardVM(QObject):
             return
         self._tr_checking = True
         self._tr_ip_note_key = ""
+        self._tr_ip_note_args = {}
         self.transcriptStateChanged.emit()
         threading.Thread(target=self._ip_check_worker, daemon=True).start()
 
@@ -416,6 +530,12 @@ class DashboardVM(QObject):
         reset_breaker()            # fresh pace + give the fast path another go
         self._tr_paused = False
         self._tr_ip_note_key = ""
+        self._tr_ip_note_args = {}
+        self._tr_switch_state = self._tr_switch_ip = self._tr_switch_cc = ""
+        self._tr_switch_left = 0
+        self._tr_switch_deadline = 0.0
+        with self._tr_lock:
+            self._tr_err_streak = 0
         self._reset_block_streak()
         self._tr_gate.set()
         if log_line:
@@ -434,42 +554,156 @@ class DashboardVM(QObject):
         threading.Thread(target=self._tr_watch, args=(self._tr_waves,),
                          daemon=True, name="tx-watch").start()
 
+    @staticmethod
+    def _where():
+        """(ip, country_code, restricted) over the transcripts' own route.
+        One geo lookup gives the IP AND its country; the plain IP lookup is
+        the fallback when every geo service is slow or filtered."""
+        try:
+            r = _geo.lookup("web")
+        except Exception:              # noqa: BLE001
+            r = {}
+        if r.get("ok") and r.get("ip"):
+            return r["ip"], r.get("code", ""), bool(r.get("restricted"))
+        return (get_public_ip(timeout=3) or ""), "", False
+
+    def _verify_ip(self, cand):
+        """The settled candidate IP, checked for real before resuming:
+        "ok" | "moved" (it changed again) | "restricted" (VPN off: an IP in
+        Iran & co.) | "refused" (YouTube refuses it too) | "offline"."""
+        try:
+            r = _geo._check_one("web")
+        except Exception:              # noqa: BLE001
+            r = {}
+        ip = r.get("ip") or get_public_ip(timeout=3) or ""
+        if ip and ip != cand:
+            return "moved"
+        if r.get("restricted"):
+            return "restricted"
+        if not r.get("online") and not ip:
+            return "offline"
+        if not r.get("yt_ok"):
+            return "refused" if (r.get("yt") or {}).get("refused") else "offline"
+        if self._tr_probe_vid:
+            res = probe_transcript(self._tr_probe_vid)
+            if res in ("blocked", "rate"):
+                return "refused"
+        return "ok"
+
     def _tr_watch(self, wave):
-        """v1.0.6, worker thread: while a Thorough run is paused on a block,
-        notice BY ITSELF that it is over, so nobody has to press a button.
+        """Worker thread: while a Thorough run is paused, notice BY ITSELF that
+        it is over, so nobody has to press a button.
 
-          * every few seconds: the public IP. Switching the VPN node resumes
-            within ~4 s (it used to need "Check new IP", and before that a
-            sequential 3-endpoint lookup of up to ~18 s).
-          * every ~20 s: one gentle, unpaced probe with the video that hit the
-            block. An answer (text or "no captions") means the limit lifted.
+          * every few seconds: the public IP (and its country).
+          * v1.0.7: a NEW IP is not trusted at once. Switching VPN servers drops
+            the tunnel for a moment and the machine's own IP shows through, so
+            the card says "New IP detected · resuming in 5" and the IP is
+            re-read every 1.5 s. Any change restarts the count; at zero the IP
+            is verified (same IP, not in a restricted country, YouTube answers)
+            and only then the run resumes. An IP in Iran & co. is reported as
+            "VPN looks off" and waited out, never resumed on.
+          * every ~15 s (not while switching): one gentle, unpaced probe with
+            the video that hit the block. An answer means the limit lifted.
         """
-        if not self._tr_blocked_ip:
-            self._tr_blocked_ip = get_public_ip() or ""
-            self.transcriptStateChanged.emit()
-        last_ip = last_probe = time.monotonic()
-
         def _still_paused():
             return (self._tr_paused and self._is_running and not self._stop_requested
                     and not self._tr_skip_rest and self._tr_waves == wave)
 
+        offline = self._tr_pause_reason == "offline"
+        if not self._tr_blocked_ip:
+            ip, code, restricted = self._where()
+            if ip and restricted:
+                self._set_switch("restricted", ip, _geo.country_label(code))
+            if offline:
+                # nothing was refused: whatever working IP shows up next is a
+                # candidate (even the same VPN IP once its tunnel is back)
+                if not ip:
+                    self._set_switch("offline")
+            else:
+                self._tr_blocked_ip = ip
+                if ip and not restricted:
+                    self._tr_bad_ips.add(ip)
+            self.transcriptStateChanged.emit()
+        cand = ""
+        announced = set()
+        last_ip = last_probe = time.monotonic()
         while _still_paused():
-            time.sleep(0.5)
+            time.sleep(0.25)
             if not _still_paused() or self._tr_checking:
                 continue
             now = time.monotonic()
-            if now - last_ip >= _TR_WATCH_IP_EVERY:
-                last_ip = now
-                ip = get_public_ip(timeout=4) or ""
-                if not self._tr_blocked_ip and ip:
+            poll = (_TR_WATCH_SETTLE_POLL
+                    if (cand or self._tr_switch_state in ("settling", "offline"))
+                    else _TR_WATCH_IP_EVERY)
+            if now - last_ip >= poll:
+                ip, code, restricted = self._where()
+                last_ip = time.monotonic()
+                if not _still_paused():
+                    break
+                cc = _geo.country_label(code) if code else ""
+                if not self._tr_blocked_ip and ip and not offline and not restricted:
                     self._tr_blocked_ip = ip
+                    self._tr_bad_ips.add(ip)
                     self.transcriptStateChanged.emit()
-                elif ip and ip != self._tr_blocked_ip and _still_paused():
+                    continue
+                if not ip:
+                    # mid-switch, or no internet at all: wait, never resume
+                    cand = ""
+                    self._set_switch("offline")
+                elif restricted:
+                    cand = ""
+                    self._set_switch("restricted", ip, cc)
+                elif ip == self._tr_blocked_ip:
+                    cand = ""
+                    if self._tr_switch_state:
+                        self._set_switch("")       # back on the same IP
+                elif ip in self._tr_bad_ips:
+                    cand = ""
+                    self._set_switch("refused", ip, cc)
+                elif ip != cand:
+                    cand = ip
+                    self._set_switch("settling", ip, cc, left=_TR_SWITCH_SETTLE)
+                    if ip not in announced:
+                        announced.add(ip)
+                        self._emit.log_signal.emit(
+                            "🌐  " + tr("New IP detected ({ip}{cc}): making sure it is stable "
+                                       "for {s}s before resuming …").format(
+                                ip=ip, cc=(" · " + cc) if cc else "", s=_TR_SWITCH_SETTLE))
+            if cand and self._tr_switch_state == "settling" \
+                    and time.monotonic() >= self._tr_switch_deadline:
+                cc = self._tr_switch_cc
+                self._set_switch("verifying", cand, cc)
+                verdict = self._verify_ip(cand)
+                if not _still_paused():
+                    break
+                if verdict == "ok":
                     self._trAutoResume.emit(
-                        "🌐  " + tr("New IP detected ({ip}): resuming transcripts.").format(ip=ip))
+                        "✅  " + tr("New IP {ip}{cc} is stable and YouTube answers: "
+                                   "resuming transcripts.").format(
+                            ip=cand, cc=(" · " + cc) if cc else ""))
                     return
+                if verdict == "refused":
+                    self._tr_bad_ips.add(cand)
+                    self._set_switch("refused", cand, cc)
+                    self._emit.log_signal.emit(
+                        "⚠️  " + tr("YouTube refuses the new IP ({ip}) too: try another "
+                                   "VPN server.").format(ip=cand))
+                elif verdict == "restricted":
+                    self._set_switch("restricted", cand, cc)
+                elif verdict == "offline":
+                    self._set_switch("offline")
+                    last_ip = time.monotonic() + 2.0    # small back-off
+                else:                               # moved: re-read right away
+                    self._set_switch("")
+                    last_ip = 0.0
+                cand = ""
+                continue
+            if cand or self._tr_switch_state in ("settling", "verifying", "offline"):
+                continue                            # no probes mid-switch
             if now - last_probe >= _TR_WATCH_PROBE_EVERY and self._tr_probe_vid:
                 last_probe = time.monotonic()
+                if self._tr_switch_state == "restricted":
+                    continue                        # VPN off: nothing can answer
                 res = probe_transcript(self._tr_probe_vid)
                 if res in ("ok", "none") and _still_paused():
                     self._trAutoResume.emit(
@@ -490,6 +724,14 @@ class DashboardVM(QObject):
             return
         if self._tr_checking:
             return                 # an IP check is deciding right now
+        if self._tr_switch_state == "settling":
+            left = max(0, int(math.ceil(self._tr_switch_deadline - time.monotonic())))
+            if left != self._tr_switch_left:
+                self._tr_switch_left = left
+                self.transcriptStateChanged.emit()
+            return                 # a new IP is settling: the watcher decides
+        if self._tr_switch_state in ("verifying", "restricted", "offline"):
+            return                 # retrying now could only fail: hold the clock
         self._tr_cooldown = max(0, self._tr_cooldown - 1)
         if self._tr_cooldown == 0:
             self._resume_transcripts(
@@ -498,13 +740,61 @@ class DashboardVM(QObject):
         self.transcriptStateChanged.emit()
 
     def _ip_check_worker(self):
-        ip = ""
+        """"Check new IP & resume": v1.0.7 also checks WHERE the IP is and that
+        YouTube answers on it, so a VPN that is still reconnecting (your own
+        IP showing through) is reported instead of resumed on."""
         try:
-            ip = get_public_ip() or ""
-        except Exception:              # noqa: BLE001 — surfaced as "unchanged"
-            ip = ""
-        same = bool(self._tr_blocked_ip) and ip == self._tr_blocked_ip
-        self.transcriptIpChecked.emit(not same)
+            r = _geo._check_one("web")
+        except Exception:              # noqa: BLE001
+            r = {}
+        ip = r.get("ip") or ""
+        if not ip:
+            try:
+                ip = get_public_ip() or ""
+            except Exception:          # noqa: BLE001 — surfaced as "unchanged"
+                ip = ""
+        if not ip and not r.get("online"):
+            self._tr_ip_note_args = {}
+            self._trIpVerdict.emit("offline")
+            return
+        if bool(self._tr_blocked_ip) and ip == self._tr_blocked_ip:
+            self._trIpVerdict.emit("same")
+            return
+        if r.get("restricted"):
+            self._tr_ip_note_args = {"ip": ip,
+                                     "country": _geo.country_label(r.get("code", ""))}
+            self._trIpVerdict.emit("restricted")
+            return
+        if r and not r.get("yt_ok") and (r.get("yt") or {}).get("refused"):
+            self._tr_ip_note_args = {"ip": ip}
+            self._tr_bad_ips.add(ip)
+            self._trIpVerdict.emit("refused")
+            return
+        self._tr_ip_note_args = {"ip": ip}
+        self._trIpVerdict.emit("ok")
+
+    @Slot(str)
+    def _on_ip_verdict(self, verdict):
+        if verdict == "ok":
+            self._tr_checking = False
+            self._resume_transcripts("🌐  " + tr("IP changed — resuming transcripts."))
+            return
+        self._tr_checking = False
+        if verdict == "same":
+            self._tr_ip_note_key = ("Still the same IP — switch the VPN node, "
+                                    "then press Check new IP again.")
+        elif verdict == "restricted":
+            self._tr_ip_note_key = ("Your IP is now in {country} ({ip}): the VPN looks "
+                                    "off or is still reconnecting. Turn it on and the "
+                                    "run continues by itself.")
+        elif verdict == "refused":
+            self._tr_ip_note_key = ("YouTube refuses this IP ({ip}) too: pick another "
+                                    "VPN server.")
+        else:
+            self._tr_ip_note_key = ("No connection right now: wait for the VPN to "
+                                    "connect, the run continues by itself.")
+        self._emit.log_signal.emit("⚠️  " + self.transcriptIpNote)
+        self.transcriptStateChanged.emit()
 
     @Slot(bool)
     def _on_ip_checked(self, changed):
@@ -517,8 +807,10 @@ class DashboardVM(QObject):
         self._emit.log_signal.emit("⚠️  " + tr(self._tr_ip_note_key))
         self.transcriptStateChanged.emit()
 
-    def _pause_transcripts(self, vid):
-        """Flip to paused ONCE per block wave, from a worker thread."""
+    def _pause_transcripts(self, vid, reason="blocked"):
+        """Flip to paused ONCE per block wave, from a worker thread.
+        `reason` "offline" (v1.0.7): the route to YouTube is gone (VPN off or
+        switching), not a refusal."""
         # Up to 16 workers can hit the block at the same moment: only the
         # first one flips the state and writes the log.
         with self._tr_lock:
@@ -529,6 +821,24 @@ class DashboardVM(QObject):
             self._tr_gate.clear()
             self._tr_probe_vid = vid
             self._tr_blocked_ip = ""       # the watcher looks it up (in parallel)
+            self._tr_pause_reason = reason
+            self._tr_switch_state = self._tr_switch_ip = self._tr_switch_cc = ""
+            self._tr_switch_left = 0
+        if reason == "offline":
+            self.transcriptStateChanged.emit()
+            self._trPausedSig.emit()
+            self._emit.log_signal.emit("─" * 72)
+            self._emit.log_signal.emit(
+                "📡  " + tr("Lost the route to YouTube (VPN off or switching servers?). "
+                           "Transcripts are paused, nothing is lost: the run continues "
+                           "by itself once YouTube is reachable again."))
+            announce("error",
+                     tr("Transcripts paused: YouTube unreachable"),
+                     tr("The connection to YouTube dropped. Turn the VPN back on; "
+                        "the run continues by itself."),
+                     page=0, icon="warning", source=tr("Scraper"),
+                     group="ip-block", force=True)
+            return
         # Tell the UI FIRST: the IP lookup below can take up to ~18 s through a
         # slow proxy, and the card used to wait for it before appearing.
         self.transcriptStateChanged.emit()
@@ -572,6 +882,29 @@ class DashboardVM(QObject):
             if self._tr_gate.wait(0.25):
                 break
 
+    def _net_down_suspected(self):
+        """Thorough: True when failures keep coming AND YouTube is unreachable
+        right now (checked at most every _TR_NET_CHECK_EVERY seconds)."""
+        with self._tr_lock:
+            self._tr_err_streak += 1
+            if self._tr_paused:
+                return True        # someone already paused: wait with them
+            if self._tr_err_streak < _TR_NET_ERROR_STREAK:
+                return False
+            now = time.monotonic()
+            if now - self._tr_net_checked < _TR_NET_CHECK_EVERY:
+                return False
+            self._tr_net_checked = now
+        try:
+            yt = _geo.probe_youtube("web")
+        except Exception:              # noqa: BLE001
+            return False
+        if yt.get("reachable"):
+            with self._tr_lock:
+                self._tr_err_streak = 0
+            return False
+        return True
+
     def _note_fast_block(self):
         """Fast mode met a block wave: say so once, do NOT stop."""
         with self._tr_lock:
@@ -608,7 +941,7 @@ class DashboardVM(QObject):
         thorough = self._tr_thorough
         secs = self._tx_secs.get(vid, 0)
         ep = tx_epoch()
-        status, text, err = fetch_transcript(vid, thorough=thorough, expect_secs=secs)
+        status, text, err = fetch_transcript(vid, thorough=thorough, expect_secs=secs, hedge=retry)
         resumed_once = False
         while True:
             if status.startswith("Available") and not (text and text != "N/A"):
@@ -616,6 +949,7 @@ class DashboardVM(QObject):
                 status, err = "Not Available", "error"
             if status.startswith("Available"):
                 self._reset_block_streak()
+                self._tr_err_streak = 0
                 self._tr_fast_noted = False
                 self._bump("found")
                 self.transcriptStateChanged.emit()
@@ -628,7 +962,7 @@ class DashboardVM(QObject):
                     self._await_gate()
                     ep = tx_epoch()
                     status, text, err = fetch_transcript(
-                        vid, thorough=thorough, expect_secs=secs)
+                        vid, thorough=thorough, expect_secs=secs, hedge=retry)
                     continue
                 with self._tr_lock:
                     self._tr_block_streak += 1
@@ -646,7 +980,7 @@ class DashboardVM(QObject):
                         resumed_once = True
                         ep = tx_epoch()
                         status, text, err = fetch_transcript(
-                            vid, thorough=thorough, expect_secs=secs)
+                            vid, thorough=thorough, expect_secs=secs, hedge=retry)
                         continue
                 # Refused, and not resolved now: parked for the second pass.
                 self._bump("blocked")
@@ -655,11 +989,25 @@ class DashboardVM(QObject):
             if err == "error":
                 # A network / player failure says nothing about the IP either
                 # way: no streak change, parked for the second pass.
+                # v1.0.7 thorough: a run of them may mean the VPN dropped. Then
+                # pause (and let the watcher wait for the route to come back)
+                # instead of writing every remaining video off as "Failed".
+                if (thorough and not resumed_once and not self._tr_skip_rest
+                        and not self._stop_requested and self._net_down_suspected()):
+                    self._pause_transcripts(vid, reason="offline")
+                    self._await_gate()
+                    if not self._tr_skip_rest and not self._stop_requested:
+                        resumed_once = True
+                        ep = tx_epoch()
+                        status, text, err = fetch_transcript(
+                            vid, thorough=thorough, expect_secs=secs, hedge=retry)
+                        continue
                 self._bump("blocked")
                 self.transcriptStateChanged.emit()
                 return (_TX_FAILED, "N/A", "error")
             # A real answer ("no captions") proves the endpoint is alive.
             self._reset_block_streak()
+            self._tr_err_streak = 0
             self._bump("none")
             self.transcriptStateChanged.emit()
             return ("Not Available", "N/A", "none")
@@ -1173,7 +1521,16 @@ class DashboardVM(QObject):
         self._tr_fast_noted = False
         self._tr_probe_vid = ""
         self._tr_err_tries = {}
+        self._tr_blk_tries = {}
         self._tr_ip_note_key = ""
+        self._tr_ip_note_args = {}
+        self._tr_switch_state = self._tr_switch_ip = self._tr_switch_cc = ""
+        self._tr_switch_left = 0
+        self._tr_switch_deadline = 0.0
+        self._tr_bad_ips = set()
+        self._tr_pause_reason = "blocked"
+        self._tr_err_streak = 0
+        self._tr_net_checked = 0.0
         self._tr_waves = 0
         self._tr_cooldown = 0
         self._tr_recovering = False
@@ -1521,17 +1878,22 @@ class DashboardVM(QObject):
             set_abort_check(lambda: self._stop_requested)
             tx_workers = tx_prof["workers"] if transcripts_on else 0
             if thorough:
-                tx_workers = min(tx_workers, _TR_THOROUGH_MAX_WORKERS)
+                tx_workers = _thorough_workers(tx_workers)
             tx_pool = (ThreadPoolExecutor(max_workers=tx_workers, thread_name_prefix="tx")
                        if tx_workers > 1 else None)
             tx_queue.clear()                    # (vid, row, future), submit order
-            tx_window = max(8, tx_workers * 3)  # in-flight cap (memory + fairness)
+            # in-flight cap (memory + fairness). v1.0.7: deeper, because
+            # results are emitted in order: one slow video at the head of the
+            # queue used to stall new submissions while every other worker
+            # sat idle (thorough's second sources make slow heads common).
+            tx_window = (max(24, tx_workers * 8) if thorough
+                         else max(12, tx_workers * 4))
             if transcripts_on:
                 emit.log_signal.emit(
                     ("⚡  " if tx_prof["turbo"] else "📝  ")
                     + tr("Transcripts: {n} in parallel{t}").format(
                         n=max(1, tx_workers),
-                        t=("  ·  TURBO" if tx_prof["turbo"] and not thorough else "")))
+                        t=("  ·  TURBO" if tx_prof["turbo"] else "")))
                 emit.log_signal.emit(
                     ("🎯  " + tr("Transcript mode: Thorough. Every video gets its transcript: "
                                 "\"no captions\" is double-checked, short ones are re-fetched, "
@@ -1765,17 +2127,24 @@ class DashboardVM(QObject):
                         retry_rows.append((_row.get("video_id"), _row))
                         self._bump("found", -1)
                         self._bump("blocked")
-            if thorough:
-                breathers = [_TR_THOROUGH_BREATHERS[min(i, len(_TR_THOROUGH_BREATHERS) - 1)]
-                             for i in range(_TR_THOROUGH_MAX_ROUNDS)]
-            else:
-                breathers = [_TR_SECOND_PASS_BREATHER]
-            for _round, _breather in enumerate(breathers, start=1):
-                if not (transcripts_on and retry_rows and not self._tr_skip_rest
-                        and not self._stop_requested):
-                    break
-                self._second_pass(retry_rows, tx_pool, emit, breather=_breather,
-                                  round_no=_round, rounds=0 if thorough else 1)
+            max_rounds = _TR_THOROUGH_MAX_ROUNDS if thorough else 1
+            step, _round = 0, 0
+            while (_round < max_rounds and transcripts_on and retry_rows
+                   and not self._tr_skip_rest and not self._stop_requested):
+                _round += 1
+                if thorough:
+                    _breather = _TR_THOROUGH_BREATHERS[
+                        min(step, len(_TR_THOROUGH_BREATHERS) - 1)]
+                else:
+                    _breather = _TR_SECOND_PASS_BREATHER
+                if all(str(_r.get("transcript_status") or "") == _TX_FAILED
+                       for _v, _r in retry_rows):
+                    _breather = min(_breather, _TR_ERROR_ONLY_BREATHER)
+                got, tried = self._second_pass(
+                    retry_rows, tx_pool, emit, breather=_breather,
+                    round_no=_round, rounds=0 if thorough else 1)
+                # adaptive: a productive round keeps the pace, a dry one waits longer
+                step = 0 if (got and got * 3 >= tried) else step + 1
 
             if tx_pool is not None:
                 tx_pool.shutdown(wait=False)
@@ -1950,11 +2319,25 @@ class DashboardVM(QObject):
         self._reset_block_streak()
         # a handful of leftovers can never make "3 in a row": confirm on fewer
         self._tr_confirm = max(1, min(_TR_BLOCK_CONFIRM, n))
+        # v1.0.8: the connection check (a geo lookup, up to a few seconds)
+        # runs DURING the breather instead of after it
+        _where_box = {}
+
+        def _probe_where():
+            try:
+                _where_box["r"] = self._where()
+            except Exception:      # noqa: BLE001
+                pass
+        threading.Thread(target=_probe_where, daemon=True,
+                         name="tx-where").start()
         deadline = time.monotonic() + breather
         while time.monotonic() < deadline:
             if self._stop_requested:
                 raise ScrapeCancelled()
             time.sleep(0.2)
+        self._await_network(emit, first=_where_box.get("r"))
+        round_ep = tx_epoch()
+        blocked_now = []
         recovered, patched = 0, []
         try:
             if tx_pool is not None:
@@ -1990,6 +2373,8 @@ class DashboardVM(QObject):
                     self._tr_err_tries[vid] = tries
                     if tries < _TR_THOROUGH_ERROR_TRIES:
                         retry_rows.append((vid, row))
+                elif kind == "blocked" and rounds == 0:
+                    blocked_now.append((vid, row))   # decided after the round
                 elif kind in ("blocked", "error"):
                     retry_rows.append((vid, row))
                 if len(patched) >= 10:
@@ -2006,6 +2391,62 @@ class DashboardVM(QObject):
             self.transcriptStateChanged.emit()
         emit.log_signal.emit("✅  " + tr("Second pass: {ok}/{n} transcripts recovered.").format(
             ok=recovered, n=n))
+        if blocked_now:
+            # refused for itself (others got through / only a straggler left),
+            # and no IP-block pause happened during this round
+            isolated = tx_epoch() == round_ep and (recovered > 0 or n <= 2)
+            gave_up = 0
+            for vid, row in blocked_now:
+                if isolated:
+                    tries = self._tr_blk_tries.get(vid, 0) + 1
+                    self._tr_blk_tries[vid] = tries
+                    if tries >= _TR_THOROUGH_BLOCK_TRIES:
+                        gave_up += 1
+                        continue
+                retry_rows.append((vid, row))
+            if gave_up:
+                emit.log_signal.emit("⏭  " + tr(
+                    "{n} video(s) keep getting refused while others come through: "
+                    "that is the video (members-only, age or region lock), not your "
+                    "IP. Kept as \"Blocked by YouTube\"; a later re-run tries again."
+                ).format(n=gave_up))
+        return recovered, n
+
+    def _await_network(self, emit, limit=60.0, first=None):
+        """v1.0.7, before a retry round: do not fire the retries into a
+        connection that is down or a VPN that is off (an IP in Iran & co.):
+        they would all fail and count as tries. Waits up to `limit` seconds,
+        Stop-aware, then goes ahead anyway."""
+        deadline = time.monotonic() + limit
+        noted = False
+        while True:
+            if first:
+                ip, code, restricted = first
+                first = None
+            else:
+                ip, code, restricted = self._where()
+            if ip and not restricted:
+                if noted:
+                    emit.log_signal.emit("✅  " + tr("Connection is back — retrying."))
+                return
+            if not noted:
+                noted = True
+                if restricted:
+                    emit.log_signal.emit("📡  " + tr(
+                        "Your IP is in {c} right now (VPN off?): waiting for the VPN "
+                        "before retrying …").format(c=_geo.country_label(code)))
+                else:
+                    emit.log_signal.emit("📡  " + tr(
+                        "Waiting for the connection to settle before retrying …"))
+                emit.status_signal.emit(tr("Waiting for the connection …"))
+            if time.monotonic() >= deadline:
+                emit.log_signal.emit("   " + tr("Still no stable connection — retrying anyway."))
+                return
+            pause_until = time.monotonic() + 2.0
+            while time.monotonic() < pause_until:
+                if self._stop_requested:
+                    raise ScrapeCancelled()
+                time.sleep(0.2)
 
     @staticmethod
     def _coverage(data):

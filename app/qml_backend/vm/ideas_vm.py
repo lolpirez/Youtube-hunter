@@ -135,6 +135,12 @@ class IdeasVM(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # v1.0.8 perf: the filtered rail list is built once per resultsChanged
+        # (it used to be re-filtered on EVERY QML read, and the rail, counts
+        # and delegates read it many times per change). The drop runs first:
+        # it is connected before QML binds to the signal.
+        self._ideas_view = None
+        self.resultsChanged.connect(self._drop_ideas_view)
         # anything that changes the results can change the open blueprint too
         self.resultsChanged.connect(self.activeChanged)
         # any input to the Create gate re-evaluates it
@@ -1376,10 +1382,15 @@ class IdeasVM(QObject):
     # is several screens of scrolling and comparing two is impossible. A rail
     # plus a detail pane makes switching cost one click and keeps the compare
     # loop (read this one, glance at that one) intact.
+    def _drop_ideas_view(self, *_a):
+        self._ideas_view = None
+
     @Property("QVariantList", notify=resultsChanged)
     def ideas(self):
         """Every blueprint in the workspace, newest first — the rail's model,
         already filtered by the favourites toggle and the format tab."""
+        if self._ideas_view is not None:
+            return self._ideas_view
         out = self._ideas
         if self._rail_fav_only:
             out = [i for i in out if i.get("isFavorite")]
@@ -1387,6 +1398,7 @@ class IdeasVM(QObject):
             out = [i for i in out if not i.get("isLong")]
         elif self._rail_format == 2:
             out = [i for i in out if i.get("isLong")]
+        self._ideas_view = out
         return out
 
     @Property(int, notify=resultsChanged)

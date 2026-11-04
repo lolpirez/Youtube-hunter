@@ -52,19 +52,30 @@ Item {
 
     signal revolution()
 
-    FrameAnimation {
-        running: rd._live
-        onTriggered: {
-            var dt = Math.min(0.05, frameTime)
-            var target = rd.active ? 230 : 58
-            rd._speed += (target - rd._speed) * Math.min(1, dt * 2.6)
-            var next = rd.sweep + rd._speed * dt
-            if (next >= 360) {
-                next -= 360
-                rd.revolution()
-            }
-            rd.sweep = next
+    // v1.0.8 perf: full frame rate only while a search runs. Idle, the beam
+    // is ambient decoration: a 30 Hz Timer drives it instead, which halves the
+    // per-sweep binding work (every contact's flare/opacity re-reads `sweep`)
+    // and lets the render loop idle between ticks. Looks the same at 58 deg/s.
+    function _step(dt) {
+        dt = Math.min(0.05, dt)
+        var target = rd.active ? 230 : 58
+        rd._speed += (target - rd._speed) * Math.min(1, dt * 2.6)
+        var next = rd.sweep + rd._speed * dt
+        if (next >= 360) {
+            next -= 360
+            rd.revolution()
         }
+        rd.sweep = next
+    }
+    FrameAnimation {
+        running: rd._live && rd.active
+        onTriggered: rd._step(frameTime)
+    }
+    Timer {
+        interval: 33
+        repeat: true
+        running: rd._live && !rd.active
+        onTriggered: rd._step(0.033)
     }
 
     onRevolution: {

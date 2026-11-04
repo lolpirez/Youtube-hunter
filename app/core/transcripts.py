@@ -90,9 +90,33 @@ _CAPTION_FLOORS = {
 _MODE_PROFILES = {
     False: {"timeout": 8, "rate_retries": 1, "cool": 3.0, "ceil": 2.5,
             "probe": 8.0, "ladder": ([],)},
-    True: {"timeout": 15, "rate_retries": 3, "cool": 8.0, "ceil": 4.0,
-           "probe": 20.0, "ladder": None},
+    True: {"timeout": 12, "rate_retries": 3, "cool": 6.0, "ceil": 3.5,
+           "probe": 15.0, "ladder": None},
 }
+# v1.0.7: wall-clock budget for the thorough mode's full yt-dlp client ladder.
+# It used to walk up to twelve rungs (25 s socket timeout, 2 extractor retries
+# each), so one stubborn video could hold a worker for minutes.
+_LADDER_BUDGET = 45.0
+# v1.0.7: thorough "verified" answers (a confirmed "no captions", or a short
+# transcript that every source agreed on) are trusted from the cache for this
+# long, so a re-run does not re-check the same videos from scratch.
+_VERIFIED_TTL = 14 * 24 * 3600
+
+# Side work for the thorough re-checks: the confirmations run IN PARALLEL
+# instead of one after another (the library's watch page and yt-dlp's player
+# answer used to queue behind each other on every caption-less video).
+_RECHECK_POOL = None
+_RECHECK_LOCK = threading.Lock()
+
+
+def _recheck_pool():
+    global _RECHECK_POOL
+    with _RECHECK_LOCK:
+        if _RECHECK_POOL is None:
+            from concurrent.futures import ThreadPoolExecutor
+            _RECHECK_POOL = ThreadPoolExecutor(max_workers=8,
+                                               thread_name_prefix="tx-recheck")
+        return _RECHECK_POOL
 _MODE = {"thorough": False}
 
 
@@ -121,6 +145,8 @@ def set_turbo(thread_count, thorough=False):
     _CAPTION_SLOTS = threading.Semaphore(prof["ytdlp_slots"])
     _caption_reset(prof["caption_floor"])
     reset_transcript_stats()
+    with _LADDER_LOCK:
+        _deep_spent.clear()     # a new scrape gives every video its deep tries back
     return prof
 
 
@@ -271,56 +297,90 @@ def _looks_short(text, expect_secs):
     return len(text) < secs * 0.8
 
 
+def _ytdlp_slot(video_id, proxy):
+    """_ytdlp_quick under the yt-dlp slots (text | "" | None, never raises)."""
+    try:
+        with _CAPTION_SLOTS:
+            return _ytdlp_quick(video_id, proxy)
+    except Exception:          # noqa: BLE001
+        return None
+
+
 def _thorough_recheck(video_id, proxy, status, text, err_kind, expect_secs):
     """Thorough mode: do not take one endpoint's word for it.
+
+    Returns (status, text, err_kind, verified). `verified` is True when a
+    second source really answered and agreed, so the answer may be trusted
+    from the cache on the next run (see _VERIFIED_TTL).
 
       * "no captions" from the fast InnerTube client is double-checked with the
         library's watch-page list AND yt-dlp's default client (the android
         client behind the fast path sometimes answers without the caption
         list: age gate, PO-token tracks, a half-bot-checked IP).
+        v1.0.7: both confirmations run at the same time and the first one
+        that finds text wins (they used to run one after the other).
       * a suspiciously short transcript is fetched again from the other
-        sources (auto track first) and the LONGEST text wins.
+        sources and the LONGEST text wins. v1.0.7: one watch-page list
+        serves both alternative tracks (it used to download the page twice),
+        and yt-dlp runs alongside it instead of after it.
     """
+    from concurrent.futures import as_completed
     has_text = bool(text and text != "N/A")
+    pool = _recheck_pool()
     if err_kind == "none" and not has_text:
-        lib = _library_list(video_id, proxy, trim=False)
-        if lib[1] and lib[1] != "N/A":
-            return lib
-        fb = None
+        futs = {pool.submit(_library_list, video_id, proxy, False): "lib",
+                pool.submit(_ytdlp_slot, video_id, proxy): "ytdlp"}
+        answered = False
         try:
-            with _CAPTION_SLOTS:
-                fb = _ytdlp_quick(video_id, proxy)
-        except Exception:      # noqa: BLE001
-            fb = None
-        if fb:
-            return ("Available (Auto)", fb, "")
+            for fut in as_completed(futs, timeout=60):
+                try:
+                    got = fut.result()
+                except Exception:  # noqa: BLE001
+                    continue
+                if futs[fut] == "lib":
+                    if got[1] and got[1] != "N/A":
+                        return (got[0], got[1], "", False)
+                    if got[2] == "none":
+                        answered = True
+                else:
+                    if got:
+                        return ("Available (Auto)", got, "", False)
+                    if got == "":
+                        answered = True
+        except Exception:      # noqa: BLE001 — timeout: keep the fast answer
+            pass
         # Both confirmations failed or agreed: the fast client's answer stands
         # (reporting "blocked" here would raise the IP-block card for videos
         # that simply have no captions).
-        return ("Not Available", "N/A", "none")
+        return ("Not Available", "N/A", "none", answered)
     if has_text and _looks_short(text, expect_secs):
         best = (status, text, err_kind)
-        for alt in (lambda: _library_list(video_id, proxy, trim=False, prefer_generated=True),
-                    lambda: _library_list(video_id, proxy, trim=False)):
-            try:
-                got = alt()
-            except Exception:  # noqa: BLE001
-                continue
-            if got[1] and got[1] != "N/A" and len(got[1]) > len(best[1]):
-                best = (got[0], got[1], "")
-        if _looks_short(best[1], expect_secs):
-            try:
-                with _CAPTION_SLOTS:
-                    fb = _ytdlp_quick(video_id, proxy)
-            except Exception:  # noqa: BLE001
-                fb = None
-            if fb and len(fb) > len(best[1]):
-                best = ("Available (Auto)", fb, "")
-        return best
-    return (status, text, err_kind)
+        futs = {pool.submit(_library_longest, video_id, proxy): "lib",
+                pool.submit(_ytdlp_slot, video_id, proxy): "ytdlp"}
+        answered = False
+        try:
+            for fut in as_completed(futs, timeout=60):
+                try:
+                    got = fut.result()
+                except Exception:  # noqa: BLE001
+                    continue
+                if futs[fut] == "lib":
+                    alt_status, alt_text = got[0], got[1]
+                    if got[2] in ("", "none"):
+                        answered = True
+                else:
+                    alt_status, alt_text = "Available (Auto)", got
+                    if got is not None:
+                        answered = True
+                if alt_text and alt_text != "N/A" and len(alt_text) > len(best[1]):
+                    best = (alt_status, alt_text, "")
+        except Exception:      # noqa: BLE001
+            pass
+        return best + (answered,)
+    return (status, text, err_kind, False)
 
 
-def fetch_transcript(video_id, thorough=False, expect_secs=0):
+def fetch_transcript(video_id, thorough=False, expect_secs=0, hedge=False):
     """Fetch a transcript. Returns (status, text, err_kind) and NEVER raises.
 
     `thorough` (v1.0.5, the Scraper's "Thorough" transcript mode): a cached
@@ -328,6 +388,9 @@ def fetch_transcript(video_id, thorough=False, expect_secs=0):
     two other sources, and a transcript that looks too short for the video
     (`expect_secs`, the video's length) is re-fetched and the longest kept.
     Slower, but it is the mode that does not miss captions that exist.
+    `hedge` (v1.0.8, thorough retry rounds): every source races at once
+    instead of library -> light ladder -> deep ladder one after another, see
+    _hedged_fetch.
     err_kind: "" ok/none · "blocked" IP/rate blocked · "error" other.
 
     The fast path, in order:
@@ -350,8 +413,10 @@ def fetch_transcript(video_id, thorough=False, expect_secs=0):
         return ("Not Available", "N/A", "none")
     hit = cached_transcript(video_id)
     if hit is not None and thorough:
-        # thorough: only a real cached TEXT that does not look cut is trusted
-        if hit[2] == "none" or _looks_short(hit[1], expect_secs):
+        # thorough: only a real cached TEXT that does not look cut is trusted,
+        # or an answer an earlier thorough run already double-checked
+        if (hit[2] == "none" or _looks_short(hit[1], expect_secs)) \
+                and not _is_verified(video_id):
             hit = None
     if hit is not None:
         _bump_stat("cache")
@@ -359,8 +424,11 @@ def fetch_transcript(video_id, thorough=False, expect_secs=0):
     _bump_stat("live")
 
     proxy = configured_proxy()
+    if hedge and thorough:
+        return _fetch_hedged_tail(video_id, proxy, expect_secs)
     if _library_allowed():
-        status, text, err_kind = _library_quick(video_id, proxy, trim=False)
+        status, text, err_kind = _library_quick(
+            video_id, proxy, trim=False, expect_secs=expect_secs if thorough else 0)
         _library_result(err_kind)
     else:
         if not thorough:
@@ -377,9 +445,16 @@ def fetch_transcript(video_id, thorough=False, expect_secs=0):
             with _CAPTION_SLOTS:
                 # fast: one light rung (default client), never the full ladder
                 fb = _ytdlp_quick(video_id, proxy, ladder=None if thorough else ([],))
-                if fb is None and thorough:
-                    # Nothing answered the light lookup: walk the full ladder.
-                    fb = _fetch_via_ytdlp_inner(video_id, proxy) or None
+            if fb is None and thorough and err_kind == "error":
+                # Nothing answered the light lookup: the remaining clients,
+                # raced on a budget (v1.0.7b; it used to re-walk the whole
+                # download ladder one rung at a time, the light rungs
+                # included, for up to 45 s). It takes the slot again on its
+                # own, so a light lookup elsewhere is not stuck behind it.
+                # Not for a "blocked" answer: an IP-level refusal refuses
+                # every rung too.
+                with _CAPTION_SLOTS:
+                    fb = _ytdlp_deep(video_id, proxy)
         except Exception:      # noqa: BLE001 — never raise out of this API
             fb = None
         if fb:
@@ -398,18 +473,161 @@ def fetch_transcript(video_id, thorough=False, expect_secs=0):
         # it as a block so the scrape pauses for a new IP / a cool-down.
         return ("Not Available", "N/A", "blocked")
 
+    verified = False
     if thorough:
         try:
-            status, text, err_kind = _thorough_recheck(
+            status, text, err_kind, verified = _thorough_recheck(
                 video_id, proxy, status, text, err_kind, expect_secs)
         except Exception:      # noqa: BLE001 — never raise out of this API
-            pass
+            verified = False
 
     if text and text != "N/A":
-        _cache_put(video_id, status, text, "")
+        _cache_put(video_id, status, text, "",
+                   verified=verified and _looks_short(text, expect_secs))
         return (status, text, "")
-    _cache_put(video_id, "Not Available", "N/A", err_kind)
+    _cache_put(video_id, "Not Available", "N/A", err_kind,
+               verified=verified and err_kind == "none")
     return ("Not Available", "N/A", err_kind or "none")
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  v1.0.8 HEDGED RETRIES (thorough retry rounds)
+#  ---------------------------------------------------------------------
+#  A video that failed the main pass used to walk its sources in a row:
+#  InnerTube (+ up to 3 rate retries) -> watch-page list -> light yt-dlp race
+#  (20 s budget) -> deep yt-dlp race (25 s budget). That is the ~45-60 s per
+#  leftover video the retry rounds showed ("Second pass: 0/1 recovered" a
+#  minute after the round started). Now the library path starts first and,
+#  if it has not produced text within _HEDGE_DELAY, the light AND deep yt-dlp
+#  rungs start racing next to it. First real text wins; the round costs the
+#  slowest single source, not the sum. The short delay keeps the common case
+#  (InnerTube answers in ~1 s) from spawning yt-dlp at all.
+#  Own pool + own slots: the retry round runs several videos at once and must
+#  not queue behind the main pass's small yt-dlp semaphore.
+# ═════════════════════════════════════════════════════════════════════════
+_HEDGE_DELAY = 1.8
+_HEDGE_BUDGET = 28.0
+_HEDGE_SLOTS = threading.Semaphore(6)
+_HEDGE_POOL = None
+_HEDGE_LOCK = threading.Lock()
+
+
+def _hedge_pool():
+    global _HEDGE_POOL
+    with _HEDGE_LOCK:
+        if _HEDGE_POOL is None:
+            from concurrent.futures import ThreadPoolExecutor
+            _HEDGE_POOL = ThreadPoolExecutor(max_workers=16,
+                                             thread_name_prefix="tx-hedge")
+        return _HEDGE_POOL
+
+
+def _ytdlp_hedge(video_id, proxy, deep):
+    """Light + (optionally) deep rungs in ONE race. text | "" | None."""
+    ladder = list(_QUICK_LADDER) + (list(_DEEP_LADDER) if deep else [])
+    try:
+        with _HEDGE_SLOTS:
+            got = _ytdlp_quick(video_id, proxy, ladder=ladder,
+                               budget=max(5.0, _HEDGE_BUDGET - _HEDGE_DELAY - 1.0))
+    except Exception:          # noqa: BLE001
+        got = None
+    if deep and got is None:
+        with _LADDER_LOCK:
+            _deep_spent[video_id] = _deep_spent.get(video_id, 0) + 1
+    return got
+
+
+def _hedged_fetch(video_id, proxy, expect_secs):
+    """Race the library path against the yt-dlp rungs.
+    Returns (status, text, err_kind, verified). Never raises."""
+    from concurrent.futures import FIRST_COMPLETED, wait
+    pool = _hedge_pool()
+    with _LADDER_LOCK:
+        deep = _deep_spent.get(video_id, 0) < _DEEP_MAX_PER_VIDEO
+    futs = {}
+    lib = None
+    if _library_allowed():
+        futs[pool.submit(_library_quick, video_id, proxy, False, expect_secs)] = "lib"
+    else:
+        lib = ("Not Available", "N/A", "blocked")
+    yt = None
+    yt_started = False
+    start = _time.monotonic()
+    deadline = start + _HEDGE_BUDGET
+    pending = set(futs)
+    while True:
+        now = _time.monotonic()
+        if not yt_started and (lib is not None or now - start >= _HEDGE_DELAY):
+            f = pool.submit(_ytdlp_hedge, video_id, proxy, deep)
+            futs[f] = "ytdlp"
+            pending.add(f)
+            yt_started = True
+        if not pending or now >= deadline or _aborted():
+            break
+        wait_for = deadline - now
+        if not yt_started:
+            wait_for = min(wait_for, max(0.05, start + _HEDGE_DELAY - now))
+        done, pending = wait(pending, timeout=min(wait_for, 0.5),
+                             return_when=FIRST_COMPLETED)
+        for f in done:
+            if futs[f] == "lib":
+                try:
+                    lib = f.result()
+                except Exception:  # noqa: BLE001
+                    lib = ("Not Available", "N/A", "error")
+                _library_result(lib[2])
+                if lib[1] and lib[1] != "N/A":
+                    return (lib[0], lib[1], "", False)
+            else:
+                try:
+                    yt = f.result()
+                except Exception:  # noqa: BLE001
+                    yt = None
+                if yt == "sorry":
+                    yt = None
+                if yt:
+                    return ("Available (Auto)", yt, "", False)
+        # both sources answered with no text: decide now
+        if lib is not None and yt_started and not pending:
+            break
+    if lib is None:
+        lib = ("Not Available", "N/A", "error")
+    l_kind = lib[2]
+    if yt == "":
+        # the default client got a real player answer with no caption tracks
+        return ("Not Available", "N/A", "none", l_kind == "none")
+    if l_kind == "none":
+        return ("Not Available", "N/A", "none", False)
+    return ("Not Available", "N/A", l_kind or "error", False)
+
+
+def _fetch_transcript_tail_store(video_id, status, text, err_kind, verified,
+                                 expect_secs):
+    if text and text != "N/A":
+        _cache_put(video_id, status, text, "",
+                   verified=verified and _looks_short(text, expect_secs))
+        return (status, text, "")
+    _cache_put(video_id, "Not Available", "N/A", err_kind,
+               verified=verified and err_kind == "none")
+    return ("Not Available", "N/A", err_kind or "none")
+
+
+def _fetch_hedged_tail(video_id, proxy, expect_secs):
+    try:
+        status, text, err_kind, verified = _hedged_fetch(video_id, proxy, expect_secs)
+    except Exception:          # noqa: BLE001 — never raise out of this API
+        status, text, err_kind, verified = ("Not Available", "N/A", "error", False)
+    if err_kind == "rate":
+        return ("Not Available", "N/A", "blocked")
+    if text and text != "N/A" and _looks_short(text, expect_secs):
+        # a fragment: still compare with the other sources (longest wins)
+        try:
+            status, text, err_kind, verified = _thorough_recheck(
+                video_id, proxy, status, text, err_kind, expect_secs)
+        except Exception:      # noqa: BLE001
+            verified = False
+    return _fetch_transcript_tail_store(video_id, status, text, err_kind,
+                                        verified, expect_secs)
 
 
 def _fetch_transcript_legacy(video_id):
@@ -627,7 +845,9 @@ def _fetch_via_ytdlp(video_id, proxy=""):
         return _fetch_via_ytdlp_inner(video_id, proxy)
 
 
-def _fetch_via_ytdlp_inner(video_id, proxy=""):
+def _fetch_via_ytdlp_inner(video_id, proxy="", budget=None):
+    """`budget` (seconds, v1.0.7): stop walking the ladder once it is spent,
+    with tighter per-rung timeouts. None keeps the old unbounded walk."""
     from app.core.runtime_deps import js_runtime_opts
     from app.core.utils import ensure_yt_dlp_ready
 
@@ -646,13 +866,18 @@ def _fetch_via_ytdlp_inner(video_id, proxy=""):
     base = {"quiet": True, "no_warnings": True, "skip_download": True,
             "noplaylist": True, "extractor_retries": 2, "socket_timeout": 25,
             "logger": _QuietLogger()}
+    if budget:
+        base.update(extractor_retries=1, socket_timeout=15)
     base.update(js_runtime_opts())
     if proxy:
         base["proxy"] = proxy
 
     url = f"https://www.youtube.com/watch?v={video_id}"
     info, barren = None, 0
+    deadline = (_time.monotonic() + float(budget)) if budget else None
     for clients in CLIENT_LADDER:
+        if deadline is not None and (_time.monotonic() >= deadline or _aborted()):
+            break
         opts = dict(base)
         if clients:
             opts["extractor_args"] = {"youtube": {"player_client": clients}}
@@ -756,6 +981,8 @@ def _cache_conn():
         pass
     conn.execute("CREATE TABLE IF NOT EXISTS tx (vid TEXT PRIMARY KEY, status TEXT,"
                  " text TEXT, kind TEXT, at REAL)")
+    # v1.0.7: which cached answers a thorough run already double-checked
+    conn.execute("CREATE TABLE IF NOT EXISTS tx_verified (vid TEXT PRIMARY KEY, at REAL)")
     _CONN = conn
     return conn
 
@@ -841,7 +1068,7 @@ def _bump_stat(which):
         _stats[which] += 1
 
 
-def _cache_put(video_id, status, text, kind):
+def _cache_put(video_id, status, text, kind, verified=False):
     if kind in ("blocked", "error", "rate"):
         return                  # transient — never remember a network failure
     if text and text != "N/A":
@@ -851,11 +1078,33 @@ def _cache_put(video_id, status, text, kind):
             conn = _cache_conn()
             if conn is None:
                 return
+            now = _time.time()
             conn.execute("INSERT OR REPLACE INTO tx VALUES (?,?,?,?,?)",
-                         (video_id, status, text, kind, _time.time()))
+                         (video_id, status, text, kind, now))
+            # a new answer replaces the old one: only a thorough double-check
+            # may vouch for it again
+            if verified:
+                conn.execute("INSERT OR REPLACE INTO tx_verified VALUES (?,?)",
+                             (video_id, now))
+            else:
+                conn.execute("DELETE FROM tx_verified WHERE vid=?", (video_id,))
             conn.commit()
     except Exception:          # noqa: BLE001
         pass
+
+
+def _is_verified(video_id):
+    """True when a thorough run double-checked the cached answer recently."""
+    try:
+        with _cache_lock:
+            conn = _cache_conn()
+            if conn is None:
+                return False
+            row = conn.execute("SELECT at FROM tx_verified WHERE vid=?",
+                               (str(video_id or ""),)).fetchone()
+    except Exception:          # noqa: BLE001
+        return False
+    return bool(row) and (_time.time() - float(row[0] or 0)) < _VERIFIED_TTL
 
 
 # ── InnerTube fast path ─────────────────────────────────────────────────
@@ -1056,7 +1305,9 @@ def _start_gap():
     """Fast starts AT the level's floor (it does not care about refusals, the
     AIMD below backs off if YouTube complains). Thorough starts gentler."""
     if _MODE["thorough"]:
-        return max(1.2, _caption_floor)
+        # v1.0.7: follows the Worker Threads level too (it was a flat 1.2 s
+        # whatever the level, so Turbo did nothing for a thorough run)
+        return max(_caption_floor, min(1.2, _caption_floor * 1.3))
     return max(0.45, _caption_floor)
 
 
@@ -1143,10 +1394,40 @@ def _caption_rate_limited(response):
     return "html" in ctype or head[:2] in (b"<!", b"<h")
 
 
-def _innertube_quick(video_id, proxy, trim=True, paced=True, rate_retries=None):
+def _innertube_alt_auto(tracks, chosen, proxy, timeout):
+    """Thorough helper: the ASR track from the SAME player answer (same
+    language first). Its text, or "" when there is none / it fails. Costs one
+    small caption request instead of a 1-1.5 MB watch page."""
+    code = (chosen or {}).get("languageCode") or ""
+    asr = [t for t in tracks if t.get("kind") == "asr" and t.get("baseUrl")]
+    if not asr:
+        return ""
+    asr.sort(key=lambda t: 0 if (t.get("languageCode") or "") == code else 1)
+    url = asr[0].get("baseUrl") or ""
+    if url.startswith("//"):
+        url = "https:" + url
+    url = url.replace("&fmt=srv3", "")
+    if "exp=xpe" in url:
+        return ""
+    try:
+        cr = _http_session(proxy).get(url, timeout=timeout)
+    except Exception:          # noqa: BLE001
+        return ""
+    if cr.status_code != 200 or _caption_rate_limited(cr):
+        return ""
+    raw = cr.content.decode("utf-8", "replace")
+    head = raw[:200].lstrip()
+    payload = "json3" if head.startswith("{") else ("vtt" if head.startswith("WEBVTT") else "srv3")
+    return re.sub(r"\s+", " ", html.unescape(_caption_payload_text(raw, payload))).strip()
+
+
+def _innertube_quick(video_id, proxy, trim=True, paced=True, rate_retries=None,
+                     expect_secs=0):
     """Player endpoint only. Returns (status, text, err_kind) like the library
     path; "none" means YouTube said there is no caption track. `paced=False`
-    (the pause-time probe) skips the shared pacer."""
+    (the pause-time probe) skips the shared pacer. `expect_secs` (thorough):
+    a manual track that looks too short for the video is compared with the
+    auto track of the same answer, and the longer one is kept."""
     prof = _mp()
     timeout = prof["timeout"]
     limit = prof["rate_retries"] if rate_retries is None else int(rate_retries)
@@ -1262,17 +1543,21 @@ def _innertube_quick(video_id, proxy, trim=True, paced=True, rate_retries=None):
             idx += 1
             continue
         _caption_success()
+        if expect_secs and not is_auto and _looks_short(text, expect_secs):
+            alt = _innertube_alt_auto(tracks, track, proxy, timeout)
+            if alt and len(alt) > len(text):
+                text, is_auto = alt, True
         status = "Available (Auto)" if is_auto else "Available (Manual)"
         return (status, _trim_ends(text) if trim else text, "")
     return ("Not Available", "N/A", last_kind)
 
 
-def _library_quick(video_id, proxy, trim=True):
+def _library_quick(video_id, proxy, trim=True, expect_secs=0):
     """The light InnerTube path first; the library's watch-page path only when
     that fails. Returns (status, text, err_kind) where err_kind "none" means
     YouTube itself said there are no captions."""
     try:
-        fast = _innertube_quick(video_id, proxy, trim=trim)
+        fast = _innertube_quick(video_id, proxy, trim=trim, expect_secs=expect_secs)
     except Exception:          # noqa: BLE001 — never break a scrape over this
         fast = ("Not Available", "N/A", "error")
     f_status, f_text, f_kind = fast
@@ -1337,10 +1622,151 @@ def _library_list(video_id, proxy, trim=True, prefer_generated=False):
         return ("Not Available", "N/A", "error")
 
 
-def _ytdlp_quick(video_id, proxy="", ladder=None):
+def _library_longest(video_id, proxy):
+    """Thorough helper (v1.0.7): ONE watch-page list, then the auto track and
+    the preferred/manual track from it; the longest text wins. Replaces two
+    separate _library_list calls that each downloaded the watch page."""
+    try:
+        api_cls, has_new, block_errs, _no_tr = _yta()
+        import youtube_transcript_api as mod
+    except Exception:          # noqa: BLE001
+        return ("Not Available", "N/A", "error")
+    final = tuple(e for e in (getattr(mod, n, None) for n in
+                              ("TranscriptsDisabled", "NoTranscriptFound"))
+                  if isinstance(e, type))
+    try:
+        if not _caption_wait():
+            return ("Not Available", "N/A", "error")
+        if has_new:
+            tlist = _library_api(api_cls, proxy).list(video_id)
+        else:
+            tlist = api_cls.list_transcripts(video_id)
+        tracks = list(tlist)
+        if not tracks:
+            return ("Not Available", "N/A", "none")
+        cands = []
+        try:
+            cands.append(tlist.find_generated_transcript(_TRANSCRIPT_LANGS))
+        except Exception:      # noqa: BLE001
+            cands.append(next((t for t in tracks if getattr(t, "is_generated", False)), None))
+        try:
+            cands.append(tlist.find_transcript(_TRANSCRIPT_LANGS))
+        except Exception:      # noqa: BLE001
+            cands.append(next((t for t in tracks if not getattr(t, "is_generated", False)),
+                              tracks[0]))
+        best, seen = None, set()
+        for t in cands:
+            if t is None:
+                continue
+            key = (getattr(t, "language_code", ""), bool(getattr(t, "is_generated", False)))
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                got = _join_transcript(t.fetch()).strip()
+            except block_errs:
+                raise
+            except Exception:  # noqa: BLE001
+                continue
+            if got and (best is None or len(got) > len(best[1])):
+                st = ("Available (Auto)" if getattr(t, "is_generated", False)
+                      else "Available (Manual)")
+                best = (st, got, "")
+        return best or ("Not Available", "N/A", "none")
+    except block_errs:
+        return ("Not Available", "N/A", "blocked")
+    except final:
+        return ("Not Available", "N/A", "none")
+    except Exception:          # noqa: BLE001
+        return ("Not Available", "N/A", "error")
+
+
+def _ytdlp_rung(yt_dlp, base, url, clients, proxy):
+    """ONE light yt-dlp lookup with one player client. Returns text, "" (this
+    client answered: no captions / no usable track) or None (no answer, or an
+    answer that proves nothing). Never raises. `"sorry"` is returned for
+    YouTube's HTML refusal page so the caller can back the pacer off."""
+    yt_args = {"skip": ["dash", "hls", "translated_subs"]}
+    if clients:
+        yt_args["player_client"] = clients
+    opts = dict(base, extractor_args={"youtube": yt_args})
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False, process=False)
+    except Exception:          # noqa: BLE001 — this rung did not answer
+        return None
+    if not info:
+        return None
+    subs, auto = info.get("subtitles") or {}, info.get("automatic_captions") or {}
+    if not (subs or auto):
+        # v1.0.4: only the DEFAULT client is trusted to say "no captions"
+        return "" if not clients else None
+    track, _is_auto = _pick_caption_track(subs, auto)
+    if not track:
+        return "" if not clients else None
+    by_ext = {}
+    for fmt in track:
+        ext = (fmt.get("ext") or "").lower()
+        if ext and ext not in by_ext and fmt.get("url"):
+            by_ext[ext] = fmt
+    chosen = next((by_ext[e] for e in _CAPTION_FORMATS if e in by_ext), None) \
+        or next(iter(by_ext.values()), None)
+    if chosen is None:
+        return ""
+    try:
+        req = urllib.request.Request(chosen["url"], headers={"User-Agent": "Mozilla/5.0"})
+        with _urlopen(req, 15, proxy) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+    except Exception:          # noqa: BLE001
+        return None
+    # YouTube's "Sorry" / consent page can arrive with HTTP 200. Never let
+    # that HTML become (and be cached as) a transcript.
+    head = raw[:200].lstrip().lower()
+    if head.startswith("<!doctype html") or head.startswith("<html"):
+        return "sorry"
+    text = _caption_payload_text(raw, (chosen.get("ext") or "").lower())
+    text = re.sub(r"\s+", " ", html.unescape(text)).strip()
+    return text or None        # empty payload: let another rung decide
+
+
+# v1.0.7b: the yt-dlp rungs RACE instead of queueing. Each rung is a full
+# player request (+ the JS challenge), 3-12 s on a good day; walked one after
+# another, the light ladder alone cost up to ~35 s and the deep one up to its
+# 45 s budget, which is exactly the ~50 s per stubborn video the thorough
+# retry rounds showed. Racing them makes a rung's cost the SLOWEST rung, not
+# the sum, and the first real text wins. Own pool: the thorough re-checks
+# already run on _RECHECK_POOL and call into this, so sharing it could starve.
+_LADDER_POOL = None
+_LADDER_LOCK = threading.Lock()
+# rungs the light ladder does not try; only for thorough "error" videos
+_DEEP_LADDER = (["web_safari"], ["android_vr"], ["mweb"])
+_DEEP_BUDGET = 25.0
+_QUICK_BUDGET = 20.0
+# a video whose deep ladder came back empty this many times in a session is
+# not sent down it again (PO-token-only tracks, broken players): each extra
+# walk only burnt the retry round's time
+_DEEP_MAX_PER_VIDEO = 2
+_deep_spent = {}
+
+
+def _ladder_pool():
+    global _LADDER_POOL
+    with _LADDER_LOCK:
+        if _LADDER_POOL is None:
+            from concurrent.futures import ThreadPoolExecutor
+            _LADDER_POOL = ThreadPoolExecutor(max_workers=24,
+                                              thread_name_prefix="tx-ladder")
+        return _LADDER_POOL
+
+
+def _ytdlp_quick(video_id, proxy="", ladder=None, budget=None):
     """A light yt-dlp caption lookup: three rungs (fast mode: only the default
     client), no manifests, tight timeouts. Returns text, "" (the player
-    answered: no captions) or None (nothing answered)."""
+    answered: no captions) or None (nothing answered).
+
+    v1.0.7b: with more than one rung they run AT THE SAME TIME; the first
+    text wins, the default client's "no captions" is still the only final
+    "" (and it ends the race at once, like it ended the old walk)."""
     from app.core.runtime_deps import js_runtime_opts
     from app.core.utils import ensure_yt_dlp_ready
     try:
@@ -1358,59 +1784,54 @@ def _ytdlp_quick(video_id, proxy="", ladder=None):
     if proxy:
         base["proxy"] = proxy
     url = f"https://www.youtube.com/watch?v={video_id}"
-    # v1.0.4: only the DEFAULT client is trusted to say "no captions". The
-    # android / tv rungs often answer a bot-checked IP with a stripped player
-    # response that simply lacks the caption list, and that used to be cached
-    # as "this video has no subtitles" for 3 days. Now such an answer is
-    # "unknown" (None) unless the default client agreed, so the scraper
-    # retries it instead of writing it off.
-    for clients in (ladder or _QUICK_LADDER):
-        yt_args = {"skip": ["dash", "hls", "translated_subs"]}
-        if clients:
-            yt_args["player_client"] = clients
-        opts = dict(base, extractor_args={"youtube": yt_args})
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False, process=False)
-        except Exception:      # noqa: BLE001 — next rung
-            continue
-        if not info:
-            continue
-        subs, auto = info.get("subtitles") or {}, info.get("automatic_captions") or {}
-        if not (subs or auto):
-            if not clients:
-                return ""       # the default player answered: there really are none
-            continue            # a fallback client's silence proves nothing
-        track, _is_auto = _pick_caption_track(subs, auto)
-        if not track:
-            if not clients:
-                return ""
-            continue
-        by_ext = {}
-        for fmt in track:
-            ext = (fmt.get("ext") or "").lower()
-            if ext and ext not in by_ext and fmt.get("url"):
-                by_ext[ext] = fmt
-        chosen = next((by_ext[e] for e in _CAPTION_FORMATS if e in by_ext), None) \
-            or next(iter(by_ext.values()), None)
-        if chosen is None:
-            return ""
-        req = urllib.request.Request(chosen["url"], headers={"User-Agent": "Mozilla/5.0"})
-        with _urlopen(req, 15, proxy) as resp:
-            raw = resp.read().decode("utf-8", "replace")
-        # YouTube's "Sorry" / consent page can arrive with HTTP 200. Never let
-        # that HTML become (and be cached as) a transcript: treat it as a
-        # refusal, which the scraper retries.
-        head = raw[:200].lstrip().lower()
-        if head.startswith("<!doctype html") or head.startswith("<html"):
+    rungs = list(ladder or _QUICK_LADDER)
+
+    if len(rungs) == 1:
+        got = _ytdlp_rung(yt_dlp, base, url, rungs[0], proxy)
+        if got == "sorry":
             _caption_throttled()
             return None
-        text = _caption_payload_text(raw, (chosen.get("ext") or "").lower())
-        text = re.sub(r"\s+", " ", html.unescape(text)).strip()
-        if not text:
-            continue            # empty payload: let the next rung try
-        return text
-    return None                 # no rung answered for sure: unknown, not "none"
+        return got
+
+    from concurrent.futures import as_completed
+    pool = _ladder_pool()
+    futs = {pool.submit(_ytdlp_rung, yt_dlp, base, url, c, proxy): bool(c)
+            for c in rungs}
+    final_none, sorry = False, False
+    try:
+        for fut in as_completed(futs, timeout=budget or _QUICK_BUDGET):
+            try:
+                got = fut.result()
+            except Exception:  # noqa: BLE001
+                continue
+            if got == "sorry":
+                sorry = True
+                continue
+            if got:
+                return got
+            if got == "" and not futs[fut]:
+                final_none = True
+                break          # the default client said "no captions": final
+            if _aborted():
+                break
+    except Exception:          # noqa: BLE001 — budget spent: what we have
+        pass
+    if sorry:
+        _caption_throttled()
+    return "" if final_none else None
+
+
+def _ytdlp_deep(video_id, proxy=""):
+    """Thorough, "error" videos only: the clients the light ladder did not try,
+    raced, on a budget. Remembers videos it already failed for."""
+    with _LADDER_LOCK:
+        if _deep_spent.get(video_id, 0) >= _DEEP_MAX_PER_VIDEO:
+            return None
+    got = _ytdlp_quick(video_id, proxy, ladder=_DEEP_LADDER, budget=_DEEP_BUDGET)
+    if not got:
+        with _LADDER_LOCK:
+            _deep_spent[video_id] = _deep_spent.get(video_id, 0) + 1
+    return got or None
 
 
 def fetch_transcript_quick(video_id):

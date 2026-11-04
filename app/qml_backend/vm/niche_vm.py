@@ -1250,6 +1250,7 @@ class NicheVM(QObject):
         self.viralChanged.emit()
         self.changed.emit()               # viralDirty → false
         self.runningChanged.emit()
+        self._last_progress_sig = None
         self.progressChanged.emit()
         self._set_status(tr("Reading what is viral right now …"), "muted")
         threading.Thread(target=self._worker, args=(params,), daemon=True,
@@ -1807,6 +1808,7 @@ class NicheVM(QObject):
         if fresh != (self._api_key or ""):
             self._api_key = fresh
             self.changed.emit()
+            self._last_progress_sig = None
             self.progressChanged.emit()
 
     # The core search module reports (pct, text, phase, info): `phase` is a stable
@@ -2609,6 +2611,7 @@ class NicheVM(QObject):
         self._found = 0
         self._enriched = 0
         self.runningChanged.emit()
+        self._last_progress_sig = None
         self.progressChanged.emit()
         self._set_status(tr("Contacting YouTube …"), "muted")
 
@@ -3280,11 +3283,16 @@ class NicheVM(QObject):
             self._enriched = int(counts.get("enriched") or 0)
         elif "channels" in counts:
             self._enriched = int(counts.get("channels") or 0)
-        if text:
+        # v1.0.8 perf: the status sentence (and the five bindings hanging off
+        # statusChanged) only re-emits when it really changed; the progress
+        # signal only when something it carries moved.
+        if text and (text != self._status or self._status_kind != "muted"
+                     or self._result_facts):
             self._set_status(text, "muted")
-        # Emitted even when the text is unchanged: the counts move on every tick
-        # and the loading panel binds to those, not only to the sentence.
-        self.progressChanged.emit()
+        sig = (self._pct, self._phase, self._found, self._enriched)
+        if sig != getattr(self, "_last_progress_sig", None):
+            self._last_progress_sig = sig
+            self.progressChanged.emit()
 
     @Slot(list, str)
     def _on_done(self, rows, error):
@@ -3293,6 +3301,7 @@ class NicheVM(QObject):
         self._pct = 0
         self._phase = ""
         self.runningChanged.emit()
+        self._last_progress_sig = None
         self.progressChanged.emit()
         self._update_quota()
 

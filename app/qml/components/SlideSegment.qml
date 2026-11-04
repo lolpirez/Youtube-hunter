@@ -116,7 +116,7 @@ Item {
                 onClicked: root.activated(index)
                 HoverHandler { cursorShape: Qt.PointingHandCursor }
 
-                AppTooltip { visible: root.iconOnly && cell.hovered && cell.lbl !== ""; text: cell.lbl }
+                LazyTooltip { show: root.iconOnly && cell.hovered && cell.lbl !== ""; text: cell.lbl }
 
                 background: Rectangle {
                     radius: root.radius

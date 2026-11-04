@@ -105,7 +105,7 @@ Item {
              : I18n.tr("Queued")
     }
     function _live(videoId) {
-        return (Downloads.live[videoId || ""]) || null
+        return (page._liveMap[videoId || ""]) || null
     }
     function _sizeText(row, live) {
         if (!live) return row.totalText || ""
@@ -154,9 +154,19 @@ Item {
         Downloads.resumeDownload(videoId)
     }
 
+    // v1.0.8 perf: Downloads.entries converted ONCE per change and shared by
+    // counts / overallPct / liveRows / visibleRows (four full copies before)
+    readonly property var _entries: Downloads.entries || []
+    // v1.0.8 perf: the live map converted ONCE per progress tick, shared by
+    // every row and the overall bar (it was one full conversion per row and
+    // one per running download inside overallPct, every tick)
+    readonly property var _liveMap: {
+        var _ = Downloads.progressTick
+        return Downloads.live || ({})
+    }
     readonly property var counts: {
         var c = { all: 0, active: 0, done: 0, failed: 0, stopped: 0, attn: 0 }
-        var rows = Downloads.entries || []
+        var rows = page._entries
         for (var i = 0; i < rows.length; i++) {
             var s = rows[i].status
             c.all++
@@ -170,12 +180,12 @@ Item {
     }
     readonly property int overallPct: {
         var _ = Downloads.progressTick
-        var rows = Downloads.entries || []
+        var rows = page._entries
         var n = 0, sum = 0
         for (var i = 0; i < rows.length; i++) {
             var s = rows[i].status
             if (s !== "downloading" && s !== "merging") continue
-            var l = Downloads.live[rows[i].videoId || ""]
+            var l = page._liveMap[rows[i].videoId || ""]
             sum += l ? (l.pct || 0) : (rows[i].pct || 0)
             n++
         }
@@ -183,7 +193,7 @@ Item {
     }
 
     // Running downloads, shown in their own strip on the "All" view.
-    readonly property var liveRows: (Downloads.entries || []).filter(function (r) {
+    readonly property var liveRows: page._entries.filter(function (r) {
         return r.status === "downloading" || r.status === "merging"
     })
     readonly property bool showLive: statusFilter === "all" && query.trim() === ""
@@ -193,7 +203,7 @@ Item {
     readonly property var visibleRows: {
         var q = page.query.trim().toLowerCase()
         var hideLive = page.showLive
-        return (Downloads.entries || []).filter(function (r) {
+        return page._entries.filter(function (r) {
             var running = r.status === "downloading" || r.status === "merging"
             var matchesFilter = page.statusFilter === "all" ? !(hideLive && running)
                 : page.statusFilter === "done" ? r.status === "complete"
@@ -776,7 +786,7 @@ Item {
                                             glyphColor: page.viewMode === modelData.id ? Theme.text_strong : Theme.outline
                                         }
                                     }
-                                    C.AppTooltip { visible: viewModeBtn.hovered; text: modelData.tip }
+                                    C.LazyTooltip { show: viewModeBtn.hovered; text: modelData.tip }
                                 }
                             }
                         }

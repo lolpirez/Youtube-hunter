@@ -433,13 +433,27 @@ Item {
         onTriggered: root.playT = (root.playT + interval / 1000) % root.total
     }
     function seek(s) { playT = Math.max(0, Math.min(total - 0.01, s)) }
+    // v1.0.8 perf: this re-runs 30x a second while the preview plays. The
+    // beats are in time order, so a binary search finds the one under the
+    // playhead in O(log n) instead of scanning the whole script every tick;
+    // the linear scan stays as the fallback for an out-of-order script.
     readonly property int beat: {
         var t = playT
-        for (var i = 0; i < script.length; i++) {
-            var s = script[i]
-            if (t >= (s.startSec || 0) && t < (s.endSec || 0)) return i
+        var n = script.length
+        if (n === 0) return -1
+        var lo = 0, hi = n - 1
+        while (lo <= hi) {
+            var mid = (lo + hi) >> 1
+            var s = script[mid]
+            if (t < (s.startSec || 0)) hi = mid - 1
+            else if (t >= (s.endSec || 0)) lo = mid + 1
+            else return mid
         }
-        return script.length > 0 ? script.length - 1 : -1
+        for (var i = 0; i < n; i++) {
+            var r = script[i]
+            if (t >= (r.startSec || 0) && t < (r.endSec || 0)) return i
+        }
+        return n - 1
     }
     readonly property var beatRow: beat >= 0 ? script[beat] : ({})
 

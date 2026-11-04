@@ -93,14 +93,29 @@ Item {
     function _append(batch) {
         for (let i = 0; i < batch.length; ++i)
             _all.push(batch[i])
+        _queueRebuild()
+    }
+    // v1.0.8 perf: `visible` is the EFFECTIVE visibility, so it is false
+    // while the Scraper page is not the current page. A run keeps streaming
+    // rows while you work elsewhere; the full re-read (scan + sort + rolling
+    // medians over every row) used to run every 1.2 s in the background
+    // anyway, stealing GUI-thread time from the page you were actually on.
+    // Now it is deferred and done once when the board is shown again.
+    property bool _dirty: false
+    function _queueRebuild() {
+        if (!root.visible) { root._dirty = true; return }
         rebuildTimer.interval = Dashboard.isRunning ? 1200 : 60
         if (!rebuildTimer.running) rebuildTimer.start()
     }
+    onVisibleChanged: if (visible && _dirty) { _dirty = false; _rebuild() }
     Timer {
         id: rebuildTimer
         interval: 700
         repeat: false
-        onTriggered: root._rebuild()
+        onTriggered: {
+            if (!root.visible) { root._dirty = true; return }
+            root._rebuild()
+        }
     }
     Connections {
         target: Dashboard
@@ -114,10 +129,13 @@ Item {
                 const r = root._all[j]
                 if (want.hasOwnProperty(r.vid)) r.tx = want[r.vid]
             }
-            rebuildTimer.interval = Dashboard.isRunning ? 1200 : 60
-            if (!rebuildTimer.running) rebuildTimer.start()
+            root._queueRebuild()
         }
-        function onRunningChanged() { if (!Dashboard.isRunning) root._rebuild() }
+        function onRunningChanged() {
+            if (Dashboard.isRunning) return
+            if (root.visible) root._rebuild()
+            else root._dirty = true
+        }
     }
     Component.onCompleted: {
         _all = Dashboard.results() || []

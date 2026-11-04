@@ -49,6 +49,19 @@ Item {
     readonly property var _doneIds: Niche.downloadedIds || []
     readonly property var _savedIds: Niche.savedIds || []
     readonly property var _ideaKeys: Ideas.selectedKeys || []
+    // v1.0.8 perf: preset lists converted once, not per tile binding
+    readonly property var _presetOptions: Niche.presetOptions || []
+    readonly property var _presetHints: Niche.presetHints || []
+    readonly property var _presetCounts: Niche.presetCounts || []
+    // v1.0.8 perf: O(1) lookups shared by every card (see ArchiveVideoCard)
+    function _idMap(list) {
+        var m = {}
+        for (var i = 0; i < list.length; ++i) m[list[i]] = true
+        return m
+    }
+    readonly property var _doneMap: _idMap(_doneIds)
+    readonly property var _savedMap: _idMap(_savedIds)
+    readonly property var _ideaMap: _idMap(_ideaKeys)
 
     // A download finished elsewhere (or was deleted on the Downloads page)
     // while this page was hidden — re-read which videos have a file on disk
@@ -1587,7 +1600,7 @@ Item {
                         DeckLabel {
                             title: I18n.tr("Pick a hunt")
                             icon: "auto_awesome"
-                            note: Niche.hasResults && (Niche.presetCounts || []).length > 0
+                            note: Niche.hasResults && page._presetCounts.length > 0
                                   ? I18n.tr("numbers = fetched videos each would leave")
                                   : I18n.tr("one click sets every cut")
                         }
@@ -1599,14 +1612,14 @@ Item {
                             Repeater {
                                 // the last preset is "Clear filters": that is
                                 // Reset all in the header, not a hunt
-                                model: Math.min(5, (Niche.presetOptions || []).length)
+                                model: Math.min(5, page._presetOptions.length)
                                 HuntTile {
                                     recipe: index
-                                    title: Niche.presetOptions[index] || ""
-                                    hint: Niche.presetHints[index] || ""
+                                    title: page._presetOptions[index] || ""
+                                    hint: page._presetHints[index] || ""
                                     glyphName: ["user", "bolt", "query_stats", "movie", "fmt_short"][index] || "tune"
                                     count: {
-                                        const c = Niche.presetCounts || []
+                                        const c = page._presetCounts
                                         return index < c.length ? c[index] : -1
                                     }
                                 }
@@ -2861,6 +2874,9 @@ Item {
                                     doneIds: page._doneIds
                                     savedList: page._savedIds
                                     ideaKeys: page._ideaKeys
+                                    doneMap: page._doneMap
+                                    savedMap: page._savedMap
+                                    ideaMap: page._ideaMap
                                     cardWidth: grid.cardW
                                     // v3.52: no hover effects while scrolling
                                     // — see ArchiveVideoCard.scrollIdle.

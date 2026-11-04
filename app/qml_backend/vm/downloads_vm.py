@@ -190,6 +190,7 @@ class DownloadsVM(QObject):
         strings translated when it was built (the "Untitled" fallback, the
         status line), and a signal only re-delivers those same old strings.
         """
+        self._live_cache = None
         self.refresh()
         self.hintChanged.emit()
 
@@ -242,6 +243,19 @@ class DownloadsVM(QObject):
         # Live progress is published to a SHARED store so downloads started from
         # the Niche Finder / Search Archive grids show up here too, not just the
         # paste-a-link ones. Listening means this page updates for all of them.
+        # v1.0.8 perf: progress ticks are COALESCED to ~12 a second (one per
+        # 80 ms window) and the formatted `live` map is CACHED per tick. Before,
+        # every raw yt-dlp tick of every running download emitted at once, and
+        # every QML read of `live` (each row + the overall bar, so N+1 reads a
+        # tick) re-ran the whole snapshot + size/ETA formatting: O(N^2) string
+        # work per tick with several downloads running. Structural changes
+        # (start / finish / status) still go out immediately.
+        self._live_cache = None
+        self._live_cache_tick = -1
+        self._live_timer = QTimer(self)
+        self._live_timer.setSingleShot(True)
+        self._live_timer.setInterval(80)
+        self._live_timer.timeout.connect(self.progressChanged.emit)
         dlp.add_listener(self._on_live_change)
         self._reconcile_orphaned_rows()
         self.refresh()
@@ -256,7 +270,10 @@ class DownloadsVM(QObject):
         self._tick += 1
         if structural:
             self.refresh()
-        self.progressChanged.emit()
+            self._live_timer.stop()
+            self.progressChanged.emit()
+        elif not self._live_timer.isActive():
+            self._live_timer.start()
 
     # ── properties ─────────────────────────────────────────────────────
     @Property("QVariantList", notify=changed)
@@ -377,6 +394,8 @@ class DownloadsVM(QObject):
         without rebuilding the row list — otherwise every delegate is recreated
         and its animating progress bar snaps back to zero.
         """
+        if self._live_cache is not None and self._live_cache_tick == self._tick:
+            return self._live_cache
         out = {}
         for vid, d in dlp.snapshot().items():
             speed = float(d.get("speed") or 0)
@@ -417,6 +436,8 @@ class DownloadsVM(QObject):
                     eta_text, frag_text,
                     merging=(d.get("text") or "") == tr("Merging…")),
             }
+        self._live_cache = out
+        self._live_cache_tick = self._tick
         return out
 
     @Property(int, notify=progressChanged)

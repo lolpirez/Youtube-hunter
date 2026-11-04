@@ -29,10 +29,14 @@ Item {
     }
 
     // ── v10 presentation helpers (read-only views of the VM) ──
-    readonly property int _sectionCount: (ContentLab.entries || []).length
-    readonly property int _reportCount: (ContentLab.reports || []).length
+    // v1.0.8 perf: converted ONCE per change (each derived property below
+    // used to take its own full Python -> JS copy)
+    readonly property var _labEntries: ContentLab.entries || []
+    readonly property var _labReports: ContentLab.reports || []
+    readonly property int _sectionCount: page._labEntries.length
+    readonly property int _reportCount: page._labReports.length
     readonly property int _maxIdeas: {
-        var es = ContentLab.entries || []
+        var es = page._labEntries
         var m = 1
         for (var i = 0; i < es.length; i++) m = Math.max(m, es[i].ideaCount || 0)
         return m
@@ -42,7 +46,7 @@ Item {
     // Landing order: 0 recent (the VM's own order) · 1 most ideas · 2 top score · 3 A–Z
     property int libSort: 0
     readonly property var _sortedEntries: {
-        var es = (ContentLab.entries || []).slice()
+        var es = page._labEntries.slice()
         if (libSort === 1)
             es.sort(function(a, b) { return (b.ideaCount || 0) - (a.ideaCount || 0) })
         else if (libSort === 2)
@@ -54,13 +58,13 @@ Item {
         return es
     }
     readonly property int _totalIdeas: {
-        var es = ContentLab.entries || []
+        var es = page._labEntries
         var n = 0
         for (var i = 0; i < es.length; i++) n += (es[i].ideaCount || 0)
         return n
     }
     readonly property int _totalFavs: {
-        var es = ContentLab.entries || []
+        var es = page._labEntries
         var n = 0
         for (var i = 0; i < es.length; i++) n += (es[i].favCount || 0)
         return n

@@ -17,9 +17,26 @@ import "../Utils.js" as U
 Item {
     id: page
     // converted once per change (see the timeline Repeater)
-    readonly property var _entries: History.entries
+    readonly property var _entries: History.entries || []
 
-    onVisibleChanged: if (visible) History.reloadFolder()
+    // ── pagination ──
+    // A busy output folder runs into hundreds of exports; the old endless
+    // timeline is paged 12 files at a time with the app's shared Pager.
+    readonly property int _perPage: 12
+    property int _pageIndex: 0
+    readonly property int _pageCount: Math.max(1, Math.ceil(_entries.length / _perPage))
+    // clamped read: a filter or a deleted file can shrink the list under us
+    readonly property int _curPage: Math.min(Math.max(0, _pageIndex), Math.max(0, _pageCount - 1))
+    readonly property var _pageEntries: {
+        var start = page._curPage * page._perPage
+        return page._entries.slice(start, start + page._perPage)
+    }
+    function _goPage(i) {
+        page._pageIndex = Math.max(0, Math.min(page._pageCount - 1, i))
+        if (scroller.contentItem) scroller.contentItem.contentY = 0
+    }
+
+    onVisibleChanged: if (visible) { page._pageIndex = 0; History.reloadFolder() }
     Component.onCompleted: History.reloadFolder()
 
     readonly property string _today: Qt.formatDate(new Date(), "yyyy-MM-dd")
@@ -120,10 +137,10 @@ Item {
                             Rectangle { width: 1; height: 32; color: Theme.border; anchors.verticalCenter: parent.verticalCenter; visible: latestCell.visible }
                             StatCell {
                                 id: latestCell
-                                visible: page._wide && History.entries.length > 0
+                                visible: page._wide && page._entries.length > 0
                                 glyph: "history"
-                                value: History.entries.length > 0
-                                       ? page.dayLabel(page.dayOf(History.entries[0].saved)) : "—"
+                                value: page._entries.length > 0
+                                       ? page.dayLabel(page.dayOf(page._entries[0].saved)) : "—"
                                 label: I18n.tr("Latest export")
                             }
                         }
@@ -169,7 +186,7 @@ Item {
                                     implicitWidth: segInner.implicitWidth + Tokens.space5
                                     readonly property bool on: History.filterIndex === modelData.i
                                     hoverEnabled: true
-                                    onClicked: History.filterIndex = modelData.i
+                                    onClicked: { History.filterIndex = modelData.i; page._pageIndex = 0 }
                                     HoverHandler { cursorShape: Qt.PointingHandCursor }
                                     background: Rectangle {
                                         radius: Tokens.radiusPill
@@ -242,7 +259,7 @@ Item {
                                 leftPadding: 0; rightPadding: 0
                                 background: null
                                 text: History.searchText
-                                onTextChanged: History.searchText = text
+                                onTextChanged: { History.searchText = text; page._pageIndex = 0 }
                             }
                             C.IconButton {
                                 visible: histSearch.text !== ""
@@ -337,16 +354,16 @@ Item {
                         // v3.40.1: page._entries, not History.entries: every
                         // read of the Python property converts the WHOLE list,
                         // and each row read it up to three times (O(n²)).
-                        model: page._entries
+                        model: page._pageEntries
                         delegate: ColumnLayout {
                             id: slot
                             Layout.fillWidth: true
                             spacing: 0
                             readonly property string day: page.dayOf(modelData.saved)
                             readonly property bool firstOfDay: index === 0
-                                || page.dayOf(page._entries[index - 1].saved) !== slot.day
-                            readonly property bool lastOfDay: index === page._entries.length - 1
-                                || page.dayOf(page._entries[index + 1].saved) !== slot.day
+                                || page.dayOf(page._pageEntries[index - 1].saved) !== slot.day
+                            readonly property bool lastOfDay: index === page._pageEntries.length - 1
+                                || page.dayOf(page._pageEntries[index + 1].saved) !== slot.day
 
                             // day header
                             RowLayout {
@@ -384,6 +401,32 @@ Item {
                                 Layout.fillWidth: true
                             }
                         }
+                    }
+                }
+
+                // ── pagination: ‹ 1 2 3 › + a range caption ──
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.topMargin: Tokens.space4
+                    visible: !History.isEmpty && page._pageCount > 1
+                    spacing: Tokens.space3
+                    C.Pager {
+                        Layout.alignment: Qt.AlignHCenter
+                        pageIndex: page._curPage
+                        pageCount: page._pageCount
+                        onRequested: (i) => page._goPage(i)
+                    }
+                    C.AppText {
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                        text: I18n.tr("Showing {from}–{to} of {total} exports")
+                                  .replace("{from}", page._curPage * page._perPage + 1)
+                                  .replace("{to}", Math.min(page._entries.length,
+                                                            (page._curPage + 1) * page._perPage))
+                                  .replace("{total}", page._entries.length)
+                        font.pixelSize: Tokens.fontMicro
+                        weight: Tokens.weightDemiBold
+                        color: Theme.outline
                     }
                 }
             }

@@ -253,7 +253,7 @@ ACCENTS = [
     # carries its own dark ink for on_primary (see _apply_accent).
     {"key": "tungsten", "name": "Tungsten", "a": "#FFB547", "b": "#FFC76E", "on": "#1D1305"},
 ]
-DEFAULT_ACCENT = "crimson"
+DEFAULT_ACCENT = "ocean"
 
 # Live accent. Widgets read CLR; QML reads the Theme bridge, which is fed from
 # CLR — so both follow the accent automatically.

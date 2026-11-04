@@ -284,6 +284,11 @@ class ArchiveVM(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # v1.0.8 perf: detailStats (a full pass over the open section) is built
+        # once per detailChanged, not on every QML read. Dropped first: this
+        # connection exists before QML binds to the signal.
+        self._detail_stats = None
+        self.detailChanged.connect(self._drop_detail_stats)
         self._tab = 0                # 0 all, 1 favorites
         self._search = ""
         self._groups_raw = []        # every group dict from the db
@@ -525,10 +530,15 @@ class ArchiveVM(QObject):
     def detailRuns(self):
         return str((self._group or {}).get("run_count") or 0)
 
+    def _drop_detail_stats(self, *_a):
+        self._detail_stats = None
+
     @Property("QVariantList", notify=detailChanged)
     def detailStats(self):
         """Cells of the detail header strip: caption/value pairs computed
         once per open, so QML just lays them out."""
+        if self._detail_stats is not None:
+            return self._detail_stats
         g = self._group or {}
         # In Channels view the page counts channels, not videos, and its
         # numbers must be the same filtered set the grid shows.
@@ -536,7 +546,7 @@ class ArchiveVM(QObject):
                 and self._detail_filtered else self._detail_raw)
         views = sum(r.get("view_count") or 0 for r in rows)
         mults = [r.get("multiplier") for r in rows if r.get("multiplier")]
-        return [
+        self._detail_stats = [
             {"l": tr("Channels") if self._channels_view else tr("Videos"),
              "v": humanize_count(len(rows))},
             {"l": tr("Favorites"), "v": humanize_count(g.get("fav_count") or 0)},
@@ -547,6 +557,7 @@ class ArchiveVM(QObject):
             {"l": tr("Last refresh"),
              "v": days_ago_str(g.get("updated_at") or "")},
         ]
+        return self._detail_stats
 
     @Property(bool, notify=detailChanged)
     def detailFavOnly(self):

@@ -137,6 +137,13 @@ C.GlassPanel {
     property var doneIds: card.target.downloadedIds
     property var savedList: card.target.savedIds
     property var ideaKeys: Ideas.selectedKeys
+    // v1.0.8 perf: optional id -> true lookups the page builds ONCE per change
+    // and shares with every card. With them each card answers "done / saved /
+    // ticked?" in O(1) instead of scanning three id lists per binding run
+    // (24 cards x a few hundred saved ids, on every page turn and tick).
+    property var doneMap: null
+    property var savedMap: null
+    property var ideaMap: null
 
     // Row-dependent bindings re-run for every card on every page flip / live
     // tick; each I18n.tr() / Theme.x read in them is a round-trip into Python.
@@ -170,7 +177,8 @@ C.GlassPanel {
     readonly property var _dl: ((card.downloadsMap || {})[row.videoId || ""]) || null
     readonly property bool _downloading: _dl !== null && _dl.state === "running"
     readonly property bool _stopped: _dl !== null && _dl.state === "stopped"
-    readonly property bool _alreadyDone: (card.doneIds || []).indexOf(row.videoId || "") !== -1
+    readonly property bool _alreadyDone: card.doneMap ? card.doneMap[row.videoId || ""] === true
+                                                      : (card.doneIds || []).indexOf(row.videoId || "") !== -1
     readonly property bool _openable: !_downloading && !_stopped
                                        && ((_dl !== null && _dl.state === "done") || _alreadyDone)
     readonly property bool _merging: _downloading && (_dl.text || "") === card._tMerging
@@ -178,7 +186,8 @@ C.GlassPanel {
     readonly property string _targetUrl: row.isChannel ? (row.channelUrl || "") : (row.videoUrl || "")
 
     // Public so the handler name is plain (onSavedChanged) — drives the pop.
-    readonly property bool saved: (card.savedList || []).indexOf(row.videoId || "") >= 0
+    readonly property bool saved: card.savedMap ? card.savedMap[row.videoId || ""] === true
+                                                : (card.savedList || []).indexOf(row.videoId || "") >= 0
     onSavedChanged: if (card._hot && card._motion) savePop.restart()
 
     // ── outlier heat ──
@@ -1279,7 +1288,8 @@ C.GlassPanel {
                 Item {
                     id: ideaWrap
                     readonly property bool picked: (row.videoId || "") !== ""
-                                                   && (card.ideaKeys || []).indexOf(row.videoId) >= 0
+                                                   && (card.ideaMap ? card.ideaMap[row.videoId] === true
+                                                                    : (card.ideaKeys || []).indexOf(row.videoId) >= 0)
                     implicitWidth: 42; implicitHeight: 40
                     Layout.preferredWidth: 42
                     Layout.preferredHeight: 40

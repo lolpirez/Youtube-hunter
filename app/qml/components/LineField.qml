@@ -69,8 +69,8 @@ Column {
                 Behavior on glyphColor { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
             }
             HoverHandler { id: hintHover }
-            AppTooltip {
-                visible: hintHover.hovered
+            LazyTooltip {
+                show: hintHover.hovered
                 text: root.hint
             }
         }

@@ -1111,7 +1111,7 @@ Item {
                 onClicked: fc.pick()
             }
         }
-        C.AppTooltip { visible: fcHover.hovered && fc._shown !== ""; text: fc._shown }
+        C.LazyTooltip { show: fcHover.hovered && fc._shown !== ""; text: fc._shown }
     }
 
     component BlockHead: RowLayout {
@@ -2221,7 +2221,7 @@ Item {
                                                             name: "check"; fill: true; size: 16
                                                             glyphColor: "#ffffff"
                                                         }
-                                                        C.AppTooltip { visible: sw.hovered; text: I18n.tr(modelData.name) }
+                                                        C.LazyTooltip { show: sw.hovered; text: I18n.tr(modelData.name) }
                                                     }
                                                 }
                                             }
@@ -3019,7 +3019,7 @@ Item {
                                             onClicked: folderDialog.open()
                                         }
                                     }
-                                    C.AppTooltip { visible: folderHover.hovered && page.outputOk; text: Settings.saveFolder }
+                                    C.LazyTooltip { show: folderHover.hovered && page.outputOk; text: Settings.saveFolder }
                                 }
 
                                 // per-kind destinations

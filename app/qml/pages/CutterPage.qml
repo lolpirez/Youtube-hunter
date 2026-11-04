@@ -597,7 +597,7 @@ Item {
                           : rb.lit || rb.hovered ? Theme.primary : Theme.on_surface
             }
         }
-        C.AppTooltip { visible: rb.hovered && rb.tip !== ""; text: rb.tip }
+        C.LazyTooltip { show: rb.hovered && rb.tip !== ""; text: rb.tip }
     }
 
     // Broadcast colour bars (SMPTE-style), the monitor's "no signal" card.
@@ -1062,7 +1062,7 @@ Item {
                 onReleased: tl._endDrag()
                 onCanceled: tl._endDrag()
             }
-            C.AppTooltip { visible: slideMa.containsMouse && tl._edge === 0; text: I18n.tr("Drag to slide the whole clip") }
+            C.LazyTooltip { show: slideMa.containsMouse && tl._edge === 0; text: I18n.tr("Drag to slide the whole clip") }
         }
 
         // bracket handles
@@ -1612,7 +1612,7 @@ Item {
                                 glyphColor: keysPop.opened || keysBtn.hovered ? Theme.primary : Theme.on_surface_var
                             }
                         }
-                        C.AppTooltip { visible: keysBtn.hovered && !keysPop.opened; text: I18n.tr("Keyboard shortcuts") }
+                        C.LazyTooltip { show: keysBtn.hovered && !keysPop.opened; text: I18n.tr("Keyboard shortcuts") }
 
                         Popup {
                             id: keysPop
@@ -1949,7 +1949,7 @@ Item {
                                                     }
                                                 }
                                             }
-                                            C.AppTooltip { visible: modeBtn.hovered && modeSeg.segW <= 100; text: modelData.label }
+                                            C.LazyTooltip { show: modeBtn.hovered && modeSeg.segW <= 100; text: modelData.label }
                                         }
                                     }
                                 }
@@ -2713,7 +2713,7 @@ Item {
                                         horizontalAlignment: Text.AlignHCenter
                                         verticalAlignment: Text.AlignVCenter
                                     }
-                                    C.AppTooltip { visible: guideBtn.hovered; text: I18n.tr("Show the Shorts (9:16) frame") }
+                                    C.LazyTooltip { show: guideBtn.hovered; text: I18n.tr("Show the Shorts (9:16) frame") }
                                 }
                                 // playback speed
                                 AbstractButton {
@@ -2743,7 +2743,7 @@ Item {
                                         horizontalAlignment: Text.AlignHCenter
                                         verticalAlignment: Text.AlignVCenter
                                     }
-                                    C.AppTooltip { visible: rateBtn.hovered; text: I18n.tr("Playback speed") }
+                                    C.LazyTooltip { show: rateBtn.hovered; text: I18n.tr("Playback speed") }
                                 }
                                 C.IconButton {
                                     Layout.alignment: Qt.AlignVCenter
@@ -3674,7 +3674,7 @@ Item {
                                         }
                                     }
                                 }
-                                C.AppTooltip { visible: zoomHover.hovered; text: I18n.tr("Zoom the timeline to the clip") + "  (Z)" }
+                                C.LazyTooltip { show: zoomHover.hovered; text: I18n.tr("Zoom the timeline to the clip") + "  (Z)" }
                                 HoverHandler { id: zoomHover }
                             }
                         }

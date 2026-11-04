@@ -74,10 +74,13 @@ Item {
     // and the Favorites tab page through their own filtered result.
     readonly property int _sectPerPage: 12
     property int _sectPage: 0
-    readonly property int _sectTotal: (Archive.groups || []).length
+    // v1.0.8 perf: Archive.groups converted ONCE per change (it was read by
+    // six separate bindings, each one a full Python -> JS copy)
+    readonly property var _groups: Archive.groups || []
+    readonly property int _sectTotal: page._groups.length
     readonly property int _sectPages: Math.max(1, Math.ceil(page._sectTotal / page._sectPerPage))
     readonly property var _sectSlice: {
-        var g = Archive.groups || []
+        var g = page._groups
         var start = page._sectPage * page._sectPerPage
         return g.slice(start, start + page._sectPerPage)
     }
@@ -127,24 +130,33 @@ Item {
     readonly property var _doneIds: Archive.downloadedIds || []
     readonly property var _savedIds: Archive.savedIds || []
     readonly property var _ideaKeys: Ideas.selectedKeys || []
+    // v1.0.8 perf: O(1) lookups shared by every card (see ArchiveVideoCard)
+    function _idMap(list) {
+        var m = {}
+        for (var i = 0; i < list.length; ++i) m[list[i]] = true
+        return m
+    }
+    readonly property var _doneMap: _idMap(_doneIds)
+    readonly property var _savedMap: _idMap(_savedIds)
+    readonly property var _ideaMap: _idMap(_ideaKeys)
     property int _specSeen: -2
     readonly property int _heroSize: Math.round(Math.max(30, Math.min(50, masterCol.width / 30)))
 
     readonly property int _maxItems: {
-        var gs = Archive.groups || []
+        var gs = page._groups
         var m = 1
         for (var i = 0; i < gs.length; i++) m = Math.max(m, gs[i].itemCount || 0)
         return m
     }
     readonly property int _totalItems: {
-        var gs = Archive.groups || []
+        var gs = page._groups
         var t = 0
         for (var i = 0; i < gs.length; i++) t += (gs[i].itemCount || 0)
         return Math.max(1, t)
     }
     // spectrum segments: the 9 biggest sections + one "others" bucket
     readonly property var _spectrum: {
-        var gs = (Archive.groups || []).slice()
+        var gs = page._groups.slice()
         gs.sort(function(a, b) { return (b.itemCount || 0) - (a.itemCount || 0) })
         var out = []
         var rest = 0, restN = 0
@@ -157,7 +169,7 @@ Item {
         return out
     }
     readonly property var _detailGroup: {
-        var gs = Archive.groups || []
+        var gs = page._groups
         for (var i = 0; i < gs.length; i++)
             if (gs[i].id === Archive.detailId) return gs[i]
         return ({})
@@ -2665,6 +2677,9 @@ Item {
                                 doneIds: page._doneIds
                                 savedList: page._savedIds
                                 ideaKeys: page._ideaKeys
+                                doneMap: page._doneMap
+                                savedMap: page._savedMap
+                                ideaMap: page._ideaMap
                                 cardWidth: grid.cardW
                                 onDownloadRequested: (vid, title, thumb) => qualityPicker.openFor(vid, title, thumb)
                                 onThumbDownloadRequested: (thumb, title, isShort) => page.saveThumb(thumb, title, isShort)
