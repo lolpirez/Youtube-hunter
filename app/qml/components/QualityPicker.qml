@@ -81,6 +81,7 @@ Dialog {
         thumbId = thumb
         selected = 0
         _seeded = false
+        bodyFlick.contentY = 0
         QualityProbe.start(vid)
         if (!QualityProbe.busy) _seed()
         open()
@@ -359,549 +360,532 @@ Dialog {
         }
     }
 
-    contentItem: ColumnLayout {
-        spacing: 0
+    // v1.0.3: the body scrolls once it outgrows the window. A dubbed video
+    // can carry 40+ audio tracks; "Show all" used to grow the dialog past the
+    // window edge with nothing to scroll, so the lower languages could not be
+    // reached at all. Header and footer (Download) stay pinned.
+    height: Math.min(implicitHeight, parent ? parent.height - 48 : implicitHeight)
 
-        // ── keyboard: ← / → walk the ladder, Enter downloads (Esc closes) ──
-        Shortcut { sequences: ["Right"]; enabled: root.opened; onActivated: root._step(1) }
-        Shortcut { sequences: ["Left"]; enabled: root.opened; onActivated: root._step(-1) }
-        // v1.0.14: up / down walk the output format (MP3 -> M4A -> ...)
-        Shortcut { sequences: ["Down"]; enabled: root.opened && fmtSeg.visible; onActivated: fmtSeg.pick(Math.min(fmtSeg.fr.length - 1, fmtSeg.idx + 1)) }
-        Shortcut { sequences: ["Up"]; enabled: root.opened && fmtSeg.visible; onActivated: fmtSeg.pick(Math.max(0, fmtSeg.idx - 1)) }
-        Shortcut { sequences: ["Return", "Enter"]; enabled: root.opened && dlBtn.enabled; onActivated: dlBtn.clicked() }
+    contentItem: Flickable {
+        id: bodyFlick
+        clip: true
+        implicitWidth: bodyCol.implicitWidth
+        implicitHeight: bodyCol.implicitHeight
+        contentWidth: width
+        contentHeight: bodyCol.implicitHeight
+        boundsBehavior: Flickable.StopAtBounds
+        // only a real scroller when there is something to scroll, so a drag on
+        // the ladder / format switch never turns into a flick
+        interactive: contentHeight > height + 1
+        C.SmoothWheel { flick: bodyFlick; step: 90 }
+        ScrollIndicator.vertical: ScrollIndicator { }
 
-        // probe status: real formats / checking / generic ladder
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.leftMargin: Tokens.space5
-            Layout.rightMargin: Tokens.space5
-            Layout.topMargin: Tokens.space3
-            spacing: Tokens.space2
-            visible: QualityProbe.note !== ""
+        ColumnLayout {
+            id: bodyCol
+            width: bodyFlick.width
+            spacing: 0
 
-            C.SpinnerGlyph {
-                name: QualityProbe.busy ? "autorenew"
-                     : QualityProbe.failed ? "warning" : "check_circle"
-                size: 15
-                glyphColor: QualityProbe.busy ? Theme.primary
-                          : QualityProbe.failed ? Theme.warn : Theme.secondary_container
-                Layout.alignment: Qt.AlignTop
-                spinning: QualityProbe.busy
-            }
-            C.AppText {
-                text: QualityProbe.note
-                font.pixelSize: Tokens.fontCaption
-                color: QualityProbe.failed ? Theme.warn : Theme.on_surface_var
-                wrapMode: Text.Wrap
-                Layout.fillWidth: true
-            }
-        }
+            // ── keyboard: ← / → walk the ladder, Enter downloads (Esc closes) ──
+            Shortcut { sequences: ["Right"]; enabled: root.opened; onActivated: root._step(1) }
+            Shortcut { sequences: ["Left"]; enabled: root.opened; onActivated: root._step(-1) }
+            // v1.0.14: up / down walk the output format (MP3 -> M4A -> ...)
+            Shortcut { sequences: ["Down"]; enabled: root.opened && fmtSeg.visible; onActivated: fmtSeg.pick(Math.min(fmtSeg.fr.length - 1, fmtSeg.idx + 1)) }
+            Shortcut { sequences: ["Up"]; enabled: root.opened && fmtSeg.visible; onActivated: fmtSeg.pick(Math.max(0, fmtSeg.idx - 1)) }
+            Shortcut { sequences: ["Return", "Enter"]; enabled: root.opened && dlBtn.enabled; onActivated: dlBtn.clicked() }
 
-        // A short format list is not always the upload's real ceiling. When
-        // several clients disagree on the low maximum it is usually the IP/VPN
-        // YouTube is throttling, so the picker says what to do about it instead
-        // of silently offering 360p as if that were the video's best.
-        Rectangle {
-            id: limitBanner
-            Layout.fillWidth: true
-            Layout.leftMargin: Tokens.space5
-            Layout.rightMargin: Tokens.space5
-            Layout.topMargin: Tokens.space3
-            visible: QualityProbe.thinHint && !QualityProbe.busy
-            implicitHeight: limitRow.implicitHeight + Tokens.space3 * 2
-            radius: Tokens.radiusLg
-            color: U.withAlpha(Theme.warn, Theme.isDark ? 0.16 : 0.10)
-            border.width: 1
-            border.color: U.withAlpha(Theme.warn, 0.35)
-
+            // probe status: real formats / checking / generic ladder
             RowLayout {
-                id: limitRow
-                anchors.fill: parent
-                anchors.margins: Tokens.space3
-                spacing: Tokens.space3
+                Layout.fillWidth: true
+                Layout.leftMargin: Tokens.space5
+                Layout.rightMargin: Tokens.space5
+                Layout.topMargin: Tokens.space3
+                spacing: Tokens.space2
+                visible: QualityProbe.note !== ""
 
-                C.IconGlyph {
-                    name: "warning"
-                    size: 18
-                    glyphColor: Theme.warn
+                C.SpinnerGlyph {
+                    name: QualityProbe.busy ? "autorenew"
+                         : QualityProbe.failed ? "warning" : "check_circle"
+                    size: 15
+                    glyphColor: QualityProbe.busy ? Theme.primary
+                              : QualityProbe.failed ? Theme.warn : Theme.secondary_container
                     Layout.alignment: Qt.AlignTop
-                }
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 2
-                    C.AppText {
-                        text: QualityProbe.limitTitle
-                        weight: Tokens.weightBold
-                        font.pixelSize: Tokens.fontBody
-                        color: Theme.text_strong
-                        wrapMode: Text.Wrap
-                        Layout.fillWidth: true
-                    }
-                    C.AppText {
-                        text: QualityProbe.limitNote
-                        font.pixelSize: Tokens.fontCaption
-                        color: Theme.on_surface_var
-                        wrapMode: Text.Wrap
-                        Layout.fillWidth: true
-                    }
-                }
-                C.PrimaryButton {
-                    variant: "ghost"
-                    iconName: "autorenew"
-                    text: I18n.tr("Check again")
-                    implicitHeight: 36
-                    implicitWidth: 126
-                    Layout.alignment: Qt.AlignVCenter
-                    onClicked: {
-                        root._seeded = false
-                        QualityProbe.refresh()
-                    }
-                }
-            }
-        }
-
-        // ═══ the ladder ═══
-        Item {
-            id: ladderBox
-            Layout.fillWidth: true
-            Layout.leftMargin: Tokens.space5
-            Layout.rightMargin: Tokens.space5
-            Layout.topMargin: Tokens.space4
-            implicitHeight: 208
-            LayoutMirroring.enabled: false
-            LayoutMirroring.childrenInherit: true
-
-            readonly property int barMin: 40
-            readonly property int barMax: 142
-            readonly property int gapW: Tokens.space4
-
-            // skeleton bars while probing
-            Row {
-                anchors.fill: parent
-                spacing: Tokens.space2
-                visible: QualityProbe.busy
-                Repeater {
-                    model: 5
-                    Item {
-                        width: (ladderBox.width - Tokens.space2 * 4) / 5
-                        height: ladderBox.height
-                        Rectangle {
-                            anchors.bottom: parent.bottom
-                            anchors.bottomMargin: 30
-                            width: parent.width
-                            height: 46 + index * 18
-                            radius: Tokens.radiusMd
-                            color: Theme.surface_high
-                            SequentialAnimation on opacity {
-                                running: QualityProbe.busy && root.visible
-                                loops: Animation.Infinite
-                                PauseAnimation { duration: index * 90 }
-                                NumberAnimation { to: 0.45; duration: 620; easing.type: Easing.InOutQuad }
-                                NumberAnimation { to: 1.0; duration: 620; easing.type: Easing.InOutQuad }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Row {
-                id: ladderRow
-                anchors.fill: parent
-                spacing: Tokens.space2
-                visible: !QualityProbe.busy
-                readonly property int nGaps: {
-                    var g = 0
-                    for (var i = 0; i < root.ladder.length; i++) if (root.ladder[i].gap) g++
-                    return g
-                }
-                readonly property real colW: root.ladder.length > 0
-                    ? (width - spacing * (root.ladder.length - 1) - ladderBox.gapW * nGaps) / root.ladder.length
-                    : 0
-
-                Repeater {
-                    // v1.0.14: a COUNT, not the array. A JS-array model rebuilds every
-                    // column whenever the rows change (each format switch), so
-                    // the bars popped instead of easing to their new height.
-                    model: QualityProbe.busy ? 0 : root.ladder.length
-                    delegate: Item {
-                        id: col
-                        readonly property var m: root.ladder[index] || ({ idx: -1, crown: false, gap: false })
-                        readonly property var r: root.rows[col.m.idx] || ({})
-                        readonly property bool picked: root.selected === col.m.idx
-                        readonly property real _h: {
-                            var span = ladderBox.barMax - ladderBox.barMin
-                            if (root._maxBytes > 0 && (r.sizeBytes || 0) > 0)
-                                return ladderBox.barMin + span * Math.sqrt(r.sizeBytes / root._maxBytes)
-                            // no sizes (probe failed): climb by rank, audio stays low
-                            if (r.isAudio) return ladderBox.barMin
-                            var n = Math.max(1, root.ladder.length)
-                            return ladderBox.barMin + span * (index + 1) / n
-                        }
-                        width: ladderRow.colW + (col.m.gap ? ladderBox.gapW : 0)
-                        height: ladderRow.height
-
-                        // size readout above the bar
-                        C.AppText {
-                            anchors.horizontalCenter: bar.horizontalCenter
-                            anchors.bottom: bar.top
-                            anchors.bottomMargin: Tokens.space2
-                            text: (col.r.sizeText || "") === "" ? "—"
-                                  : (col.r.sizeExact ? "" : "≈ ") + col.r.sizeText
-                            mono: true
-                            weight: col.picked ? Tokens.weightBold : Tokens.weightMedium
-                            font.pixelSize: Tokens.fontCaption
-                            // the numbers are being re-sized for a new format
-                            opacity: QualityProbe.resizing ? 0.45 : 1
-                            Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
-                            color: col.picked ? Theme.primary : Theme.on_surface_var
-                            Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
-                        }
-
-                        Rectangle {
-                            id: bar
-                            anchors.right: parent.right
-                            anchors.bottom: lbl.top
-                            anchors.bottomMargin: Tokens.space2
-                            width: ladderRow.colW
-                            height: col._h
-                            radius: Tokens.radiusMd
-                            Behavior on height { NumberAnimation { duration: Tokens.durSlow; easing.type: Easing.OutBack; easing.overshoot: 0.8 } }
-                            color: col.picked ? Theme.primary
-                                 : colArea.containsMouse ? U.hoverTint(Theme.surface_high, Theme.isDark, 0.08)
-                                 : Theme.surface_high
-                            border.width: 1
-                            border.color: col.picked ? Theme.primary : Theme.border_med
-                            Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
-
-                            // The pick reads by its solid primary fill + star.
-                            // It used to carry a blurred shadow layer, but
-                            // that shader compiled exactly when the probe
-                            // landed and turned a content update into a
-                            // visible hitch; the flat fill loses nothing.
-
-                            C.IconGlyph {
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                anchors.top: parent.top
-                                anchors.topMargin: Tokens.space2 + 2
-                                visible: col.m.crown || !!col.r.isAudio
-                                name: col.m.crown ? "star" : "music_note"
-                                fill: col.m.crown
-                                size: 17
-                                glyphColor: col.picked ? Theme.on_primary : Theme.on_surface_var
-                            }
-
-                            // Already on this device — a quiet check, so the
-                            // ladder answers "what do I already have?" at a
-                            // glance instead of only after picking a column.
-                            Rectangle {
-                                visible: !!col.r.saved
-                                anchors.top: parent.top
-                                anchors.right: parent.right
-                                anchors.margins: Tokens.space1
-                                width: 18
-                                height: 18
-                                radius: 9
-                                color: col.picked ? Theme.on_primary : Theme.secondary_container
-                                C.IconGlyph {
-                                    anchors.centerIn: parent
-                                    name: "check"
-                                    size: 11
-                                    glyphColor: col.picked ? Theme.primary : Theme.surface
-                                }
-                            }
-                        }
-
-                        C.AppText {
-                            id: lbl
-                            anchors.horizontalCenter: bar.horizontalCenter
-                            anchors.bottom: parent.bottom
-                            text: root._shortLabel(col.r)
-                            weight: Tokens.weightBold
-                            font.pixelSize: Tokens.fontBody
-                            color: col.picked ? Theme.text_strong : Theme.on_surface_var
-                            elide: Text.ElideRight
-                            width: Math.min(implicitWidth, ladderRow.colW + 6)
-                            horizontalAlignment: Text.AlignHCenter
-                        }
-
-                        MouseArea {
-                            id: colArea
-                            anchors.left: bar.left
-                            anchors.right: bar.right
-                            anchors.top: parent.top
-                            anchors.bottom: parent.bottom
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.selected = col.m.idx
-                        }
-                    }
-                }
-            }
-        }
-
-        // ═══ what the pick actually is ═══
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.leftMargin: Tokens.space5
-            Layout.rightMargin: Tokens.space5
-            Layout.topMargin: Tokens.space4
-            implicitHeight: specCol.implicitHeight + Tokens.space3 * 2
-            radius: Tokens.radiusLg
-            color: Theme.surface_low
-            border.width: 1
-            border.color: Theme.border
-
-            ColumnLayout {
-                id: specCol
-                anchors.fill: parent
-                anchors.margins: Tokens.space3
-                anchors.leftMargin: Tokens.space4
-                anchors.rightMargin: Tokens.space4
-                spacing: 2
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: Tokens.space2
-                    C.AppText {
-                        text: QualityProbe.busy ? I18n.tr("Reading formats…")
-                              : !root._sel ? ""
-                              : root._sel.isAudio ? root._sel.label
-                              : root._selectedIsCrown && root._sel.key !== "best"
-                                ? root._sel.label + "  ·  " + I18n.tr("the best this video has")
-                              : root._sel.label
-                        weight: Tokens.weightBold
-                        font.pixelSize: Tokens.fontLabel
-                        color: Theme.text_strong
-                        elide: Text.ElideRight
-                        Layout.fillWidth: true
-                    }
-                    // keyboard hint
-                    Row {
-                        spacing: 4
-                        visible: !QualityProbe.busy
-                        Repeater {
-                            model: ["←", "→"]
-                            Rectangle {
-                                id: stepChip
-                                width: 24; height: 22
-                                radius: Tokens.radiusXs
-                                color: stepArea.pressed ? Theme.surface_high
-                                     : stepArea.containsMouse ? U.hoverTint(Theme.surface_low, Theme.isDark, 0.06)
-                                     : "transparent"
-                                border.width: 1
-                                border.color: stepArea.containsMouse ? Theme.outline : Theme.border_med
-                                // v1.0.14: clickable, not just a hint
-                                MouseArea {
-                                    id: stepArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: root._step(index === 0 ? -1 : 1)
-                                }
-                                C.AppText {
-                                    anchors.centerIn: parent
-                                    text: modelData
-                                    mono: true
-                                    font.pixelSize: Tokens.fontCaption
-                                    color: Theme.outline
-                                }
-                            }
-                        }
-                    }
+                    spinning: QualityProbe.busy
                 }
                 C.AppText {
-                    text: QualityProbe.busy ? I18n.tr("Asking YouTube what this video really has")
-                                            : (root._sel ? root._sel.sub : "")
+                    text: QualityProbe.note
                     font.pixelSize: Tokens.fontCaption
-                    color: Theme.on_surface_var
-                    elide: Text.ElideRight
+                    color: QualityProbe.failed ? Theme.warn : Theme.on_surface_var
+                    wrapMode: Text.Wrap
                     Layout.fillWidth: true
                 }
-                // Already downloaded: the marker's whole point is to open the
-                // file, so the play action lives right on the selected pick.
+            }
+
+            // A short format list is not always the upload's real ceiling. When
+            // several clients disagree on the low maximum it is usually the IP/VPN
+            // YouTube is throttling, so the picker says what to do about it instead
+            // of silently offering 360p as if that were the video's best.
+            Rectangle {
+                id: limitBanner
+                Layout.fillWidth: true
+                Layout.leftMargin: Tokens.space5
+                Layout.rightMargin: Tokens.space5
+                Layout.topMargin: Tokens.space3
+                visible: QualityProbe.thinHint && !QualityProbe.busy
+                implicitHeight: limitRow.implicitHeight + Tokens.space3 * 2
+                radius: Tokens.radiusLg
+                color: U.withAlpha(Theme.warn, Theme.isDark ? 0.16 : 0.10)
+                border.width: 1
+                border.color: U.withAlpha(Theme.warn, 0.35)
+
                 RowLayout {
-                    visible: !QualityProbe.busy && !!root._sel && !!root._sel.saved
-                    Layout.fillWidth: true
-                    Layout.topMargin: Tokens.space1
-                    spacing: Tokens.space2
+                    id: limitRow
+                    anchors.fill: parent
+                    anchors.margins: Tokens.space3
+                    spacing: Tokens.space3
+
                     C.IconGlyph {
-                        name: "check_circle"
-                        size: 15
-                        glyphColor: Theme.secondary_container
-                        Layout.alignment: Qt.AlignVCenter
+                        name: "warning"
+                        size: 18
+                        glyphColor: Theme.warn
+                        Layout.alignment: Qt.AlignTop
                     }
-                    C.AppText {
-                        text: !!root._sel && (root._sel.savedSizeText || "") !== ""
-                              ? I18n.tr("Already downloaded — {s} on this device").replace("{s}", root._sel.savedSizeText)
-                              : I18n.tr("Already downloaded — saved on this device")
-                        font.pixelSize: Tokens.fontCaption
-                        color: Theme.secondary_container
-                        elide: Text.ElideRight
+                    ColumnLayout {
                         Layout.fillWidth: true
+                        spacing: 2
+                        C.AppText {
+                            text: QualityProbe.limitTitle
+                            weight: Tokens.weightBold
+                            font.pixelSize: Tokens.fontBody
+                            color: Theme.text_strong
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                        }
+                        C.AppText {
+                            text: QualityProbe.limitNote
+                            font.pixelSize: Tokens.fontCaption
+                            color: Theme.on_surface_var
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                        }
                     }
                     C.PrimaryButton {
                         variant: "ghost"
-                        iconName: "play_arrow"
-                        text: I18n.tr("Play")
-                        implicitHeight: 32
-                        implicitWidth: 96
+                        iconName: "autorenew"
+                        text: I18n.tr("Check again")
+                        implicitHeight: 36
+                        implicitWidth: 126
                         Layout.alignment: Qt.AlignVCenter
-                        onClicked: root._playSaved(root._sel)
-                    }
-                }
-                // A failed probe means this is the generic ladder, not this
-                // video's formats — say so on the pick itself.
-                RowLayout {
-                    visible: QualityProbe.failed && !!root._sel && !root._sel.isAudio
-                    Layout.fillWidth: true
-                    Layout.topMargin: Tokens.space1
-                    spacing: 6
-                    C.IconGlyph { name: "help"; size: 13; glyphColor: Theme.warn; Layout.alignment: Qt.AlignTop }
-                    C.AppText {
-                        text: I18n.tr("Not confirmed for this video — if it isn't available the download will stop.")
-                        font.pixelSize: Tokens.fontCaption
-                        color: Theme.warn
-                        wrapMode: Text.Wrap
-                        Layout.fillWidth: true
-                    }
-                }
-            }
-        }
-
-        // ═══ container / codec ═══
-        // Kept on screen while the probe runs, not just after it lands: hiding
-        // it made the whole dialog grow ~80 px when the formats arrived, and a
-        // resize mid-open (with its shadow layer re-rendering) read as a hitch.
-        // The row is static — it is the same format switch either way.
-        RowLayout {
-            Layout.fillWidth: true
-            Layout.leftMargin: Tokens.space5
-            Layout.rightMargin: Tokens.space5
-            Layout.topMargin: Tokens.space5
-            spacing: Tokens.space3
-            visible: root.rows.length > 0
-            C.AppText {
-                text: root.selectedIsAudio ? I18n.tr("Audio format") : I18n.tr("Video format")
-                weight: Tokens.weightBold
-                font.pixelSize: Tokens.fontBody
-                color: Theme.text_strong
-            }
-            C.AppText {
-                text: {
-                    var fr = root.formatRows || []
-                    for (var i = 0; i < fr.length; ++i)
-                        if (fr[i].key === root.currentFormat) return fr[i].sub
-                    return ""
-                }
-                font.pixelSize: Tokens.fontCaption
-                color: Theme.on_surface_var
-                elide: Text.ElideRight
-                horizontalAlignment: Text.AlignRight
-                Layout.fillWidth: true
-            }
-        }
-
-        // v1.0.14 segment: the pill answers the pointer in the same frame
-        // (the switch no longer waits on a disk write or a re-probe), you can
-        // press and SLIDE across it, and the light labels live inside the
-        // pill and travel with it, so the colour change is exactly where the
-        // pill is instead of flipping before it arrives.
-        Rectangle {
-            id: fmtSeg
-            visible: root.rows.length > 0
-            Layout.fillWidth: true
-            Layout.leftMargin: Tokens.space5
-            Layout.rightMargin: Tokens.space5
-            Layout.topMargin: Tokens.space2
-            implicitHeight: 46
-            radius: Tokens.radiusLg
-            color: Theme.surface_low
-            border.width: 1
-            border.color: Theme.border
-            LayoutMirroring.enabled: false
-            LayoutMirroring.childrenInherit: true
-
-            readonly property var fr: root.formatRows || []
-            readonly property real segW: fr.length > 0 ? (width - 8) / fr.length : 0
-            readonly property int idx: {
-                for (var i = 0; i < fr.length; ++i) if (fr[i].key === root.currentFormat) return i
-                return 0
-            }
-            property bool dragging: false
-            property real dragX: 4
-            readonly property real restX: 4 + idx * segW
-            readonly property int hoverIdx: segMouse.containsMouse && !dragging
-                                            ? _indexAt(segMouse.mouseX) : -1
-
-            function _indexAt(px) {
-                if (segW <= 0) return 0
-                return Math.max(0, Math.min(fr.length - 1, Math.floor((px - 4) / segW)))
-            }
-            function pick(i) {
-                if (i < 0 || i >= fr.length || i === idx) return
-                var k = fr[i].key
-                if (root.selectedIsAudio) QualityProbe.setAudioFormat(k)
-                else QualityProbe.setVideoFormat(k)
-            }
-
-            // hover wash under the label the pointer is on
-            Rectangle {
-                visible: fmtSeg.hoverIdx >= 0 && fmtSeg.hoverIdx !== fmtSeg.idx
-                x: 4 + Math.max(0, fmtSeg.hoverIdx) * fmtSeg.segW
-                y: 4
-                width: fmtSeg.segW
-                height: parent.height - 8
-                radius: Tokens.radiusMd
-                color: U.hoverTint(Theme.surface_low, Theme.isDark, 0.06)
-            }
-
-            // base labels (muted)
-            Row {
-                x: 4; y: 4
-                Repeater {
-                    model: fmtSeg.fr
-                    Item {
-                        width: fmtSeg.segW
-                        height: fmtSeg.height - 8
-                        C.AppText {
-                            anchors.fill: parent
-                            text: modelData.label
-                            mono: true
-                            weight: Tokens.weightBold
-                            font.pixelSize: Tokens.fontBody
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                            color: index === fmtSeg.hoverIdx ? Theme.text_strong : Theme.on_surface_var
+                        onClicked: {
+                            root._seeded = false
+                            QualityProbe.refresh()
                         }
                     }
                 }
             }
 
-            // the pill, carrying its own (light) copy of the labels
-            Rectangle {
-                id: segPill
-                x: fmtSeg.dragging ? fmtSeg.dragX : fmtSeg.restX
-                y: 4
-                width: fmtSeg.segW
-                height: parent.height - 8
-                radius: Tokens.radiusMd
-                color: Theme.text_strong
-                visible: fmtSeg.fr.length > 0
-                clip: true
-                scale: fmtSeg.dragging ? 0.97 : 1
-                Behavior on x {
-                    enabled: !fmtSeg.dragging
-                    NumberAnimation { duration: 240; easing.type: Easing.OutQuint }
-                }
-                Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+            // ═══ the ladder ═══
+            Item {
+                id: ladderBox
+                Layout.fillWidth: true
+                Layout.leftMargin: Tokens.space5
+                Layout.rightMargin: Tokens.space5
+                Layout.topMargin: Tokens.space4
+                implicitHeight: 208
+                LayoutMirroring.enabled: false
+                LayoutMirroring.childrenInherit: true
+
+                readonly property int barMin: 40
+                readonly property int barMax: 142
+                readonly property int gapW: Tokens.space4
+
+                // skeleton bars while probing
                 Row {
-                    x: 4 - segPill.x
-                    y: 0
+                    anchors.fill: parent
+                    spacing: Tokens.space2
+                    visible: QualityProbe.busy
+                    Repeater {
+                        model: 5
+                        Item {
+                            width: (ladderBox.width - Tokens.space2 * 4) / 5
+                            height: ladderBox.height
+                            Rectangle {
+                                anchors.bottom: parent.bottom
+                                anchors.bottomMargin: 30
+                                width: parent.width
+                                height: 46 + index * 18
+                                radius: Tokens.radiusMd
+                                color: Theme.surface_high
+                                SequentialAnimation on opacity {
+                                    running: QualityProbe.busy && root.visible
+                                    loops: Animation.Infinite
+                                    PauseAnimation { duration: index * 90 }
+                                    NumberAnimation { to: 0.45; duration: 620; easing.type: Easing.InOutQuad }
+                                    NumberAnimation { to: 1.0; duration: 620; easing.type: Easing.InOutQuad }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Row {
+                    id: ladderRow
+                    anchors.fill: parent
+                    spacing: Tokens.space2
+                    visible: !QualityProbe.busy
+                    readonly property int nGaps: {
+                        var g = 0
+                        for (var i = 0; i < root.ladder.length; i++) if (root.ladder[i].gap) g++
+                        return g
+                    }
+                    readonly property real colW: root.ladder.length > 0
+                        ? (width - spacing * (root.ladder.length - 1) - ladderBox.gapW * nGaps) / root.ladder.length
+                        : 0
+
+                    Repeater {
+                        // v1.0.14: a COUNT, not the array. A JS-array model rebuilds every
+                        // column whenever the rows change (each format switch), so
+                        // the bars popped instead of easing to their new height.
+                        model: QualityProbe.busy ? 0 : root.ladder.length
+                        delegate: Item {
+                            id: col
+                            readonly property var m: root.ladder[index] || ({ idx: -1, crown: false, gap: false })
+                            readonly property var r: root.rows[col.m.idx] || ({})
+                            readonly property bool picked: root.selected === col.m.idx
+                            readonly property real _h: {
+                                var span = ladderBox.barMax - ladderBox.barMin
+                                if (root._maxBytes > 0 && (r.sizeBytes || 0) > 0)
+                                    return ladderBox.barMin + span * Math.sqrt(r.sizeBytes / root._maxBytes)
+                                // no sizes (probe failed): climb by rank, audio stays low
+                                if (r.isAudio) return ladderBox.barMin
+                                var n = Math.max(1, root.ladder.length)
+                                return ladderBox.barMin + span * (index + 1) / n
+                            }
+                            width: ladderRow.colW + (col.m.gap ? ladderBox.gapW : 0)
+                            height: ladderRow.height
+
+                            // size readout above the bar
+                            C.AppText {
+                                anchors.horizontalCenter: bar.horizontalCenter
+                                anchors.bottom: bar.top
+                                anchors.bottomMargin: Tokens.space2
+                                text: (col.r.sizeText || "") === "" ? "—"
+                                      : (col.r.sizeExact ? "" : "≈ ") + col.r.sizeText
+                                mono: true
+                                weight: col.picked ? Tokens.weightBold : Tokens.weightMedium
+                                font.pixelSize: Tokens.fontCaption
+                                // the numbers are being re-sized for a new format
+                                opacity: QualityProbe.resizing ? 0.45 : 1
+                                Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
+                                color: col.picked ? Theme.primary : Theme.on_surface_var
+                                Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+                            }
+
+                            Rectangle {
+                                id: bar
+                                anchors.right: parent.right
+                                anchors.bottom: lbl.top
+                                anchors.bottomMargin: Tokens.space2
+                                width: ladderRow.colW
+                                height: col._h
+                                radius: Tokens.radiusMd
+                                Behavior on height { NumberAnimation { duration: Tokens.durSlow; easing.type: Easing.OutBack; easing.overshoot: 0.8 } }
+                                color: col.picked ? Theme.primary
+                                     : colArea.containsMouse ? U.hoverTint(Theme.surface_high, Theme.isDark, 0.08)
+                                     : Theme.surface_high
+                                border.width: 1
+                                border.color: col.picked ? Theme.primary : Theme.border_med
+                                Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+
+                                // The pick reads by its solid primary fill + star.
+                                // It used to carry a blurred shadow layer, but
+                                // that shader compiled exactly when the probe
+                                // landed and turned a content update into a
+                                // visible hitch; the flat fill loses nothing.
+
+                                C.IconGlyph {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    anchors.top: parent.top
+                                    anchors.topMargin: Tokens.space2 + 2
+                                    visible: col.m.crown || !!col.r.isAudio
+                                    name: col.m.crown ? "star" : "music_note"
+                                    fill: col.m.crown
+                                    size: 17
+                                    glyphColor: col.picked ? Theme.on_primary : Theme.on_surface_var
+                                }
+
+                                // Already on this device — a quiet check, so the
+                                // ladder answers "what do I already have?" at a
+                                // glance instead of only after picking a column.
+                                Rectangle {
+                                    visible: !!col.r.saved
+                                    anchors.top: parent.top
+                                    anchors.right: parent.right
+                                    anchors.margins: Tokens.space1
+                                    width: 18
+                                    height: 18
+                                    radius: 9
+                                    color: col.picked ? Theme.on_primary : Theme.secondary_container
+                                    C.IconGlyph {
+                                        anchors.centerIn: parent
+                                        name: "check"
+                                        size: 11
+                                        glyphColor: col.picked ? Theme.primary : Theme.surface
+                                    }
+                                }
+                            }
+
+                            C.AppText {
+                                id: lbl
+                                anchors.horizontalCenter: bar.horizontalCenter
+                                anchors.bottom: parent.bottom
+                                text: root._shortLabel(col.r)
+                                weight: Tokens.weightBold
+                                font.pixelSize: Tokens.fontBody
+                                color: col.picked ? Theme.text_strong : Theme.on_surface_var
+                                elide: Text.ElideRight
+                                width: Math.min(implicitWidth, ladderRow.colW + 6)
+                                horizontalAlignment: Text.AlignHCenter
+                            }
+
+                            MouseArea {
+                                id: colArea
+                                anchors.left: bar.left
+                                anchors.right: bar.right
+                                anchors.top: parent.top
+                                anchors.bottom: parent.bottom
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.selected = col.m.idx
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ═══ what the pick actually is ═══
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.leftMargin: Tokens.space5
+                Layout.rightMargin: Tokens.space5
+                Layout.topMargin: Tokens.space4
+                implicitHeight: specCol.implicitHeight + Tokens.space3 * 2
+                radius: Tokens.radiusLg
+                color: Theme.surface_low
+                border.width: 1
+                border.color: Theme.border
+
+                ColumnLayout {
+                    id: specCol
+                    anchors.fill: parent
+                    anchors.margins: Tokens.space3
+                    anchors.leftMargin: Tokens.space4
+                    anchors.rightMargin: Tokens.space4
+                    spacing: 2
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Tokens.space2
+                        C.AppText {
+                            text: QualityProbe.busy ? I18n.tr("Reading formats…")
+                                  : !root._sel ? ""
+                                  : root._sel.isAudio ? root._sel.label
+                                  : root._selectedIsCrown && root._sel.key !== "best"
+                                    ? root._sel.label + "  ·  " + I18n.tr("the best this video has")
+                                  : root._sel.label
+                            weight: Tokens.weightBold
+                            font.pixelSize: Tokens.fontLabel
+                            color: Theme.text_strong
+                            elide: Text.ElideRight
+                            Layout.fillWidth: true
+                        }
+                        // keyboard hint
+                        Row {
+                            spacing: 4
+                            visible: !QualityProbe.busy
+                            Repeater {
+                                model: ["←", "→"]
+                                Rectangle {
+                                    id: stepChip
+                                    width: 24; height: 22
+                                    radius: Tokens.radiusXs
+                                    color: stepArea.pressed ? Theme.surface_high
+                                         : stepArea.containsMouse ? U.hoverTint(Theme.surface_low, Theme.isDark, 0.06)
+                                         : "transparent"
+                                    border.width: 1
+                                    border.color: stepArea.containsMouse ? Theme.outline : Theme.border_med
+                                    // v1.0.14: clickable, not just a hint
+                                    MouseArea {
+                                        id: stepArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: root._step(index === 0 ? -1 : 1)
+                                    }
+                                    C.AppText {
+                                        anchors.centerIn: parent
+                                        text: modelData
+                                        mono: true
+                                        font.pixelSize: Tokens.fontCaption
+                                        color: Theme.outline
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    C.AppText {
+                        text: QualityProbe.busy ? I18n.tr("Asking YouTube what this video really has")
+                                                : (root._sel ? root._sel.sub : "")
+                        font.pixelSize: Tokens.fontCaption
+                        color: Theme.on_surface_var
+                        elide: Text.ElideRight
+                        Layout.fillWidth: true
+                    }
+                    // Already downloaded: the marker's whole point is to open the
+                    // file, so the play action lives right on the selected pick.
+                    RowLayout {
+                        visible: !QualityProbe.busy && !!root._sel && !!root._sel.saved
+                        Layout.fillWidth: true
+                        Layout.topMargin: Tokens.space1
+                        spacing: Tokens.space2
+                        C.IconGlyph {
+                            name: "check_circle"
+                            size: 15
+                            glyphColor: Theme.secondary_container
+                            Layout.alignment: Qt.AlignVCenter
+                        }
+                        C.AppText {
+                            text: !!root._sel && (root._sel.savedSizeText || "") !== ""
+                                  ? I18n.tr("Already downloaded — {s} on this device").replace("{s}", root._sel.savedSizeText)
+                                  : I18n.tr("Already downloaded — saved on this device")
+                            font.pixelSize: Tokens.fontCaption
+                            color: Theme.secondary_container
+                            elide: Text.ElideRight
+                            Layout.fillWidth: true
+                        }
+                        C.PrimaryButton {
+                            variant: "ghost"
+                            iconName: "play_arrow"
+                            text: I18n.tr("Play")
+                            implicitHeight: 32
+                            implicitWidth: 96
+                            Layout.alignment: Qt.AlignVCenter
+                            onClicked: root._playSaved(root._sel)
+                        }
+                    }
+                    // A failed probe means this is the generic ladder, not this
+                    // video's formats — say so on the pick itself.
+                    RowLayout {
+                        visible: QualityProbe.failed && !!root._sel && !root._sel.isAudio
+                        Layout.fillWidth: true
+                        Layout.topMargin: Tokens.space1
+                        spacing: 6
+                        C.IconGlyph { name: "help"; size: 13; glyphColor: Theme.warn; Layout.alignment: Qt.AlignTop }
+                        C.AppText {
+                            text: I18n.tr("Not confirmed for this video — if it isn't available the download will stop.")
+                            font.pixelSize: Tokens.fontCaption
+                            color: Theme.warn
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                        }
+                    }
+                }
+            }
+
+            // ═══ container / codec ═══
+            // Kept on screen while the probe runs, not just after it lands: hiding
+            // it made the whole dialog grow ~80 px when the formats arrived, and a
+            // resize mid-open (with its shadow layer re-rendering) read as a hitch.
+            // The row is static — it is the same format switch either way.
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: Tokens.space5
+                Layout.rightMargin: Tokens.space5
+                Layout.topMargin: Tokens.space5
+                spacing: Tokens.space3
+                visible: root.rows.length > 0
+                C.AppText {
+                    text: root.selectedIsAudio ? I18n.tr("Audio format") : I18n.tr("Video format")
+                    weight: Tokens.weightBold
+                    font.pixelSize: Tokens.fontBody
+                    color: Theme.text_strong
+                }
+                C.AppText {
+                    text: {
+                        var fr = root.formatRows || []
+                        for (var i = 0; i < fr.length; ++i)
+                            if (fr[i].key === root.currentFormat) return fr[i].sub
+                        return ""
+                    }
+                    font.pixelSize: Tokens.fontCaption
+                    color: Theme.on_surface_var
+                    elide: Text.ElideRight
+                    horizontalAlignment: Text.AlignRight
+                    Layout.fillWidth: true
+                }
+            }
+
+            // v1.0.14 segment: the pill answers the pointer in the same frame
+            // (the switch no longer waits on a disk write or a re-probe), you can
+            // press and SLIDE across it, and the light labels live inside the
+            // pill and travel with it, so the colour change is exactly where the
+            // pill is instead of flipping before it arrives.
+            Rectangle {
+                id: fmtSeg
+                visible: root.rows.length > 0
+                Layout.fillWidth: true
+                Layout.leftMargin: Tokens.space5
+                Layout.rightMargin: Tokens.space5
+                Layout.topMargin: Tokens.space2
+                implicitHeight: 46
+                radius: Tokens.radiusLg
+                color: Theme.surface_low
+                border.width: 1
+                border.color: Theme.border
+                LayoutMirroring.enabled: false
+                LayoutMirroring.childrenInherit: true
+
+                readonly property var fr: root.formatRows || []
+                readonly property real segW: fr.length > 0 ? (width - 8) / fr.length : 0
+                readonly property int idx: {
+                    for (var i = 0; i < fr.length; ++i) if (fr[i].key === root.currentFormat) return i
+                    return 0
+                }
+                property bool dragging: false
+                property real dragX: 4
+                readonly property real restX: 4 + idx * segW
+                readonly property int hoverIdx: segMouse.containsMouse && !dragging
+                                                ? _indexAt(segMouse.mouseX) : -1
+
+                function _indexAt(px) {
+                    if (segW <= 0) return 0
+                    return Math.max(0, Math.min(fr.length - 1, Math.floor((px - 4) / segW)))
+                }
+                function pick(i) {
+                    if (i < 0 || i >= fr.length || i === idx) return
+                    var k = fr[i].key
+                    if (root.selectedIsAudio) QualityProbe.setAudioFormat(k)
+                    else QualityProbe.setVideoFormat(k)
+                }
+
+                // hover wash under the label the pointer is on
+                Rectangle {
+                    visible: fmtSeg.hoverIdx >= 0 && fmtSeg.hoverIdx !== fmtSeg.idx
+                    x: 4 + Math.max(0, fmtSeg.hoverIdx) * fmtSeg.segW
+                    y: 4
+                    width: fmtSeg.segW
+                    height: parent.height - 8
+                    radius: Tokens.radiusMd
+                    color: U.hoverTint(Theme.surface_low, Theme.isDark, 0.06)
+                }
+
+                // base labels (muted)
+                Row {
+                    x: 4; y: 4
                     Repeater {
                         model: fmtSeg.fr
                         Item {
                             width: fmtSeg.segW
-                            height: segPill.height
+                            height: fmtSeg.height - 8
                             C.AppText {
                                 anchors.fill: parent
                                 text: modelData.label
@@ -910,56 +894,101 @@ Dialog {
                                 font.pixelSize: Tokens.fontBody
                                 horizontalAlignment: Text.AlignHCenter
                                 verticalAlignment: Text.AlignVCenter
-                                color: Theme.surface
+                                color: index === fmtSeg.hoverIdx ? Theme.text_strong : Theme.on_surface_var
                             }
                         }
                     }
                 }
-            }
 
-            // press, click or slide
-            MouseArea {
-                id: segMouse
-                anchors.fill: parent
-                hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                preventStealing: true
-                property real _pressX: 0
-                onPressed: (mouse) => { _pressX = mouse.x }
-                onPositionChanged: (mouse) => {
-                    if (!pressed) return
-                    if (!fmtSeg.dragging && Math.abs(mouse.x - _pressX) > 4) {
-                        fmtSeg.dragX = segPill.x
-                        fmtSeg.dragging = true
+                // the pill, carrying its own (light) copy of the labels
+                Rectangle {
+                    id: segPill
+                    x: fmtSeg.dragging ? fmtSeg.dragX : fmtSeg.restX
+                    y: 4
+                    width: fmtSeg.segW
+                    height: parent.height - 8
+                    radius: Tokens.radiusMd
+                    color: Theme.text_strong
+                    visible: fmtSeg.fr.length > 0
+                    clip: true
+                    scale: fmtSeg.dragging ? 0.97 : 1
+                    Behavior on x {
+                        enabled: !fmtSeg.dragging
+                        NumberAnimation { duration: 240; easing.type: Easing.OutQuint }
                     }
-                    if (!fmtSeg.dragging) return
-                    fmtSeg.dragX = Math.max(4, Math.min(fmtSeg.width - 4 - fmtSeg.segW,
-                                                       mouse.x - fmtSeg.segW / 2))
-                    fmtSeg.pick(fmtSeg._indexAt(mouse.x))
+                    Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
+                    Row {
+                        x: 4 - segPill.x
+                        y: 0
+                        Repeater {
+                            model: fmtSeg.fr
+                            Item {
+                                width: fmtSeg.segW
+                                height: segPill.height
+                                C.AppText {
+                                    anchors.fill: parent
+                                    text: modelData.label
+                                    mono: true
+                                    weight: Tokens.weightBold
+                                    font.pixelSize: Tokens.fontBody
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                    color: Theme.surface
+                                }
+                            }
+                        }
+                    }
                 }
-                onReleased: (mouse) => {
-                    if (fmtSeg.dragging) fmtSeg.dragging = false
-                    else fmtSeg.pick(fmtSeg._indexAt(mouse.x))
-                }
-                onCanceled: fmtSeg.dragging = false
-            }
-        }
 
-        // ═══ audio track (v1.2): only for dubbed videos ═══
-        C.AudioTrackPicker {
-            id: trackDeck
-            Layout.fillWidth: true
-            Layout.leftMargin: Tokens.space5
-            Layout.rightMargin: Tokens.space5
-            Layout.topMargin: Tokens.space5
-            visible: !QualityProbe.busy && root.rows.length > 0
-                     && (QualityProbe.audioTracks || []).length > 1
-            showHeader: true
-            columns: width >= 520 ? 2 : 1
-            maxCollapsed: 4
-            tracks: QualityProbe.audioTracks || []
-            current: QualityProbe.audioTrack
-            onPicked: (key) => QualityProbe.setAudioTrack(key)
+                // press, click or slide
+                MouseArea {
+                    id: segMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    preventStealing: true
+                    property real _pressX: 0
+                    onPressed: (mouse) => { _pressX = mouse.x }
+                    onPositionChanged: (mouse) => {
+                        if (!pressed) return
+                        if (!fmtSeg.dragging && Math.abs(mouse.x - _pressX) > 4) {
+                            fmtSeg.dragX = segPill.x
+                            fmtSeg.dragging = true
+                        }
+                        if (!fmtSeg.dragging) return
+                        fmtSeg.dragX = Math.max(4, Math.min(fmtSeg.width - 4 - fmtSeg.segW,
+                                                           mouse.x - fmtSeg.segW / 2))
+                        fmtSeg.pick(fmtSeg._indexAt(mouse.x))
+                    }
+                    onReleased: (mouse) => {
+                        if (fmtSeg.dragging) fmtSeg.dragging = false
+                        else fmtSeg.pick(fmtSeg._indexAt(mouse.x))
+                    }
+                    onCanceled: fmtSeg.dragging = false
+                }
+            }
+
+            // ═══ audio track (v1.2): only for dubbed videos ═══
+            C.AudioTrackPicker {
+                id: trackDeck
+                Layout.fillWidth: true
+                Layout.leftMargin: Tokens.space5
+                Layout.rightMargin: Tokens.space5
+                Layout.topMargin: Tokens.space5
+                visible: !QualityProbe.busy && root.rows.length > 0
+                         && (QualityProbe.audioTracks || []).length > 1
+                showHeader: true
+                columns: width >= 520 ? 2 : 1
+                maxCollapsed: 4
+                tracks: QualityProbe.audioTracks || []
+                current: QualityProbe.audioTrack
+                onPicked: (key) => QualityProbe.setAudioTrack(key)
+                // unfolding "Show all": scroll so the new languages come into view
+                onExpandedChanged: if (expanded) Qt.callLater(function() {
+                    bodyFlick.contentY = Math.min(Math.max(0, bodyFlick.contentHeight - bodyFlick.height),
+                                                  trackDeck.mapToItem(bodyCol, 0, 0).y - 8)
+                })
+            }
         }
     }
 

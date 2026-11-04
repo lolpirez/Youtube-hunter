@@ -29,8 +29,8 @@ from PySide6.QtGui import QGuiApplication
 
 from app.config import load_app_config, save_app_config
 from app.core.db.archive import (
-    archive_get_group, archive_get_rows, archive_save_search,
-    archive_update_rows)
+    archive_get_group, archive_get_rows, archive_group_market,
+    archive_prune_to_market, archive_save_search, archive_update_rows)
 from app.core.db.downloads import (downloads_apply_channel_meta,
                                     downloads_list, downloads_upsert,
                                     file_size_of)
@@ -47,7 +47,9 @@ from app.core.net import explain_network_error
 from app.core.thumbs import prefetch_thumbs
 from app.core.niche.config import (
     NICHE_CATEGORIES, NICHE_CHANNEL_AGES, NICHE_CHANNEL_UPLOADS,
-    NICHE_DEEP_FROM_DEPTH, NICHE_DEPTH_TARGETS, NICHE_DEPTHS, NICHE_DURATIONS,
+    NICHE_DEEP_FROM_DEPTH, NICHE_DEPTH_DIG_CALLS, NICHE_DEPTH_TARGETS,
+    NICHE_DEPTHS, NICHE_DURATION_API, NICHE_DURATION_SP, NICHE_DURATIONS,
+    NICHE_SCRAPE_DIG_FACTOR,
     NICHE_MAX_POOL, NICHE_PAGE_SIZE, NICHE_PER_CHANNEL, NICHE_PRESET_HINTS,
     NICHE_PRESETS, NICHE_REGIONS, NICHE_SIGNAL_STOPS, NICHE_SORTS_UI,
     NICHE_SORTS_VISIBLE, NICHE_TIMEFRAMES)
@@ -61,7 +63,8 @@ from app.core.niche.search import (
     apply_niche_filters, build_time_windows, cap_per_channel, capped_window_count,
     compute_niche_metrics,
     enrich_channels, enrich_videos, estimate_search_calls, merge_niche_row,
-    niche_scrape_search, niche_search_api, niche_search_api_more)
+    niche_scrape_search, niche_search_api, niche_search_api_more,
+    scrape_channel_stats)
 from app.core.niche.viral import (
     VIRAL_CATEGORIES, VIRAL_REGIONS, VIRAL_SOURCES, VIRAL_WINDOWS,
     estimate_viral_units, fetch_viral, legacy_viral_category_code,
@@ -103,10 +106,19 @@ _FMT_MAP = {0: None, 1: "long", 2: "short"}
 # back for more (deeper time windows, more pages) and merges, until it has a full
 # page of matches or the budget below runs out. The budget is what keeps this
 # from quietly eating a whole day's search quota.
-_WIDEN_TARGET = NICHE_PAGE_SIZE      # one full page of MATCHING rows is enough
-_WIDEN_MAX_PASSES = 3
-_WIDEN_MAX_CALLS = 26                # extra search.list calls we will ever spend
+#
+# v1.0.3 "dig for matches": the depth row is now the number of MATCHES the run
+# is after (100 = 100 videos that pass the filters), and the budget per depth
+# lives in NICHE_DEPTH_DIG_CALLS. The dig gives up early when the filters are
+# hopeless for the keyword, so a too-narrow filter costs a couple of calls,
+# not the whole budget.
+_WIDEN_TARGET = NICHE_PAGE_SIZE      # channel scan: one full page of matches
+_WIDEN_MAX_PASSES = 3                # channel scan passes
+_WIDEN_MAX_CALLS = 30                # absolute ceiling on extra search.list calls
 _WIDEN_MAX_CALLS_CHANNEL = 8         # playlistItems calls for a channel scan
+_DIG_MAX_PASSES = 30                 # API dig: one page per open slice per pass
+_DIG_HOPELESS_RATE = 0.01            # < 1 match per 100 scanned → stop digging
+_DIG_HOPELESS_AFTER = 200            # ...once at least this many were scanned
 
 
 
@@ -296,7 +308,17 @@ class NicheVM(QObject):
 
         # form state
         self._mode = 0                 # 0 keyword, 1 channel
-        self._source = 0              # 0 api, 1 scrape
+        # 0 api, 1 scrape, 2 smart (v1.0.3 default): find videos on the free
+        # web results, read their numbers through the API (~2 units / 50), and
+        # fall back to search.list only when YouTube's page is unavailable
+        self._source = 2
+        self._fell_back = False
+        # v1.0.3: a filtered search keeps ONLY its matches (see
+        # _lock_to_search_filters). {scanned, kept, filters} of the last lock.
+        self._locked = None
+        # Country chips under the results (v1.0.3): a zero-quota, view-only
+        # country cut on the pool of an "Any country" search
+        self._market_view = ""
         self._query = ""
         self._timeframe = 2            # last 30 days
         self._sort = 0
@@ -432,6 +454,11 @@ class NicheVM(QObject):
         # searched with, not whatever they have nudged since.
         self._search_filters = None
         self._widen_passes = 0    # extra fetch passes this run needed
+        self._dig = {}            # what the match-dig did (see _dig_note)
+        # v1.0.3: the after-run summary as DATA, not one long sentence, so the
+        # ResultBanner can lay it out (hero count, scan strip, insight rows).
+        # Empty whenever the status is anything but a finished-run summary.
+        self._result_facts = {}
         # Page tokens of the API search that just ran: the widening passes
         # continue from these instead of re-buying pages already fetched.
         self._slice_tokens = {}
@@ -509,6 +536,28 @@ class NicheVM(QObject):
     def depthOptions(self):
         return [tr(n) for n, _ in NICHE_DEPTHS]
 
+    @Property(str, notify=changed)
+    def depthHint(self):
+        """What the depth row will do with the CURRENT form, in one line."""
+        n = self._depth_target()
+        n_txt = str(n) if n else tr("as many as YouTube has")
+        if self._mode == 1:
+            return tr("Reads up to {n} of the channel's videos.").format(n=n_txt)
+        if not self._has_narrow_filters():
+            return tr("Collects {n} videos for your keyword. Turn on a filter and "
+                      "it digs until that many match it.").format(n=n_txt)
+        if self._source == 1:
+            return tr("Filters on: reads deeper until {n} videos match them, "
+                      "and keeps only those. Web scrape spends no API quota "
+                      "at all.").format(n=n_txt)
+        if self._source == 2:
+            return tr("Filters on: reads deeper until {n} videos match them, "
+                      "and keeps only those. No search quota; ~2 units per "
+                      "50 videos for exact numbers.").format(n=n_txt)
+        return tr("Filters on: digs until {n} videos match them, with up to "
+                  "{c} extra search calls (stops early when it can).").format(
+                      n=n_txt, c=self._dig_budget())
+
     @Property("QStringList", notify=labelsChanged)
     def regionOptions(self):
         return [tr(n) for n, _ in NICHE_REGIONS]
@@ -526,7 +575,16 @@ class NicheVM(QObject):
         """One sentence saying what the Country pick will actually do."""
         code = self._market_code()
         if not code:
-            return tr("Any country: results from every market and language.")
+            return tr("Any country: results from every market and language. "
+                      "After the search, the Country chips slice it by market "
+                      "for free.")
+        if _A.is_pack(code):
+            members = [tr(_A.country_name(m) or m) for m in _A.pack_members(code)]
+            lang = tr(_A.language_name(_A.primary_language(code)) or "")
+            return tr("One search for {n} countries: {list}. The keyword is "
+                      "searched in {lang}, and a video counts when it is made "
+                      "for any of them.").format(
+                n=len(members), list=", ".join(members), lang=lang)
         names = [_A.language_name(c) for c in _A.country_languages(code)]
         names = [tr(n) for n in names if n][:3]
         # "Turkish or Kurdish", "German, French or Italian"
@@ -611,8 +669,20 @@ class NicheVM(QObject):
 
     @Property("QStringList", notify=labelsChanged)
     def sourceOptions(self):
-        return [tr("Official API · exact, 100 searches/day"),
-                tr("Web scrape · unlimited, no search quota")]
+        # Short names: the closed field is narrow. What each one costs lives
+        # in sourceHints (second line in the list + the field's tooltip).
+        return [tr("Official API"), tr("Web scrape"), tr("Smart")]
+
+    @Property("QStringList", notify=labelsChanged)
+    def sourceHints(self):
+        return [tr("Exact numbers. Every search spends search quota "
+                   "(about 100 searches a day)."),
+                tr("100% free: reads youtube.com directly, zero API quota. "
+                   "Subscriber counts are YouTube's rounded ones; likes and "
+                   "category are unknown."),
+                tr("Free search on youtube.com, exact numbers from the API "
+                   "(~2 units per 50 videos). Uses the API search only if "
+                   "YouTube's page fails. Recommended.")]
 
     @Property("QStringList", notify=labelsChanged)
     def presetOptions(self):
@@ -777,6 +847,7 @@ class NicheVM(QObject):
         self._depth = 1
         self._region = 0
         self._remember_region()
+        self._market_view = ""
         self._channel_age = 0
         self._force = False
         self.changed.emit()
@@ -1171,6 +1242,7 @@ class NicheVM(QObject):
         self._running = True
         self._search_filters = self._current_filters()
         self._widen_passes = 0
+        self._dig = {}
         self._pct = 0
         self._phase = ""
         self._found = 0
@@ -1227,6 +1299,14 @@ class NicheVM(QObject):
     @Property(str, notify=statusChanged)
     def statusKind(self):
         return self._status_kind      # "muted" | "ok" | "warn" | "error"
+
+    @Property("QVariantMap", notify=statusChanged)
+    def resultFacts(self):
+        """The finished run in numbers, for the ResultBanner:
+        shown / scanned / total / target, keyword, stop reason and a list of
+        {"kind", "text"} notes (tip | info | warn | quota | translate | key |
+        audience). Empty unless statusText is a run summary."""
+        return self._result_facts
 
     # ── the run, while it runs ────────────────────────────────────────────
     # A search is three distinct jobs against two different endpoints and takes
@@ -1530,10 +1610,24 @@ class NicheVM(QObject):
         return default_quality_rows()
 
     # ── helpers ──────────────────────────────────────────────────────────
-    def _set_status(self, text, kind="muted"):
+    def _set_status(self, text, kind="muted", facts=None):
         self._status = text
         self._status_kind = kind
+        self._result_facts = dict(facts) if facts else {}
         self.statusChanged.emit()
+
+    def _append_status(self, note, note_kind="info", kind=None, facts_patch=None):
+        """Add one sentence to the current summary: to the plain status line
+        (kept for older bindings) AND to the structured facts' notes."""
+        facts = dict(self._result_facts or {})
+        if facts:
+            if note:
+                facts["notes"] = list(facts.get("notes") or []) + [
+                    {"kind": note_kind, "text": note}]
+            if facts_patch:
+                facts.update(facts_patch)
+        text = (self._status + "  " + note).strip() if note else self._status
+        self._set_status(text, kind or self._status_kind, facts)
 
     def _queries(self):
         import re
@@ -1594,6 +1688,8 @@ class NicheVM(QObject):
             subs_max = parse_human_number(self._subs_max)
             mult_min = parse_human_float(self._mult_min)
         market = self._market_code()
+        if not market and self._market_view and self._mode == 0:
+            market = self._market_view       # a Country chip (view-only)
         days = NICHE_TIMEFRAMES[self._timeframe][1]
         if self._viral_active:
             # The radar picked its own market (and already cut the pool to that
@@ -1662,18 +1758,20 @@ class NicheVM(QObject):
 
         A widening pass buys one more page per unfinished (query × window)
         slice, so the ceiling is slices × passes, never a second full run."""
-        n = self._planned_queries()
-        target = self._depth_target()
-        windows = build_time_windows(
-            NICHE_TIMEFRAMES[self._timeframe][1], self._deep,
-            max_windows=capped_window_count(n, target))
-        return min(_WIDEN_MAX_CALLS, n * len(windows) * _WIDEN_MAX_PASSES)
+        return self._dig_budget()
 
     @Slot()
     def _update_quota(self):
-        if self._mode == 1 or self._source == 1:
-            # channel scan or scrape → no search.list bucket spend
+        if self._mode == 0 and self._source == 1:
+            # v1.0.3: the web-scrape source reads numbers from YouTube's own
+            # pages too, so it spends nothing from either quota bucket
+            self._quota_text = tr("Free · no API quota at all")
+        elif self._mode == 1:
+            # channel scan → no search.list bucket spend
             self._quota_text = tr("No search-quota cost")
+        elif self._source == 2:
+            self._quota_text = tr("No search-quota cost · ~2 units per 50 videos "
+                                  "for exact numbers (API search only as a backup)")
         else:
             cost = self._search_plan()
             left = search_quota_remaining([self._api_key])
@@ -1810,9 +1908,26 @@ class NicheVM(QObject):
         # same keyword searched in Brazilian Portuguese) land in separate
         # sections and the user can tell them apart in the Search Archive.
         params_for_tag = self._last_params or {}
-        region_tag = params_for_tag.get("translate_region", "")
+        # v1.0.3: a Country search is tagged and FILTERED whether or not the
+        # keyword was translated. The archive used to store the raw pool, so
+        # "hot girl (BE)" said 100 videos while most of them were English or
+        # Hindi; now it holds exactly what the Country filter lets through.
+        region_tag = ""
+        if params_for_tag.get("mode", "keyword") == "keyword":
+            region_tag = (params_for_tag.get("region")
+                          or params_for_tag.get("translate_region") or "")
+        region_tag = (region_tag or "").strip().upper()
         if region_tag and query and not query.endswith("(" + region_tag + ")"):
             query = query + " (" + region_tag + ")"
+        if region_tag and _A.country_languages(region_tag):
+            rows = [r for r in rows if _A.market_fit(r, region_tag)]
+            if not rows:
+                if manual:
+                    self.toast.emit(tr("None of these videos are {country} content, "
+                                       "so nothing was archived.").replace(
+                        "{country}", tr(_A.country_name(region_tag) or region_tag)),
+                        "error")
+                return
         if not rows or not query:
             if manual:
                 self.toast.emit(
@@ -1828,6 +1943,9 @@ class NicheVM(QObject):
             try:
                 with lock:
                     gid, added, updated = archive_save_search(query, params, rows)
+                    # rows merged in by older runs (saved before the filter)
+                    if gid is not None and region_tag:
+                        archive_prune_to_market(gid, region_tag)
             except Exception:
                 log_crash(f"qml niche archive save failed\n{traceback.format_exc()}")
                 self._archiveDone.emit(seq, tr("(archiving failed)"), "error", manual)
@@ -1888,6 +2006,11 @@ class NicheVM(QObject):
             return
         group = archive_get_group(gid) or {}
         rows = archive_get_rows(gid)
+        # v1.0.3: a Country section only ever shows that country's videos
+        region = archive_group_market(group)
+        if region and rows and _A.country_languages(region):
+            rows = [r for r in rows
+                    if r.get("_is_favorite") or _A.market_fit(r, region)]
         if not rows:
             self.toast.emit(tr("That section has no saved rows."), "error")
             return
@@ -1898,6 +2021,7 @@ class NicheVM(QObject):
         self._last_query = group.get("title") or group.get("key") or ""
         self._last_params = {}
         self._viral_tried = True          # never auto-replace an opened section
+        self._locked = None
         if self._viral_active or self._viral_setup:
             self._viral_active = self._viral_setup = False
             self.viralChanged.emit()
@@ -2369,7 +2493,10 @@ class NicheVM(QObject):
         # the app runs, so re-read it here — otherwise the first search after
         # saving a key still sees the old (empty) value until a restart.
         self.refreshApiKeys()
-        scrape_mode = (not channel_mode) and self._source == 1
+        scrape_mode = (not channel_mode) and self._source in (1, 2)
+        self._fell_back = False
+        # a new search always starts from the whole pool, not a chip's country
+        self._market_view = ""
         api_key = (self._api_key or "").strip()
         if not api_key and not scrape_mode:
             self._set_status(tr("Add your YouTube Data API key in Settings first."), "error")
@@ -2414,9 +2541,46 @@ class NicheVM(QObject):
             if self._translate_kw and self._translate_target():
                 # translated on the worker (it is a network call); see _worker
                 params["translate_region"] = NICHE_REGIONS[self._region][1]
+            # v1.0.3: send what YouTube CAN filter to YouTube, so the run stops
+            # paying for videos it would throw away. Only added when set, so
+            # an unfiltered search keeps its old cache key.
+            api_dur, sp_dur, cat_id = self._server_side_cuts()
+            if api_dur:
+                params["video_duration"] = api_dur
+            if sp_dur:
+                params["scrape_duration"] = sp_dur
+            if cat_id:
+                params["category_id"] = cat_id
+            if scrape_mode and self._has_narrow_filters():
+                # a filtered scrape reads deeper (free: no search quota)
+                params["dig"] = True
+                # v1.0.3: the cuts the results page itself can answer (views,
+                # title words) are applied BEFORE any numbers are read, so a
+                # "1M-10M views" scrape stops reading once it has enough
+                # candidates and never pays (Smart) or waits (free) for the
+                # rest. Part of the cache key on purpose: a pre-cut pool must
+                # never be served to a search with other view bounds.
+                precut = {}
+                vmin = parse_human_number(self._views_min)
+                vmax = parse_human_number(self._views_max)
+                if vmin is not None:
+                    precut["views_min"] = vmin
+                if vmax is not None:
+                    precut["views_max"] = vmax
+                if (self._quick or "").strip():
+                    precut["text"] = (self._quick or "").strip()
+                if precut:
+                    params["precut"] = precut
+            if scrape_mode and self._source == 1:
+                # Web scrape = zero API quota: numbers come from YouTube's
+                # pages, never from videos.list / channels.list
+                params["free_stats"] = True
+            if self._source == 2 and api_key:
+                params["fallback_api"] = True
 
         self._requested_days = days
         self._from_cache = ""
+        self._locked = None
         if self._viral_active or self._viral_setup:
             self._viral_active = self._viral_setup = False
             self.viralChanged.emit()
@@ -2437,6 +2601,7 @@ class NicheVM(QObject):
         # the search when matches are scarce and to report how many it found.
         self._search_filters = self._current_filters()
         self._widen_passes = 0
+        self._dig = {}
         # Reset the live panel with the flag: a second search showing the first
         # one's stage and counts while it starts up is worse than showing nothing.
         self._pct = 0
@@ -2534,10 +2699,14 @@ class NicheVM(QObject):
         filters = self._search_filters
         if not filters or not self._has_narrow_filters_for(filters):
             return rows
-        if params.get("source") == "scrape":
+        if params.get("source") == "scrape" and not self._fell_back:
             # A scrape has no time windows to deepen, so another pass would
-            # return the same page again. Its own search is already the only
-            # pool we get.
+            # return the same page again. A filtered scrape already read
+            # NICHE_SCRAPE_DIG_FACTOR x the target up front (_fetch_scrape).
+            self._dig = {"target": self._match_target(params),
+                         "matched": len(apply_niche_filters(rows, filters)),
+                         "scanned": len(rows), "calls": 0,
+                         "stop": "scrape" if params.get("dig") else ""}
             return rows
         if params.get("mode") != "channel":
             return self._widen_api(params, rows, filters)
@@ -2608,14 +2777,21 @@ class NicheVM(QObject):
         """
         tokens = dict(self._slice_tokens or {})
         meta = dict(self._slice_meta or {})
+        target = self._match_target(params)
+        self._dig = {"target": target, "matched": len(apply_niche_filters(rows, filters)),
+                     "scanned": len(rows), "calls": 0, "stop": ""}
+        if self._dig["matched"] >= target:
+            return rows
         if not tokens or not meta:
+            self._dig["stop"] = "cache" if self._from_cache else "end"
             return rows
         try:
             left = search_quota_remaining([self._api_key])
         except Exception:
             left = _WIDEN_MAX_CALLS
-        budget = min(_WIDEN_MAX_CALLS, max(0, int(left)))
+        budget = min(self._dig_budget(), max(0, int(left)))
         if budget <= 0:
+            self._dig["stop"] = "quota"
             return rows
         try:
             yt = build_youtube_service((self._api_key or "").strip())
@@ -2625,17 +2801,28 @@ class NicheVM(QObject):
         initial = len(pool)
         seen = {r.get("video_id") for r in pool if r.get("video_id")}
         spent = 0
-        for attempt in range(1, _WIDEN_MAX_PASSES + 1):
+        matched = self._dig["matched"]
+        for attempt in range(1, _DIG_MAX_PASSES + 1):
             if self._stop_check():
                 break
-            if len(apply_niche_filters(pool, filters)) >= _WIDEN_TARGET:
+            if matched >= target:
                 break
-            if spent >= budget or not tokens:
+            if spent >= budget:
+                self._dig["stop"] = "budget"
+                break
+            if not tokens:
+                self._dig["stop"] = "end"
+                break
+            # hopeless-filter guard: the yield so far says the budget would buy
+            # (almost) nothing, so stop paying for it
+            if (len(pool) >= _DIG_HOPELESS_AFTER
+                    and matched < len(pool) * _DIG_HOPELESS_RATE):
+                self._dig["stop"] = "hopeless"
                 break
             self._progress(
-                min(44, 30 + attempt * 4),
-                tr("Widening the search to reach your filters (pass {n}) …")
-                .format(n=attempt),
+                min(44, 28 + attempt * 2),
+                tr("Digging for matches: {m} of {t} found (pass {n}) …")
+                .format(m=matched, t=target, n=attempt),
                 _S.PHASE_DISCOVER, {"found": len(pool)})
             try:
                 ids, used = niche_search_api_more(
@@ -2643,11 +2830,14 @@ class NicheVM(QObject):
                     region=meta.get("region") or None,
                     lang=meta.get("lang"),
                     video_duration=meta.get("duration"),
+                    category_id=meta.get("category") or None,
                     stop_check=self._stop_check,
-                    limit=min(len(tokens), budget - spent))
+                    limit=min(len(tokens), budget - spent,
+                              self._pages_for(target - matched, matched, len(pool))))
             except ScrapeCancelled:
                 raise
             except QuotaExceededError:
+                self._dig["stop"] = "quota"
                 break
             except Exception:                      # noqa: BLE001
                 log_crash("niche widen fetch failed\n" + traceback.format_exc())
@@ -2656,27 +2846,26 @@ class NicheVM(QObject):
             self._widen_passes = attempt
             new_ids = [v for v in ids if v and v not in seen]
             if not new_ids:
-                if not tokens:
-                    break
                 continue
             try:
                 more = self._enrich(yt, [{"video_id": v} for v in new_ids])
             except ScrapeCancelled:
                 raise
             except QuotaExceededError:
+                self._dig["stop"] = "quota"
                 break
             except Exception:                      # noqa: BLE001
                 log_crash("niche widen enrich failed\n" + traceback.format_exc())
                 break
-            added = 0
+            fresh = []
             for r in more:
                 vid = r.get("video_id")
                 if vid and vid not in seen:
                     seen.add(vid)
                     pool.append(r)
-                    added += 1
-            if not added:
-                break
+                    fresh.append(r)
+            matched += len(apply_niche_filters(fresh, filters))
+        self._dig.update({"matched": matched, "scanned": len(pool), "calls": spent})
         if len(pool) > initial:
             # The widened pool becomes the cache entry for this exact search,
             # so a repeat search shows the same results without any new quota.
@@ -2687,6 +2876,47 @@ class NicheVM(QObject):
             except Exception:                      # noqa: BLE001
                 pass
         return pool
+
+    def _server_side_cuts(self):
+        """(search.list videoDuration, youtube.com sp duration, category id)
+        for the current form: the parts of the filters YouTube can apply
+        itself. Shorts keeps its own mapping; Long-form alone is not sent
+        (YouTube's "long" means > 20 min, see _fetch_api)."""
+        fmt = _FMT_MAP[self._format]
+        i = self._duration if 0 <= self._duration < len(NICHE_DURATION_API) else 0
+        api_dur = NICHE_DURATION_API[i]
+        sp_dur = NICHE_DURATION_SP[i]
+        if fmt == "short":
+            # a Short is < 3 min: only the short buckets can ever match
+            api_dur, sp_dur = "short", 1
+        elif fmt == "long" and i == 1:
+            api_dur, sp_dur = None, 0    # contradictory; let the local cut say so
+        cat = (NICHE_CATEGORIES[self._category][1]
+               if 0 <= self._category < len(NICHE_CATEGORIES) else "")
+        cat_id = cat if cat and not cat.startswith("!") else ""
+        return api_dur, sp_dur, cat_id
+
+    @staticmethod
+    def _pages_for(need, matched, scanned):
+        """Search pages (50 ids each) the next dig pass should buy: enough
+        for the missing matches at the match rate seen so far, never a page
+        more. No match yet = two probe pages."""
+        if matched <= 0 or scanned <= 0:
+            return 2
+        rate = matched / float(scanned)
+        return max(1, -(-int(need) // max(1, int(rate * 50))))
+
+    def _match_target(self, params):
+        """How many MATCHING rows this run is after (the depth row's number)."""
+        t = params.get("target")
+        return int(t) if t else 900
+
+    def _dig_budget(self, depth=None):
+        i = self._depth if depth is None else depth
+        try:
+            return min(_WIDEN_MAX_CALLS, NICHE_DEPTH_DIG_CALLS[i])
+        except (IndexError, TypeError):
+            return _WIDEN_MAX_CALLS
 
     def _has_narrow_filters_for(self, filters):
         """_has_narrow_filters() against a filter dict rather than live form
@@ -2740,22 +2970,51 @@ class NicheVM(QObject):
             if age_h is not None and age_h * 3600 <= STALE_AFTER_S:
                 self._cache_live = True
                 return cached
-            try:
-                fresh = refresh_rows_live(cached, youtube_api_keys(),
-                                          stop_check=self._stop_check)
-                if fresh:
-                    cached = compute_niche_metrics(fresh)
-                    niche_cache_put(key, params, cached, fetched_at=fetched_at)
-                    self._cache_live = True
-            except ScrapeCancelled:
-                raise
-            except LiveStatsError:
-                pass                      # no key / quota: cached numbers
-            except Exception as exc:      # noqa: BLE001
-                log_crash("Niche cache live refresh failed:\n" + repr(exc))
-            return cached
+            if not params.get("free_stats"):
+                try:
+                    fresh = refresh_rows_live(cached, youtube_api_keys(),
+                                              stop_check=self._stop_check)
+                    if fresh:
+                        cached = compute_niche_metrics(fresh)
+                        niche_cache_put(key, params, cached, fetched_at=fetched_at)
+                        self._cache_live = True
+                except ScrapeCancelled:
+                    raise
+                except LiveStatsError:
+                    pass                      # no key / quota: cached numbers
+                except Exception as exc:      # noqa: BLE001
+                    log_crash("Niche cache live refresh failed:\n" + repr(exc))
+                return cached
+            # Web scrape: refreshing through the API would spend quota, and
+            # a fresh free read costs nothing, so stale numbers are re-read
+            # from YouTube itself below.
+            self._from_cache = ""
         if params["mode"] == "channel":
             rows = self._fetch_channel(params)
+        elif params["source"] == "scrape" and params.get("fallback_api"):
+            # Smart: the free web results first; the paid search only when
+            # YouTube's page could not be read (blocked, changed, offline).
+            # A page that was read fine and simply had no results (or whose
+            # candidates the cheap cuts removed) is NOT a failure — falling
+            # back there would spend 100 units to find the same nothing.
+            scrape_failed = False
+            try:
+                rows = self._fetch_scrape(params)
+            except ScrapeCancelled:
+                raise
+            except Exception:                      # noqa: BLE001
+                log_crash("smart source: scrape failed, using the API\n"
+                          + traceback.format_exc())
+                scrape_failed = True
+                rows = []
+            if scrape_failed:
+                self._fell_back = True
+                api_params = dict(params, source="api")
+                self._ensure_search_quota(api_params)
+                rows = self._fetch_api(api_params)
+                self._scrape_note = tr(
+                    "YouTube's web results were unavailable, so this run used "
+                    "the official API.")
         elif params["source"] == "scrape":
             rows = self._fetch_scrape(params)
         else:
@@ -2781,21 +3040,25 @@ class NicheVM(QObject):
         # "long-form" means here. Fetching unfiltered and dropping the Shorts
         # locally is the only correct way to say "everything that isn't a Short".
         fmt = params.get("fmt")
-        duration = "short" if fmt == "short" else None
+        duration = params.get("video_duration") or ("short" if fmt == "short" else None)
+        category = params.get("category_id") or None
         langs = params.get("query_langs") or (params.get("lang") or None)
         self._slice_tokens = {}
+        api_region = _A.api_region(params["region"] or "")
         self._slice_meta = {
             "order": params["order"],
-            "region": params["region"] or "",
+            "region": api_region,
             "lang": langs or "",
             "duration": duration,
+            "category": category or "",
         }
         quota_note = {}
         video_ids = niche_search_api(
             yt, queries, params["order"], windows,
-            params["pages"], region=params["region"] or None,
+            params["pages"], region=api_region or None,
             lang=langs,
             video_duration=duration,
+            category_id=category,
             stop_check=self._stop_check, progress=self._progress,
             target=target, tokens_out=self._slice_tokens,
             quota_note=quota_note)
@@ -2811,6 +3074,23 @@ class NicheVM(QObject):
         # Capped depth → exactly that many; the uncapped last row asks for as
         # many as the pool can hold and lets YouTube's own end-of-results stop it.
         target = int(cap) if cap else NICHE_MAX_POOL
+        dig = bool(params.get("dig"))
+        precut = params.get("precut") or {}
+        stop_when = None
+        if dig:
+            # Filtered: read several times the target so enough of them MATCH.
+            # Free in search quota.
+            target = min(NICHE_MAX_POOL, target * NICHE_SCRAPE_DIG_FACTOR)
+            # v1.0.3: ...but stop as soon as enough candidates survive the cuts
+            # the page itself can answer. With only page-answerable cuts (views,
+            # title words) 1.25x the target is plenty; with channel cuts on top
+            # (subs, country, ...) keep 3x for the exact check to thin out.
+            if cap and precut:
+                exact = self._needs_exact_cuts(self._search_filters or {})
+                want = int(cap) * 3 if exact else (int(cap) * 5 + 3) // 4
+
+                def stop_when(rows, _want=want, _pc=precut):
+                    return len(self._precut_rows(rows, _pc)) >= _want
         # PACE — this is what "the scraper got slow" was. The sweep below is
         # powerful but expensive: three sort orders × up to five query variants
         # × dozens of continuation pages each, at real network latency per
@@ -2822,40 +3102,111 @@ class NicheVM(QObject):
         #   Fast(1)  → 4 pages · Normal(2) → 6 · Deep(4) → 10 (+sort sweep)
         #   Very deep(6) → 14 (+sort sweep) · Maximum(14) → 30 · Deepest(18) → 36
         #     (+sort sweep AND the comma-separated query variants)
+        #
+        # v1.0.3: plus a wall-clock budget, so no keyword can keep the run on
+        # "Reading YouTube's results" for minutes.
         pages = int(params["pages"] or 1)
         rows = niche_scrape_search(
             params["query"], days=params["days"],
             sort_by=params.get("scrape_sort", 3),
-            duration=(1 if params["fmt"] == "short" else 0),
+            duration=(params.get("scrape_duration")
+                      or (1 if params["fmt"] == "short" else 0)),
             max_items=target,
             stop_check=self._stop_check, progress=self._progress,
-            queries=(params.get("queries") if pages >= 6 else None),
-            sweep_sorts=(pages >= 4),
+            queries=(params.get("queries") if (pages >= 6 or dig) else None),
+            sweep_sorts=(pages >= 4 or dig),
             # The viewer country YouTube ranks for (gl). The scrape used to be
             # pinned to the US whatever the Country dropdown said.
-            region=params.get("region") or "",
-            page_budget=(max(2, min(36, pages * 2 + 2)) if cap else 80))
+            region=_A.gl_region(params.get("region") or ""),
+            page_budget=(80 if (dig or not cap) else max(2, min(36, pages * 2 + 2))),
+            time_budget_s=(120 if (dig or not cap) else 75),
+            stop_when=stop_when)
         # A scrape is capped by YouTube itself, not by us: its results page stops
         # handing back continuations after roughly 370 videos for any one keyword,
         # however deep the setting. Saying so is the difference between "the app
         # is broken" and "that keyword has 370 videos in this window" — and it
         # points at the one lever that does work, which is searching more
         # keywords. (See applyFilters, which surfaces this note.)
-        if rows and len(rows) < (target if cap else max(50, params["pages"] * 50)):
+        if rows and not dig and len(rows) < (target if cap else max(50, params["pages"] * 50)):
             self._scrape_note = tr(
                 "YouTube returned {n} videos — all it has for this keyword and "
                 "window, whatever the depth. Add more keywords, separated by "
                 "commas, to search deeper.").format(n=len(rows))
         else:
             self._scrape_note = ""
+        if precut:
+            # numbers are only read for the candidates that can still match
+            rows = self._precut_rows(rows, precut)
         if not rows:
             return []
         api_key = (self._api_key or "").strip()
-        if api_key:
-            yt = build_youtube_service(api_key)
-            return self._enrich(yt, rows)
-        # no key → enrich impossible; still compute what metrics we can
-        return compute_niche_metrics(rows)
+        if params.get("free_stats") or not api_key:
+            # Web scrape (or no key): subscriber counts from the channel
+            # pages themselves. Zero API quota.
+            return self._enrich_free(rows)
+        # 25 s per request instead of the library's 60: a stalled call used to
+        # hold the run on one step for minutes across its retries
+        yt = build_youtube_service(api_key, timeout=25)
+        return self._enrich(yt, rows)
+
+    @staticmethod
+    def _needs_exact_cuts(f):
+        """True when a filter needs numbers the results page does not show
+        (channel stats, country, category, likes, length/format)."""
+        if (f.get("market") or f.get("category") or f.get("format")
+                or f.get("channel_max_age_days")):
+            return True
+        return any(f.get(k) is not None for k in
+                   ("subs_min", "subs_max", "mult_min", "outlier_min",
+                    "eng_min", "vel_min", "ch_videos_max", "dur_min_s",
+                    "dur_max_s"))
+
+    @staticmethod
+    def _precut_rows(rows, pc):
+        """The cuts a results page can answer, applied to raw scraped rows.
+        Lenient by 10 % on views: the newer page shape abbreviates ("1.2M"),
+        and the exact cut after the numbers are read is the one that counts.
+        A row whose views did not parse is kept for that exact cut."""
+        if not pc:
+            return list(rows)
+        vmin, vmax = pc.get("views_min"), pc.get("views_max")
+        out = []
+        for r in rows:
+            v = r.get("view_count") or 0
+            if v > 0:
+                if vmin is not None and v < vmin * 0.9:
+                    continue
+                if vmax is not None and v > vmax * 1.1:
+                    continue
+            out.append(r)
+        text = (pc.get("text") or "").strip()
+        if text and out:
+            out = apply_niche_filters(out, {"text": text})
+        return out
+
+    def _enrich_free(self, rows):
+        """Zero-quota numbers for scraped rows: views / length / age are on the
+        results page already; subscriber counts (YouTube's rounded figure) and
+        upload counts come from each channel's own page. Likes, comments and
+        category stay unknown; that is the price of free."""
+        base = [merge_niche_row(r) for r in rows]
+        ids = list(dict.fromkeys(r.get("channel_id") for r in base
+                                 if r.get("channel_id")))[:400]
+        self._progress(75, tr("Reading subscriber counts from channel pages "
+                              "(free) …"), _S.PHASE_CHANNELS,
+                       {"channels": 0, "of": len(ids)})
+        stats = scrape_channel_stats(ids, self._stop_check, self._progress,
+                                     time_budget_s=90)
+        for r in base:
+            st = stats.get(r.get("channel_id") or "")
+            if not st:
+                continue
+            if st.get("subs") is not None:
+                r["subscriber_count"] = int(st["subs"])
+            if st.get("videos"):
+                r["channel_video_count"] = int(st["videos"])
+            r["stats_source"] = "page"
+        return compute_niche_metrics(base)
 
     def _enrich(self, yt, base_rows):
         v_map = enrich_videos(yt, [r["video_id"] for r in base_rows],
@@ -2971,6 +3322,10 @@ class NicheVM(QObject):
             return
 
         self._pool = self._ensure_gold(rows)
+        self._locked = None
+        if (self._last_params or {}).get("mode") in ("keyword", "channel"):
+            self._pool = self._lock_to_search_filters(self._pool,
+                                                      self._last_params or {})
         self._pool_days = getattr(self, "_requested_days", None)
         cached_at = getattr(self, "_from_cache", "")
         if cached_at and getattr(self, "_cache_live", False):
@@ -2983,10 +3338,31 @@ class NicheVM(QObject):
         # Say out loud what the extra passes bought, when they ran. A search
         # that quietly went looking three times and then reported a plain match
         # count would hide both the quota it spent and why it took longer.
-        if self._widen_passes:
-            note = " " + tr("The search was widened {n} time(s) to reach these "
-                            "filters.").format(n=self._widen_passes)
-            self._set_status(self._status + note, self._status_kind)
+        note = self._dig_note()
+        if note:
+            d = getattr(self, "_dig", None) or {}
+            why = self._dig_why(d.get("stop") or "")
+            calls = int(d.get("calls") or 0)
+            short = ""
+            if why and int(d.get("matched") or 0) < int(d.get("target") or 0):
+                # the banner already shows the numbers: keep only the reason
+                short = why[:1].upper() + why[1:] + "."
+                if calls:
+                    short += " " + tr("({c} extra search calls)").format(c=calls)
+            elif calls:
+                short = tr("Dug {c} extra search calls deep to reach the target.").format(c=calls)
+            patch = {"target": int(d.get("target") or 0),
+                     "stop": d.get("stop") or "",
+                     "calls": calls}
+            if d.get("scanned"):
+                patch["scanned"] = max(int(d["scanned"]),
+                                       int((self._result_facts or {}).get("scanned") or 0))
+            facts = dict(self._result_facts or {})
+            if facts:
+                facts.update(patch)
+                if short:
+                    facts["notes"] = [{"kind": "tip", "text": short}] + list(facts.get("notes") or [])
+            self._set_status(self._status + "  " + note, self._status_kind, facts)
         # Results are permanent from here on: the pool is merged into its
         # keyword section in the Search Archive whether or not the cache entry
         # later expires. Same auto-archive the legacy page did.
@@ -3002,8 +3378,8 @@ class NicheVM(QObject):
                 msg += " " + tr("{g} of them are Gold.").format(g=gold)
             note = self._viral_market_note()
             if note:
-                self._set_status((self._status + "  " + note).strip(),
-                                 "warn" if not self._pool else self._status_kind)
+                self._append_status(note, "info",
+                                    "warn" if not self._pool else self._status_kind)
             self.toast.emit(msg, "success")
             return
         self._archive_store()
@@ -3015,6 +3391,56 @@ class NicheVM(QObject):
         announce("success", tr("Niche search complete"),
                  tr("{n} results found.").format(n=len(self._filtered)),
                  page=4, icon="nav_niche", source=tr("Niche Finder"))
+
+    def _lock_to_search_filters(self, rows, params):
+        """v1.0.3: a filtered search keeps ONLY what matches the filters it
+        was run with, at most the depth's number of them (best first, by the
+        chosen sort).
+
+        Before, the whole scanned pool stayed in memory and went to the Search
+        Archive: search "1M-10M views, 10K-500K subs", clear the filters, and
+        200 unrelated videos appeared (and sat in the archive). Now the pool,
+        the grid and the archive are exactly the matches. The full scan stays
+        in the 12-hour search cache, so searching the same keyword again with
+        other filters is still free. Unfiltered searches are untouched."""
+        sf = self._search_filters or {}
+        narrow = (self._has_narrow_filters_for(sf)
+                  or bool(str(sf.get("text") or "").strip()))
+        if not rows or not narrow:
+            return rows
+        kept = apply_niche_filters(rows, sf)
+        kept = sort_niche_rows(kept, NICHE_SORTS_UI[self._sort][1])
+        cap = params.get("target")
+        if cap:
+            kept = kept[:int(cap)]
+        self._locked = {"scanned": len(rows), "kept": len(kept),
+                        "filters": dict(sf)}
+        return kept
+
+    def _lock_note(self, filters):
+        """Status suffix for a locked pool, or ''."""
+        lk = self._locked or {}
+        if not lk:
+            return ""
+        note = tr("Kept only the videos that match your search filters "
+                  "({k} of {n} scanned).").format(k=lk.get("kept", 0),
+                                                  n=lk.get("scanned", 0))
+        if filters != lk.get("filters"):
+            note += " " + tr("You changed a filter: press Search to apply it to "
+                             "YouTube, not just to these results.")
+        return note
+
+    def _free_gap_note(self, filters):
+        """Web scrape cannot read some numbers; say so when a filter needs them."""
+        if not (self._last_params or {}).get("free_stats"):
+            return ""
+        if (filters.get("eng_min") is not None or filters.get("category")
+                or filters.get("channel_max_age_days")
+                or filters.get("outlier_min") is not None):
+            return tr("Web scrape can't read likes, category, channel age or the "
+                      "channel's average views. Switch the source to Smart for "
+                      "those filters.")
+        return ""
 
     # ── in-memory filter/sort (zero API) ────────────────────────────────
     @Slot()
@@ -3031,6 +3457,7 @@ class NicheVM(QObject):
             rows = [r for r in rows if self._lens_ok(r, lens, ctx)]
         self._sig_counts = self._signal_counts(pool, filters)
         self._preset_cnts = self._preset_counts(pool)
+        self._market_chips = self._compute_market_chips(pool, filters)
         sort_key = NICHE_SORTS_UI[self._sort][1]
         rows = sort_niche_rows(rows, sort_key)
         channels = self._channels_view
@@ -3056,10 +3483,25 @@ class NicheVM(QObject):
         self._render_page()
 
         if not pool:
+            lk = self._locked or {}
+            if lk and lk.get("scanned"):
+                msg = tr("No video matched your filters in the {n} scanned. "
+                         "Loosen a filter, add keywords (comma-separated), or "
+                         "pick a deeper row.").format(n=lk["scanned"])
+                gap = self._free_gap_note(filters)
+                if gap:
+                    msg += " " + gap
+                self._set_status(msg, "warn")
             return
         if not rows:
             msg = tr("No result matches these filters — widen the subscriber or "
                      "view range. ({total} were fetched.)").format(total=len(pool))
+            lock = self._lock_note(filters)
+            if lock:
+                msg += " " + lock
+            gap = self._free_gap_note(filters)
+            if gap:
+                msg += " " + gap
             aud = self._audience_note(pool, rows, filters)
             if aud:
                 msg += " " + aud
@@ -3067,39 +3509,179 @@ class NicheVM(QObject):
                 msg += " " + self._translate_note
             if self._quota_note:
                 msg += " " + self._quota_note
-            if self._widen_passes:
-                # Say that the search already went looking harder, or the user
-                # will reasonably assume the app only tried once.
-                msg += " " + tr("The search was already widened {n} time(s).").format(
-                    n=self._widen_passes)
+            hint = self._refilter_hint(filters, 0)
+            if hint:
+                msg += " " + hint
             self._set_status(msg, "warn")
         else:
-            msg = tr("✓ {shown} of {total} results match your filters.").format(
-                shown=len(rows), total=len(pool))
+            notes = []
+
+            def add(kind, text):
+                nonlocal msg
+                if text:
+                    msg += "  " + text
+                    notes.append({"kind": kind, "text": text})
+
+            lk = self._locked or {}
+            if self._locked:
+                msg = tr("✓ {shown} results match your filters.").format(
+                    shown=len(rows))
+                msg += "  " + self._lock_note(filters)
+            else:
+                msg = tr("✓ {shown} of {total} results match your filters.").format(
+                    shown=len(rows), total=len(pool))
+            if lk and filters != lk.get("filters"):
+                notes.append({"kind": "tip", "text": tr(
+                    "You changed a filter: press Search to apply it to "
+                    "YouTube, not just to these results.")})
+            add("warn", self._free_gap_note(filters))
             unknown_subs = sum(1 for r in pool
                                if r.get("subscriber_count") in (None, 0))
             if unknown_subs and unknown_subs == len(pool):
-                msg += "  " + tr("Subscriber data is unavailable — add an API key "
-                                 "in Settings to filter by subscribers.")
+                add("key", tr("Subscriber data is unavailable — add an API key "
+                              "in Settings to filter by subscribers."))
             if len(rows) > NICHE_MAX_POOL:
-                msg += "  " + tr("Showing the first {n} — narrow the filters to "
-                                 "reach the rest.").format(n=NICHE_MAX_POOL)
+                add("info", tr("Showing the first {n} — narrow the filters to "
+                               "reach the rest.").format(n=NICHE_MAX_POOL))
             pool_days = self._pool_days
             want_days = filters.get("days")
             if pool_days and want_days and want_days > pool_days:
-                msg += "  " + tr("This window is wider than the one you searched — "
-                                 "press Search again to fetch it.")
+                add("tip", tr("This window is wider than the one you searched — "
+                              "press Search again to fetch it."))
             # A short web-scrape run: say it is YouTube's ceiling, not a failure.
-            if self._scrape_note:
-                msg += "  " + self._scrape_note
-            if self._translate_note:
-                msg += "  " + self._translate_note
-            if self._quota_note:
-                msg += "  " + self._quota_note
-            aud = self._audience_note(pool, rows, filters)
-            if aud:
-                msg += "  " + aud
-            self._set_status(msg, "ok")
+            add("info", self._scrape_note)
+            add("translate", self._translate_note)
+            add("quota", self._quota_note)
+            add("audience", self._audience_note(pool, rows, filters))
+            add("tip", self._refilter_hint(filters, len(rows)))
+            facts = {
+                "shown": len(rows),
+                "total": len(pool),
+                "scanned": int(lk.get("scanned") or len(pool)),
+                "target": 0,
+                "locked": bool(lk),
+                "keyword": self._last_query or (self._query or "").strip(),
+                "stop": "",
+                "notes": notes,
+            }
+            self._set_status(msg, "ok", facts)
+
+    # ── Country chips: slice an "Any country" pool by market, zero quota ──
+    _CHIP_MAX = 8
+
+    def _compute_market_chips(self, pool, filters):
+        """[{code, label, count, active}] for the chip row, "All" first.
+
+        Only for a keyword search with Country = Any (a picked country already
+        cut the pool). Candidates come from each row's own evidence (the
+        channel's registered country, else the country whose main language
+        the title is in); every count is the real market_fit cut, so a chip
+        always shows exactly what clicking it shows."""
+        if (not pool or self._mode != 0 or self._viral_active
+                or self._market_code()):
+            return []
+        base_f = dict(filters, market="")
+        base = apply_niche_filters(pool, base_f)
+        if not base:
+            return []
+        lang_home = getattr(NicheVM, "_LANG_HOME", None)
+        if lang_home is None:
+            lang_home = {}
+            for _n, code, langs in _A.COUNTRIES:
+                if code and langs and langs[0] not in lang_home:
+                    lang_home[langs[0]] = code
+            NicheVM._LANG_HOME = lang_home
+        tally = {}
+        for r in base:
+            ev = _A.row_evidence(r)
+            cc = ev.get("country") or ""
+            if not cc and ev.get("title_conf", 0) >= 0.35:
+                cc = lang_home.get(ev.get("title") or "", "")
+            if cc:
+                tally[cc] = tally.get(cc, 0) + 1
+        top = sorted(tally, key=lambda c: -tally[c])[:self._CHIP_MAX]
+        if self._market_view and self._market_view not in top:
+            top.append(self._market_view)
+        chips = []
+        for code in top:
+            n = sum(1 for r in base if _A.market_fit(r, code))
+            if n or code == self._market_view:
+                chips.append({"code": code, "label": tr(_A.country_name(code) or code),
+                              "short": code, "count": n,
+                              "active": code == self._market_view})
+        if not chips:
+            return []
+        chips.sort(key=lambda c: -c["count"])
+        return [{"code": "", "label": tr("All"), "short": "", "count": len(base),
+                 "active": not self._market_view}] + chips
+
+    @Property("QVariantList", notify=resultsChanged)
+    def marketChips(self):
+        return getattr(self, "_market_chips", None) or []
+
+    @Slot(str)
+    def setMarketView(self, code):
+        code = (code or "").upper()
+        if code == self._market_view:
+            code = ""                         # second click = back to All
+        self._market_view = code
+        self.applyFilters()
+
+    @staticmethod
+    def _filter_sig(f):
+        # the quick text box is view-only: it never changes what to dig for
+        return {k: v for k, v in (f or {}).items() if k != "text"}
+
+    def _refilter_hint(self, filters, shown):
+        """The filters were changed AFTER the search and the pool now holds
+        fewer matches than the depth asked for: say that Search digs for them."""
+        if self._running or self._viral_active or self._mode != 0:
+            return ""
+        if self._market_view:
+            return ""                         # a chip is a view, not a new ask
+        if not self._search_filters or not self._has_narrow_filters_for(filters):
+            return ""
+        if self._filter_sig(filters) == self._filter_sig(self._search_filters):
+            return ""
+        target = self._depth_target() or 900
+        if shown >= target:
+            return ""
+        return tr("Filters changed since the search: press Search to dig for "
+                  "{t} videos that match them.").format(t=target)
+
+    def _dig_why(self, stop):
+        """Why the match-dig stopped short, as a sentence fragment ('' = n/a)."""
+        return {
+            "budget": tr("the dig budget for this depth ran out. Pick a deeper "
+                         "row, or switch the source to Web scrape (no search quota)"),
+            "quota": tr("today's search quota ran out"),
+            "hopeless": tr("these filters almost never match this keyword. "
+                           "Loosen one, or try another keyword"),
+            "end": tr("YouTube has no more results for this keyword and window"),
+            "scrape": tr("that is all YouTube's results page gives for this "
+                         "keyword. Add more keywords, separated by commas, to "
+                         "dig further"),
+            "cache": tr("this came from the cache. Tick Ignore cache to dig deeper"),
+        }.get(stop or "", "")
+
+    def _dig_note(self):
+        """One sentence on what the match-dig did, after a filtered search."""
+        d = getattr(self, "_dig", None) or {}
+        if not d or not d.get("target"):
+            return ""
+        m, t, n = int(d.get("matched") or 0), int(d["target"]), int(d.get("scanned") or 0)
+        calls = int(d.get("calls") or 0)
+        cost = (" " + tr("({c} extra search calls)").format(c=calls)) if calls else ""
+        if m >= t:
+            if n <= m:
+                return ""
+            return tr("Scanned {n} videos to find {t} matches.").format(n=n, t=t) + cost
+        why = self._dig_why(d.get("stop") or "")
+        if not why:
+            return ""
+        return tr("Found {m} of {t} matches in {n} videos: {why}.").format(
+            m=m, t=t, n=n, why=why) + cost
+
 
     # Which filter keys each tuner track owns, and the row test one stop
     # applies — the same comparisons apply_niche_filters() makes.

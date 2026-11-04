@@ -30,6 +30,41 @@ ComboBox {
     // Tallest the open list may grow before it scrolls. Long catalogues
     // (59 languages, 77 countries) ask for more than the 280 default.
     property int popupMaxHeight: 280
+    // Optional second line per row (index-aligned with `model`), e.g. what a
+    // data source costs. Rows with a hint grow to fit it.
+    property var hints: []
+    // Minimum popup width. The list also grows on its own to fit the widest
+    // row, so a long option is never clipped by a narrow field.
+    property int popupWidth: 0
+    property real _fitWidth: 0
+    // Where the field sat when the list opened (window coords), see _moveGuard.
+    property point _openPos: Qt.point(0, 0)
+    function _measure() {
+        var w = 0
+        for (var i = 0; i < root.count; ++i) {
+            rowMetrics.text = root.textAt(i)
+            w = Math.max(w, rowMetrics.advanceWidth)
+        }
+        var lead = (root.icons && root.icons.length) ? 24 : 0
+        root._fitWidth = Math.ceil(w + lead + Tokens.space3 + Tokens.space4 + Tokens.space1 * 2 + 8)
+    }
+    TextMetrics { id: rowMetrics; font.family: Fonts.body; font.pixelSize: Tokens.fontBody }
+
+    // A Popup lives in the window overlay and does NOT follow its field when
+    // an ancestor scrolls, so an open list used to stay pinned where it was
+    // (over the title bar) while the page moved under it. Close it the moment
+    // the field moves, the way native drop-downs do.
+    Timer {
+        id: _moveGuard
+        interval: 60
+        repeat: true
+        running: root.popup.visible
+        onTriggered: {
+            var p = root.mapToItem(null, 0, 0)
+            if (Math.abs(p.x - root._openPos.x) > 1 || Math.abs(p.y - root._openPos.y) > 1)
+                root.popup.close()
+        }
+    }
     readonly property string _currentIcon:
         (icons && currentIndex >= 0 && currentIndex < icons.length)
             ? icons[currentIndex] : ""
@@ -43,24 +78,46 @@ ComboBox {
 
     delegate: ItemDelegate {
         id: rowDelegate
-        width: root.width
-        height: Tokens.fieldHeight
+        readonly property string hint: (root.hints && index < root.hints.length)
+                                       ? (root.hints[index] || "") : ""
+        width: ListView.view ? ListView.view.width : root.width
+        height: hint !== "" ? Math.max(Tokens.fieldHeight, rowCol.implicitHeight + Tokens.space2 * 2)
+                            : Tokens.fieldHeight
         highlighted: root.highlightedIndex === index
         HoverHandler { cursorShape: Qt.PointingHandCursor }
         contentItem: Row {
             spacing: Tokens.space2
             leftPadding: Tokens.space3
             IconGlyph {
+                id: rowGlyph
                 visible: root.icons && index < root.icons.length && root.icons[index] !== ""
                 name: (root.icons && index < root.icons.length) ? root.icons[index] : ""
                 size: 16
                 glyphColor: highlighted ? Theme.primary : Theme.on_surface_var
                 anchors.verticalCenter: parent.verticalCenter
             }
-            AppText {
-                text: modelData
-                color: highlighted ? Theme.primary : Theme.on_surface
+            Column {
+                id: rowCol
                 anchors.verticalCenter: parent.verticalCenter
+                width: rowDelegate.width - Tokens.space3 - Tokens.space3
+                       - (rowGlyph.visible ? rowGlyph.width + Tokens.space2 : 0)
+                spacing: 2
+                AppText {
+                    width: parent.width
+                    text: modelData
+                    elide: Text.ElideRight
+                    color: highlighted ? Theme.primary : Theme.on_surface
+                    weight: rowDelegate.hint !== "" ? Tokens.weightDemiBold : Tokens.weightRegular
+                }
+                AppText {
+                    visible: rowDelegate.hint !== ""
+                    width: parent.width
+                    text: rowDelegate.hint
+                    wrapMode: Text.WordWrap
+                    color: Theme.on_surface_var
+                    font.pixelSize: Tokens.fontCaption
+                    lineHeight: 1.15
+                }
             }
         }
         // Inset, rounded highlight so the selected row reads as a pill inside
@@ -245,9 +302,18 @@ ComboBox {
 
     popup: Popup {
         y: root.height + 4
-        width: root.width
+        // never narrower than the field; wide enough for the longest row
+        width: Math.max(root.width, root.popupWidth,
+                        root.hints && root.hints.length ? 0 : root._fitWidth)
+        // keep the sheet inside the window (it used to run off the edge or
+        // up over the title bar)
+        margins: Tokens.space2
         implicitHeight: Math.min(contentItem.implicitHeight, root.popupMaxHeight)
         padding: Tokens.space1
+        onAboutToShow: {
+            root._measure()
+            root._openPos = root.mapToItem(null, 0, 0)
+        }
         onClosed: root._closedAt = Date.now()
         // Unfold downward from the field's top edge.
         transformOrigin: Item.Top

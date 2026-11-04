@@ -151,19 +151,44 @@ AI_IDEAS_SORTS_UI = [
 # window) is 200 units and "Deepest" (18 × queries × windows) is thousands.
 # That is the trade the label is warning about, and the reason the run-cost
 # line under the form exists.
+#
+# v1.0.3: the number is now how many RESULTS you get, not how many videos are
+# fetched. With a filter on (subs / views / country / length ...) the search
+# keeps digging until that many videos MATCH the filters, inside the dig budget
+# below — so "Normal · 100" with "≤ 10K subs" means 100 small-channel videos,
+# not 100 videos of which 7 survive. With no filter both numbers are the same.
 NICHE_DEPTHS = [
-    ("Fast · 50 videos", 1),
-    ("Normal · 100 videos", 2),
-    ("Deep · 200 videos", 4),
-    ("Very deep · 300 videos", 6),
-    ("Maximum · 700 videos", 14),
+    ("Quick · 50 results", 1),
+    ("Normal · 100 results", 2),
+    ("Deep · 200 results", 4),
+    ("Very deep · 300 results", 6),
+    ("Maximum · 700 results", 14),
     # The deepest search the app offers. It exists for the case the other five
     # cannot serve: a broad or crowded keyword where the good small channels sit
     # far down the result list, past the point where the API's own 500-results-
     # per-query ceiling stops helping — the extra depth comes from the scrape's
     # continuation walk and from widening across time windows.
-    ("Deepest · 900+ videos", 18),
+    ("Everything · 900+ results", 18),
 ]
+
+# How many EXTRA search.list calls (100 units each) a filtered API run may
+# spend digging for matches, per depth row. Index-aligned with NICHE_DEPTHS.
+# The dig also stops early when the target is reached, when YouTube has no
+# more pages, or when the filters are hopeless for this keyword (under 1 match
+# per 100 videos scanned), so this is a ceiling, not a price.
+NICHE_DEPTH_DIG_CALLS = [3, 6, 10, 14, 24, 30]
+# The web-scrape source pays no search quota at all (only ~2 units per 50
+# videos to read their numbers), so a filtered scrape simply reads this many
+# times the target, up to NICHE_MAX_POOL.
+NICHE_SCRAPE_DIG_FACTOR = 5
+
+# Length filter, pushed to YouTube itself so a "20–60 min" search stops paying
+# for Shorts it will throw away. Index-aligned with NICHE_DURATIONS.
+#   search.list videoDuration: short < 4 min · medium 4–20 · long > 20
+#   youtube.com sp duration:   1 = under 4 · 3 = 4–20 · 2 = over 20
+# A bucket that straddles two of YouTube's (3–8 min) is not sent.
+NICHE_DURATION_API = [None, "short", "short", None, "medium", "long", "long"]
+NICHE_DURATION_SP = [0, 1, 1, 0, 3, 2, 2]
 
 # How many videos each depth row collects — a HARD target, not a hint.
 # Index-aligned with NICHE_DEPTHS. Picking "300" now means the search stops the
@@ -191,7 +216,12 @@ from app.core.niche.audience import LANGUAGES as _AUD_LANGUAGES  # noqa: E402
 from app.core.niche.audience import PRECISIONS as _AUD_PRECISIONS  # noqa: E402
 
 NICHE_LANGS = [(name, api) for name, _code, api in _AUD_LANGUAGES]
-NICHE_REGIONS = [(name, code) for name, code, _langs in _AUD_COUNTRIES]
+from app.core.niche.audience import MARKET_PACKS as _AUD_PACKS  # noqa: E402
+# "Any country", then the multi-country packs, then single countries. The
+# pick is remembered as a code, so inserting the packs shifts nothing.
+NICHE_REGIONS = ([(name, code) for name, code, _langs in _AUD_COUNTRIES[:1]]
+                 + list(_AUD_PACKS)
+                 + [(name, code) for name, code, _langs in _AUD_COUNTRIES[1:]])
 # How hard Language/Country filter: (UI name, mode token). Index 1 = default.
 NICHE_AUDIENCE_PRECISION = list(_AUD_PRECISIONS)
 

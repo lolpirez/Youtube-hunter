@@ -1155,14 +1155,27 @@ Item {
                                             color: Theme.border
                                         }
                                         C.Dropdown {
+                                            id: sourcePick
                                             visible: Niche.mode === 0
-                                            Layout.preferredWidth: Math.max(160, Math.min(260, cmdBar.width * 0.2))
+                                            // short names now ("Smart"), so the
+                                            // field no longer has to be wide
+                                            Layout.preferredWidth: Math.max(150, Math.min(190, cmdBar.width * 0.16))
                                             Layout.alignment: Qt.AlignVCenter
                                             transparentBg: true
                                             borderColor: "transparent"
                                             model: Niche.sourceOptions
+                                            // what each source costs, as a
+                                            // second line in the list
+                                            hints: Niche.sourceHints
+                                            popupWidth: 340
                                             currentIndex: Niche.source
                                             onActivated: Niche.source = currentIndex
+                                            HoverHandler { id: sourceHover }
+                                            C.AppTooltip {
+                                                visible: sourceHover.hovered && !sourcePick.popup.visible
+                                                delay: 420
+                                                text: Niche.sourceHints[Niche.source] || ""
+                                            }
                                         }
 
                                         C.PrimaryButton {
@@ -1298,6 +1311,7 @@ Item {
                                 visible: !Niche.isRunning && (Niche.statusText !== "" || Niche.archiveNote !== "")
                                 kind: Niche.statusText !== "" ? Niche.statusKind : "ok"
                                 text: Niche.statusText !== "" ? Niche.statusText : Niche.archiveNote
+                                facts: Niche.statusText !== "" ? Niche.resultFacts : ({})
                                 note: Niche.statusText !== "" ? Niche.archiveNote : ""
                                 noteIcon: "archive"
                                 noteKind: Niche.archiveNote.indexOf("(") === 0 ? "warn" : "ok"
@@ -1327,7 +1341,18 @@ Item {
                                             font.pixelSize: Tokens.fontCaption
                                             color: Theme.on_surface_var
                                             anchors.verticalCenter: parent.verticalCenter
+                                            // The hunt-report header already carries the
+                                            // keyword + stop chips; a long cost line used
+                                            // to run past the card's right edge.
+                                            width: Math.min(implicitWidth, 240)
+                                            elide: Text.ElideRight
                                         }
+                                    }
+                                    HoverHandler { id: quotaHover }
+                                    C.AppTooltip {
+                                        visible: quotaHover.hovered
+                                        delay: 300
+                                        text: Niche.quotaText
                                     }
                                 }
                             }
@@ -2089,12 +2114,14 @@ Item {
                                             ColumnLayout {
                                                 spacing: Tokens.space2; Layout.fillWidth: true
                                                 Layout.columnSpan: page._narrow ? 1 : 2
-                                                FieldCap { text: I18n.tr("Search depth") }
+                                                FieldCap { text: I18n.tr("Results to find") }
                                                 C.Dropdown { Layout.fillWidth: true; borderColor: U.mix(Theme.border, Theme.outline, 0.45); model: Niche.depthOptions; currentIndex: Niche.depthIndex; onActivated: Niche.depthIndex = currentIndex }
-                                                // "Deep scan" is no longer a separate toggle: Deep and up slice the window
+                                                // v1.0.3: the number is MATCHES, not fetched videos. The line
+                                                // says what this row will do with the filters set right now
+                                                // (Deep and up still slice the time window, see NicheVM._deep).
                                                 C.AppText {
                                                     Layout.fillWidth: true
-                                                    text: I18n.tr("Deep and above also slice the time window, so small channels surface.")
+                                                    text: Niche.depthHint
                                                     font.pixelSize: Tokens.fontCaption
                                                     color: Theme.outline
                                                     wrapMode: Text.Wrap
@@ -2467,6 +2494,72 @@ Item {
                                 visible: Niche.hasResults
                                 implicitHeight: 40
                                 onClicked: Niche.analyzeResults()
+                            }
+                        }
+
+                        // ── Country chips (v1.0.3) ──
+                        // After an "Any country" search: slice the pool by market
+                        // without another search. Counts are the real Country cut,
+                        // so a chip shows exactly what clicking it shows. Zero quota.
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: Tokens.space2
+                            visible: (Niche.marketChips || []).length > 1
+                            C.AppText {
+                                text: I18n.tr("Country")
+                                font.pixelSize: Tokens.fontCaption
+                                weight: Tokens.weightDemiBold
+                                color: Theme.on_surface_var
+                                height: 30
+                                verticalAlignment: Text.AlignVCenter
+                                rightPadding: Tokens.space1
+                            }
+                            Repeater {
+                                model: Niche.marketChips
+                                AbstractButton {
+                                    id: mChip
+                                    readonly property bool on: modelData.active
+                                    height: 30
+                                    width: mChipRow.implicitWidth + Tokens.space3 * 2
+                                    onClicked: Niche.setMarketView(modelData.code)
+                                    HoverHandler { id: mChipHover; cursorShape: Qt.PointingHandCursor }
+                                    C.AppTooltip {
+                                        visible: mChipHover.hovered && modelData.code !== ""
+                                        delay: 420
+                                        text: I18n.tr("Show only content for {c}. Instant, no quota.")
+                                              .replace("{c}", modelData.label)
+                                    }
+                                    background: Rectangle {
+                                        radius: Tokens.radiusPill
+                                        color: mChip.on ? U.withAlpha(Theme.primary, Theme.isDark ? 0.22 : 0.14)
+                                             : mChipHover.hovered ? U.withAlpha(Theme.primary, 0.07)
+                                             : "transparent"
+                                        border.width: 1
+                                        border.color: mChip.on ? U.withAlpha(Theme.primary, 0.55) : Theme.border
+                                        Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+                                    }
+                                    contentItem: Item {
+                                        Row {
+                                            id: mChipRow
+                                            anchors.centerIn: parent
+                                            spacing: Tokens.space2
+                                            C.AppText {
+                                                text: modelData.code !== "" ? modelData.label : I18n.tr("All")
+                                                font.pixelSize: Tokens.fontCaption
+                                                weight: mChip.on ? Tokens.weightBold : Tokens.weightMedium
+                                                color: mChip.on ? Theme.primary : Theme.on_surface
+                                                anchors.verticalCenter: parent.verticalCenter
+                                            }
+                                            C.AppText {
+                                                text: modelData.count
+                                                font.pixelSize: Tokens.fontCaption
+                                                font.features: ({ "tnum": 1 })
+                                                color: mChip.on ? Theme.primary : Theme.outline
+                                                anchors.verticalCenter: parent.verticalCenter
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
 

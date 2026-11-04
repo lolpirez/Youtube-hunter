@@ -3,7 +3,9 @@
 import json
 import re
 import statistics
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -108,7 +110,7 @@ def _lang_for(lang, query):
 def niche_search_api(yt, queries, order, windows, pages, region=None,
                      lang=None, video_duration=None, stop_check=None,
                      progress=None, target=None, tokens_out=None,
-                     quota_note=None):
+                     quota_note=None, category_id=None):
     """Collect candidate video IDs via search.list. Each page costs 1 call
     from the daily search bucket, so the caller decides `pages`.
 
@@ -166,6 +168,9 @@ def niche_search_api(yt, queries, order, windows, pages, region=None,
                 kwargs["relevanceLanguage"] = lq
             if video_duration:
                 kwargs["videoDuration"] = video_duration
+            if category_id:
+                # server-side Category (needs type=video, which is set)
+                kwargs["videoCategoryId"] = category_id
             if token:
                 kwargs["pageToken"] = token
             try:
@@ -207,7 +212,8 @@ def niche_search_api(yt, queries, order, windows, pages, region=None,
 
 
 def niche_search_api_more(yt, tokens, order, region=None, lang=None,
-                          video_duration=None, stop_check=None, limit=None):
+                          video_duration=None, stop_check=None, limit=None,
+                          category_id=None):
     """Continue unfinished (query × window) slices from their nextPageToken.
 
     `tokens` maps {(query, after, before): pageToken} and is updated in place;
@@ -236,6 +242,8 @@ def niche_search_api_more(yt, tokens, order, region=None, lang=None,
             kwargs["relevanceLanguage"] = lq
         if video_duration:
             kwargs["videoDuration"] = video_duration
+        if category_id:
+            kwargs["videoCategoryId"] = category_id
         resp = execute_with_retry(yt.search().list(**kwargs), stop_check)
         calls += 1
         for it in resp.get("items", []):
@@ -244,10 +252,11 @@ def niche_search_api_more(yt, tokens, order, region=None, lang=None,
                 ids.append(vid)
         nxt = resp.get("nextPageToken")
         slice_key = (q, after, before)
+        # re-insert at the END: a pass that buys fewer pages than there are
+        # slices then rotates through every window instead of draining one
+        tokens.pop(slice_key, None)
         if nxt:
             tokens[slice_key] = nxt
-        else:
-            tokens.pop(slice_key, None)
     return ids, calls
 
 
@@ -414,6 +423,11 @@ def parse_lockup_view_model(lk):
         if views and published:
             break
 
+    # Length: the lockup shape keeps it as the thumbnail's overlay badge
+    # ("12:34"). Read it so the free path can tell Shorts / long-form apart and
+    # apply the length filter without a videos.list call.
+    duration_s = _lockup_duration(lk.get("contentImage") or lk)
+
     # Thumbnail: the image sits under one of two wrappers depending on whether
     # the lockup is a grid cell or a list row.
     thumb_url = ""
@@ -434,10 +448,38 @@ def parse_lockup_view_model(lk):
         "channel_id": _first_browse_channel_id(lk),
         "channel_title": channel_title,
         "view_count": views,
-        "duration_s": 0,
+        "duration_s": duration_s,
         "published_at": published,
         "thumbnail_url": thumb_url or f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
     }
+
+
+_CLOCK_RE = re.compile(r"^\s*(\d{1,2}:)?\d{1,2}:\d{2}\s*$")
+
+
+def _lockup_duration(node, depth=0):
+    """Seconds from the first "h:mm:ss" / "m:ss" string in a lockup's
+    thumbnail overlays, or 0. Depth-bounded: the overlay sits a few levels
+    under contentImage, never deep in the tree."""
+    if depth > 9:
+        return 0
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if isinstance(v, str) and k in ("text", "content") and _CLOCK_RE.match(v):
+                total = 0
+                for part in v.strip().split(":"):
+                    total = total * 60 + int(part)
+                return total
+            if isinstance(v, (dict, list)):
+                got = _lockup_duration(v, depth + 1)
+                if got:
+                    return got
+    elif isinstance(node, list):
+        for v in node:
+            got = _lockup_duration(v, depth + 1)
+            if got:
+                return got
+    return 0
 
 
 def parse_video_renderer(vr):
@@ -558,7 +600,8 @@ def _collect_scrape_rows(data, rows, seen):
 
 
 def _scrape_one_pass(query, days, sort_by, duration, budget, stop_check,
-                     rows, seen, page_budget, region=""):
+                     rows, seen, page_budget, region="", page_tick=None,
+                     deadline=None, stop_when=None):
     """Walk ONE (query, sort) combination as deep as it goes, or until `budget`
     more rows have been collected. Appends into the shared `rows` / `seen`.
 
@@ -585,6 +628,8 @@ def _scrape_one_pass(query, days, sort_by, duration, budget, stop_check,
     before = len(rows)
     _collect_scrape_rows(data, rows, seen)
     pages = 1
+    if page_tick:
+        page_tick()
 
     api_key, client_version = _extract_innertube(html)
     token = _find_continuation_token(data)
@@ -598,6 +643,14 @@ def _scrape_one_pass(query, days, sort_by, duration, budget, stop_check,
            and guard < max_pages and pages < page_budget):
         if stop_check and stop_check():
             raise ScrapeCancelled()
+        # v1.0.3: a wall-clock budget and an "enough already" test, so a
+        # filtered run stops the moment it has what it needs instead of
+        # walking every page it is allowed to (that walk, with no visible
+        # progress between passes, read as "stuck at 33 videos").
+        if deadline is not None and time.monotonic() > deadline:
+            break
+        if stop_when is not None and stop_when(rows):
+            break
         guard += 1
         try:
             payload = _innertube_continue(api_key, client_version, token, gl=gl)
@@ -605,6 +658,8 @@ def _scrape_one_pass(query, days, sort_by, duration, budget, stop_check,
             break
         added = _collect_scrape_rows(payload, rows, seen)
         pages += 1
+        if page_tick:
+            page_tick()
         token = _find_continuation_token(payload)
         if not added:
             break
@@ -616,7 +671,7 @@ def _scrape_one_pass(query, days, sort_by, duration, budget, stop_check,
 def niche_scrape_search(query, days=None, sort_by=3, duration=0, max_items=200,
                         stop_check=None, progress=None,
                         queries=None, sweep_sorts=False, page_budget=160,
-                        region=""):
+                        region="", time_budget_s=None, stop_when=None):
     """Read youtube.com/results directly. Costs ZERO search quota.
 
     Fragile by nature (it depends on YouTube's page shape), so every stage
@@ -638,6 +693,12 @@ def niche_scrape_search(query, days=None, sort_by=3, duration=0, max_items=200,
 
     `page_budget` caps the TOTAL continuation pages across every pass, so a
     sweep on a huge keyword cannot turn into hundreds of requests.
+
+    v1.0.3: `time_budget_s` caps the whole walk in wall-clock seconds and
+    `stop_when(rows) -> bool` ends it early once the caller has enough (the
+    filtered dig passes "enough rows survive the cheap cuts"). Progress is
+    reported after EVERY page, not only after a whole pass, so the live
+    counter never sits still while pages are still coming in.
     """
     # Query list: the explicit variants first, then the bare query. Order
     # matters — the user's own phrasing should fill the pool before any variant.
@@ -664,9 +725,25 @@ def niche_scrape_search(query, days=None, sort_by=3, duration=0, max_items=200,
     pages_left = max(1, int(page_budget))
     total_passes = len(qs) * len(sorts)
     done = 0
+    deadline = (time.monotonic() + float(time_budget_s)) if time_budget_s else None
+    walked = [0]
+
+    def page_tick():
+        walked[0] += 1
+        if progress:
+            frac = min(1.0, walked[0] / float(max(1, page_budget)))
+            progress(min(44, 12 + int(frac * 32)),
+                     tr("Reading YouTube's results · page {p} · {n} videos so far …")
+                     .format(p=walked[0], n=len(rows)),
+                     PHASE_DISCOVER, {"found": len(rows)})
+
     for q in qs:
         for s in sorts:
             if len(rows) >= max_items or pages_left <= 0:
+                break
+            if rows and deadline is not None and time.monotonic() > deadline:
+                break
+            if rows and stop_when is not None and stop_when(rows):
                 break
             if stop_check and stop_check():
                 raise ScrapeCancelled()
@@ -674,7 +751,8 @@ def niche_scrape_search(query, days=None, sort_by=3, duration=0, max_items=200,
             try:
                 _added, used = _scrape_one_pass(
                     q, days, s, duration, max_items - len(rows),
-                    stop_check, rows, seen, pages_left, region=region)
+                    stop_check, rows, seen, pages_left, region=region,
+                    page_tick=page_tick, deadline=deadline, stop_when=stop_when)
             except RuntimeError:
                 # Nothing at all yet means the very first fetch failed — that is
                 # worth reporting. Once we have rows, a later pass failing is
@@ -690,6 +768,88 @@ def niche_scrape_search(query, days=None, sort_by=3, duration=0, max_items=200,
     return rows[:max_items]
 
 
+
+
+# ═════════════════════════════════════════════════════════════════════════
+#  FREE CHANNEL STATS — the Web-scrape source's zero-quota subscriber read
+# ═════════════════════════════════════════════════════════════════════════
+# The search page carries views, length and age for every video, but never the
+# channel's subscriber count. The channel's own page does ("1.23M subscribers",
+# rounded exactly like YouTube shows it), so the free source reads that page
+# once per channel instead of calling channels.list. No API key, no quota.
+_SUBS_RE = re.compile(
+    r'"(?:content|simpleText)"\s*:\s*"([\d][\d.,]*\s*[KMB]?)\s+subscribers?"', re.I)
+_VIDS_RE = re.compile(
+    r'"(?:content|simpleText)"\s*:\s*"([\d][\d.,]*\s*[KMB]?)\s+videos?"', re.I)
+_CH_STATS_TTL_S = 6 * 3600
+_ch_stats_cache = {}
+_ch_stats_lock = threading.Lock()
+
+
+def _channel_page_stats(channel_id):
+    """{"subs": int|None, "videos": int|None} from one channel page, or None
+    when the page could not be fetched (network) — callers keep the row with
+    an unknown count rather than guessing."""
+    now = time.monotonic()
+    with _ch_stats_lock:
+        hit = _ch_stats_cache.get(channel_id)
+        if hit and now - hit[0] < _CH_STATS_TTL_S:
+            return hit[1]
+    html = fetch_youtube_html("https://www.youtube.com/channel/" + channel_id,
+                              timeout=12)
+    if not html:
+        return None
+    m = _SUBS_RE.search(html)
+    mv = _VIDS_RE.search(html)
+    out = {"subs": _abbrev_to_int(m.group(1)) if m else None,
+           "videos": _abbrev_to_int(mv.group(1)) if mv else None}
+    with _ch_stats_lock:
+        _ch_stats_cache[channel_id] = (now, out)
+    return out
+
+
+def scrape_channel_stats(channel_ids, stop_check=None, progress=None,
+                         max_workers=6, time_budget_s=90):
+    """{channel_id: {"subs", "videos"}} for every channel page that could be
+    read within `time_budget_s`. Zero API quota. A few pages in parallel (the
+    same politeness as a browser opening tabs), cached for six hours so a
+    re-search of the same niche reads nothing twice."""
+    ids = list(dict.fromkeys(c for c in channel_ids if c))
+    out = {}
+    if not ids:
+        return out
+    total = len(ids)
+    deadline = time.monotonic() + float(time_budget_s or 90)
+    pool = ThreadPoolExecutor(max_workers=max(1, int(max_workers)),
+                              thread_name_prefix="yh-chpage")
+    try:
+        futs = {pool.submit(_channel_page_stats, cid): cid for cid in ids}
+        done = 0
+        try:
+            for fut in as_completed(futs, timeout=max(1.0, deadline - time.monotonic())):
+                if stop_check and stop_check():
+                    raise ScrapeCancelled()
+                done += 1
+                try:
+                    got = fut.result()
+                except Exception:              # noqa: BLE001 — one page, not the run
+                    got = None
+                if got:
+                    out[futs[fut]] = got
+                if progress and (done % 5 == 0 or done == total):
+                    progress(75 + int(done / float(total) * 20),
+                             tr("Reading subscriber counts from channel pages "
+                                "(free) …"), PHASE_CHANNELS,
+                             {"channels": done, "of": total})
+                if time.monotonic() > deadline:
+                    break
+        except Exception as exc:               # noqa: BLE001
+            if isinstance(exc, ScrapeCancelled):
+                raise
+            # as_completed timed out: keep what arrived in time
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    return out
 
 
 # ═════════════════════════════════════════════════════════════════════════

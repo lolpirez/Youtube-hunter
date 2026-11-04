@@ -49,7 +49,7 @@ import re
 
 # Bumped whenever the detector changes, so memoised guesses on cached/archived
 # rows are recomputed instead of trusted.
-_DETECT_VERSION = 4
+_DETECT_VERSION = 5
 _MEMO_KEY = "_aud"
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -201,6 +201,46 @@ COUNTRIES = [
     ("Myanmar", "MM", ("my",)),
 ]
 
+# v1.0.3 market packs: one search for several countries that share a
+# language. Code = member codes joined with "+". A video counts when it is
+# content for ANY member (market_fit), the keyword is translated once into the
+# shared language, and search.list gets no regionCode (it would pin the search
+# to one member); the web scrape ranks for the first member.
+MARKET_PACKS = [
+    ("English markets · US, UK, CA, AU, IE, NZ", "US+GB+CA+AU+IE+NZ"),
+    ("Spanish · Latin America", "MX+AR+CO+CL+PE+VE"),
+    ("Spanish · Spain + Latin America", "ES+MX+AR+CO+CL+PE+VE"),
+    ("Portuguese · Brazil + Portugal", "BR+PT"),
+    ("Arabic · Middle East & North Africa", "SA+EG+IQ+JO+KW+MA+DZ"),
+    ("German-speaking · DE, AT, CH", "DE+AT+CH"),
+    ("Persian · Iran + Afghanistan", "IR+AF"),
+]
+_NAME_OF_PACK = {code: name for name, code in MARKET_PACKS}
+
+
+def is_pack(code):
+    return "+" in (code or "")
+
+
+def pack_members(code):
+    """['US', 'GB', ...] for a pack, [code] for one country, [] for none."""
+    code = (code or "").strip().upper()
+    if not code:
+        return []
+    return [c for c in code.split("+") if c]
+
+
+def api_region(code):
+    """What search.list's regionCode should get: '' for a pack."""
+    return "" if is_pack(code) else (code or "")
+
+
+def gl_region(code):
+    """The one country a youtube.com scrape ranks for (first pack member)."""
+    m = pack_members(code)
+    return m[0] if m else ""
+
+
 PRECISIONS = [
     ("Broad", "broad"),
     ("Smart", "smart"),
@@ -225,11 +265,20 @@ def language_name(code):
 
 
 def country_name(code):
-    return _NAME_OF_COUNTRY.get((code or "").upper(), "")
+    code = (code or "").upper()
+    return _NAME_OF_PACK.get(code) or _NAME_OF_COUNTRY.get(code, "")
 
 
 def country_languages(code):
-    return tuple(next((ls for _n, c, ls in COUNTRIES if c == (code or "").upper()), ()))
+    code = (code or "").upper()
+    if is_pack(code):
+        out = []
+        for m in pack_members(code):
+            for lang in country_languages(m):
+                if lang not in out:
+                    out.append(lang)
+        return tuple(out)
+    return tuple(next((ls for _n, c, ls in COUNTRIES if c == code), ()))
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -457,6 +506,32 @@ _LATIN_EXTRA = {
     "id": "aku kamu dia kami kita mereka akan sudah belum lagi hari jam tahun "
           "pertama kali bagian episode".split(),
 }
+# v5: the words short titles are actually made of. "hot girl", "Girl vs Boy",
+# "Mooie meisjes in Antwerpen" scored nothing at all with the lists above, so
+# a Belgium search could not tell an English title from a Dutch one and let
+# them through. Only words that do NOT double as a word in a neighbouring
+# language are listed (no "man", "help", "nacht", "klein", "style", ...).
+_LATIN_EXTRA_V5 = {
+    "en": "girl girls boy boys hot love baby cute beautiful pretty sexy woman "
+          "women guy guys friend friends kid kids song dance prank food cooking "
+          "recipe makeup hair fashion beauty workout story roast roasts savage "
+          "comebacks goth much think thing things time watch trying really "
+          "just like know want need going gonna wanna bedroom tension doctor "
+          "feel look looks very about there these those after before".split(),
+    "nl": "mooie mooi meisje meisjes jongen jongens vrouw vrouwen mannen leuk "
+          "leuke grappig zomer liefde eten koken recept waarom waar goed slecht "
+          "groot nieuw oud morgen gisteren samen thuis huis belgië belgische "
+          "vlaanderen vlaams vlaamse nederland nederlandse antwerpen gent "
+          "brugge kijk kijken eindelijk echt heel veel".split(),
+    "fr": "vidéo vidéos fille filles garçon garçons femme femmes homme hommes "
+          "belle beau jolie amour nuit cuisine recette drôle maquillage cheveux "
+          "belgique belge bruxelles liège français française pourquoi comment "
+          "quand chez moi toi vraiment beaucoup enfin".split(),
+    "de": "mädchen frau frauen liebe schön schöne schönes küche rezept "
+          "wirklich endlich viel belgien ostbelgien".split(),
+}
+for _lang, _words in _LATIN_EXTRA_V5.items():
+    _LATIN_EXTRA[_lang] = list(_LATIN_EXTRA.get(_lang, [])) + _words
 for _lang, _words in _LATIN_EXTRA.items():
     _common, _strong = _LATIN[_lang]
     _LATIN[_lang] = (list(dict.fromkeys(list(_common) + _words)), _strong)
@@ -483,11 +558,12 @@ _SUFFIX_VOTES = (
 
 # Letters only some Latin-script languages use. One sighting is a strong vote.
 _LATIN_CHARS = {
-    "es": "ñ¿¡", "pt": "ãõç", "fr": "çœèêëàâîïûù", "de": "ßäöü",
+    "es": "ñ¿¡", "pt": "ãõç", "fr": "çœéèêëàâîïûù", "de": "ßäöü",
     "tr": "ışğİ", "pl": "ąęłńśźż", "ro": "ășțâî", "vi": "đơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ",
     "cs": "ěščřžůý", "sk": "ľščťžýäô", "hu": "őű", "sv": "åäö",
     "da": "æøå", "no": "æøå", "fi": "äö", "az": "əğış", "hr": "čćđšž",
-    "it": "àèéìòù",
+    # é is French far more than Italian ("perché" is about the only one)
+    "it": "àèìòù",
 }
 _WORD_RE = re.compile(r"[^\W\d_]+(?:'[^\W\d_]+)?", re.UNICODE)
 _URL_RE = re.compile(r"https?://\S+|www\.\S+|#\S+|@\S+")
@@ -895,6 +971,15 @@ def market_fit(row, region):
     region = (region or "").strip().upper()
     if not region:
         return MARKET_NATIVE
+    if is_pack(region):
+        # content for ANY member country; the first (strongest) verdict wins
+        best = ""
+        for m in pack_members(region):
+            fit = market_fit(row, m)
+            if fit == MARKET_NATIVE:
+                return fit
+            best = best or fit
+        return best
     langs = set(country_languages(region))
     if not langs:
         return MARKET_NATIVE          # a country we know nothing about: no cut
@@ -922,7 +1007,18 @@ def market_fit(row, region):
     # 3 · a foreign spoken language, unless the title already settled it
     if ev["audio"] and not local(ev["audio"]) and not title_local:
         return ""
-    # 4 · something has to say "local"
+    # 4 · something has to say "local".
+    #     v1.0.3: a channel registered in the country used to be enough even
+    #     when the title leaned to another language, so "hot girl" from a
+    #     Belgian channel landed in a Belgium search. Now any lean towards a
+    #     foreign language (from 0.25 up, not only a confident one) is out
+    #     unless the title / spoken language is confidently local. A title
+    #     with no language at all ("Stromae - Alors on danse (Official
+    #     Video)") still rides on the channel's country, as before.
+    foreign_lean = (bool(ev["text"]) and not local(ev["text"])
+                    and ev["text_conf"] >= 0.25)
+    if foreign_lean and not title_local and not local(ev["audio"]):
+        return ""
     positive = (title_local or text_local or local(ev["audio"])
                 or local(ev["meta"]) or (cc == region))
     if not positive:

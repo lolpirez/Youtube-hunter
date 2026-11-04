@@ -7,6 +7,77 @@ Version numbering restarted at **1.0.0** for the public release.
 
 ---
 
+## Unreleased (v1.0.3) — strict Country sections, scrollable download dialog
+
+- **Filtered searches keep only their matches.** "1M-10M views, 10K-500K
+  subs, Germany" now leaves exactly those videos on screen and in the Search
+  Archive (up to the "Results to find" number, best first). Clearing a filter
+  afterwards no longer reveals the 100-200 scanned videos; the full scan stays
+  in the 12-hour cache, so re-searching with other filters is still free.
+- **Web scrape is now truly free.** Subscriber counts (YouTube's rounded
+  figure) and upload counts are read from each channel's page instead of
+  videos.list / channels.list: zero API quota. Likes, category and channel age
+  need the API; the status line says so when a filter asks for them.
+- **Smart** stays the default: free search on youtube.com, exact numbers from
+  the API (~2 units per 50 videos), API search only if YouTube's page fails.
+  It only falls back when the page could not be read — an empty page, or one
+  whose candidates the cheap cuts removed, no longer spends 100 quota units to
+  find the same nothing.
+- **No more "stuck at 33 videos".** The scrape reports progress on every page,
+  stops as soon as enough candidates survive the view / title cuts (numbers
+  are only read for those), and has a wall-clock budget. API reads time out
+  after 25 s instead of 60 s.
+- **Source picker:** short names in the field, what each source costs as a
+  second line in the list and as a tooltip. Drop-down lists now close when the
+  page scrolls (they used to stay pinned over the title bar), stay inside the
+  window and widen to fit their longest option. The Hunt report's cost pill
+  now elides inside the card (full text on hover) instead of running off its
+  right edge.
+- **Country searches stay in that country's language.** A title that leans to
+  a foreign language (even weakly) is out unless the title or spoken language
+  is confidently local; the detector learned the words short titles are made
+  of ("hot girl", "Mooie meisjes", "vidéo"), and é now votes French.
+- **Search Archive country sections hold only that country's videos.** The
+  archive used to store the raw pool, so "hot girl (BE)" read 100 videos while
+  most were English. Saves are now filtered, sections are tagged with the
+  Country even without translation, old sections are cleaned once on launch
+  (starred videos are kept), and opening a section applies the same cut.
+- **Download dialog scrolls.** With 40+ audio tracks "Show all" pushed the
+  list past the window with no way to reach it; the body now scrolls (header
+  and Download stay pinned) and jumps to the unfolded list.
+- **"Show all" no longer folds shut when you pick a language** (the probe
+  re-sends the same track list after every pick).
+- Launch splash polish: render-thread motion, aurora backdrop, dot ring,
+  comet loader and status line.
+- **Search depth is now "Results to find", and it means matches.** With a
+  filter on (subs, views, country, length, category ...) the search keeps
+  digging until that many videos MATCH, instead of fetching 100 and showing
+  the 7 that survive. Each dig pass buys only the pages the match rate says it
+  needs, rotates across time windows, stops at a per-depth budget
+  (3 / 6 / 10 / 14 / 24 / 30 extra calls) and gives up early when a filter is
+  hopeless for the keyword (< 1 match per 100 scanned). The status line says
+  what it did: "Scanned 350 videos to find 100 matches (5 extra search calls)"
+  or why it stopped short. A filtered Web-scrape run reads 5x deeper (free).
+- **Length and Category go to YouTube itself** (videoDuration / videoCategoryId,
+  and the sp duration chip on scrape), so a "20–60 min" or "Gaming" search no
+  longer pays for videos it throws away.
+- Changing filters after a search says so, and that Search digs for them.
+- **Country chips under the results.** After an "Any country" search the pool
+  is split by market (US 120 · UK 40 · Mexico 18 ...); a click shows only that
+  country's content, instantly and with zero quota. Click again for All.
+- **Market packs in the Country list**: English markets, Spanish Latin
+  America, Spanish + Spain, Portuguese, Arabic MENA, German-speaking, Persian.
+  One search and one translation cover several countries; a video counts when
+  it is made for any of them.
+- **New default source: Smart.** Videos are found on YouTube's free web
+  results and their numbers read through the API (~2 units per 50 videos);
+  the paid search.list is used only when YouTube's page cannot be read.
+- **Faster, more honest launch screen.** The intro is ~30 % shorter (the shell
+  shows up in ~2.2 s instead of ~3 s on a warm start), the comet loader is now
+  a progress capsule that fills, snaps to 100 % when the app is ready and only
+  then dissolves, and it sits on a frosted glass card with a live dot and a
+  percentage readout.
+
 ## Unreleased (v1.0.2 update) — Country translations, quota, remembered Country
 
 - **Country filter keeps local creators registered abroad.** A Persian title

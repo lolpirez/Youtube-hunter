@@ -91,6 +91,105 @@ def init_archive_db():
         pass
     conn.commit()
     conn.close()
+    # v1.0.3: sections saved before the archive respected the Country pick
+    # hold the whole raw pool ("hot girl (BE)" = 100 videos, most of them
+    # English). Clean them once; the marker keeps later launches free.
+    try:
+        archive_prune_all_markets(once=True)
+    except Exception:
+        pass
+
+
+# ── Country sections (v1.0.3) ───────────────────────────────────────────
+_REGION_TAG_RE = re.compile(r"\(([A-Za-z]{2})\)\s*$")
+_PRUNE_MARKER = "market_prune_v5"
+
+
+def archive_group_market(group):
+    """The country a section was searched for ('BE'), or ''. Read from the
+    stored run params (keyword runs only: a channel scan or a radar is not a
+    country search), falling back to the "(BE)" tag on the section title."""
+    group = group or {}
+    if (group.get("mode") or "keyword") != "keyword":
+        return ""
+    params = group.get("params")
+    if isinstance(params, str):
+        try:
+            params = json.loads(params or "{}")
+        except Exception:
+            params = {}
+    params = params or {}
+    if params.get("mode") not in (None, "", "keyword"):
+        return ""
+    region = (params.get("region") or params.get("translate_region") or "").strip()
+    if not region and "region" not in params:
+        # params lost / never stored: trust the "(BE)" tag the save added
+        m = _REGION_TAG_RE.search(group.get("title") or "")
+        region = m.group(1) if m else ""
+    return region.upper()
+
+
+def archive_prune_to_market(group_id, region):
+    """Drop the rows of a section that are not `region`'s content
+    (audience.market_fit). Starred videos are kept: the user picked them by
+    hand. Returns how many rows were removed."""
+    region = (region or "").strip().upper()
+    if not region:
+        return 0
+    from app.core.niche.audience import market_fit, country_languages
+    if not country_languages(region):
+        return 0
+    conn = db_connect(DATA_DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT video_id, row, is_favorite FROM search_items "
+                "WHERE group_id = ?", (group_id,))
+    drop = []
+    for vid, blob, is_fav in cur.fetchall():
+        if is_fav:
+            continue
+        try:
+            row = json.loads(blob)
+        except Exception:
+            continue
+        row.pop("_aud", None)          # stale detector memo
+        if not market_fit(row, region):
+            drop.append(vid)
+    for vid in drop:
+        cur.execute("DELETE FROM search_items WHERE group_id = ? AND video_id = ?",
+                    (group_id, vid))
+    conn.commit()
+    conn.close()
+    return len(drop)
+
+
+def archive_prune_all_markets(once=False):
+    """archive_prune_to_market() over every country section. With once=True
+    it runs a single time per detector version (marker in archive_meta)."""
+    conn = db_connect(DATA_DB_PATH)
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS archive_meta "
+                "(key TEXT PRIMARY KEY, value TEXT)")
+    if once:
+        cur.execute("SELECT value FROM archive_meta WHERE key = ?", (_PRUNE_MARKER,))
+        if cur.fetchone():
+            conn.close()
+            return 0
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT id, title, mode, params FROM search_groups")
+    groups = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    total = 0
+    for g in groups:
+        region = archive_group_market(g)
+        if region:
+            total += archive_prune_to_market(g["id"], region)
+    conn = db_connect(DATA_DB_PATH)
+    conn.execute("INSERT OR REPLACE INTO archive_meta (key, value) VALUES (?, ?)",
+                 (_PRUNE_MARKER, str(total)))
+    conn.commit()
+    conn.close()
+    return total
 
 
 def archive_norm_key(text):

@@ -42,6 +42,13 @@ Item {
     readonly property int _n: tracks ? tracks.length : 0
     readonly property bool _collapsible: _n > maxCollapsed
     property bool _expanded: false
+    // public read-only mirror, so a host (the download dialog) can scroll the
+    // unfolded list into view
+    readonly property bool expanded: _expanded
+    // v1.0.3: identity of the track SET. Picking a language makes the probe
+    // re-send the same list (sizes follow the track), and every re-send used
+    // to fold "Show all" shut under the pointer. Fold only for a new video.
+    property string _setSig: ""
     readonly property int _curIdx: {
         for (var i = 0; i < _n; ++i)
             if ((tracks[i].key || "") === current) return i
@@ -71,7 +78,15 @@ Item {
         return I18n.lang === "fa" ? (t.nameFa || t.name || "") : (t.name || "")
     }
 
-    onTracksChanged: _expanded = false
+    onTracksChanged: {
+        var keys = []
+        for (var i = 0; i < _n; ++i) keys.push(tracks[i].key || "")
+        var sig = keys.join("|")
+        if (sig !== _setSig) {
+            _setSig = sig
+            _expanded = false
+        }
+    }
 
     implicitWidth: 320
     implicitHeight: col.implicitHeight
