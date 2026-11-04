@@ -11,7 +11,28 @@ from app.core.db.ideas import DATA_DB_PATH
 from app.core.niche.helpers import iso_age_hours
 
 def niche_cache_key(params):
-    blob = json.dumps(params, sort_keys=True, ensure_ascii=False)
+    """Stable key for one search request.
+
+    UI-only fields are dropped and the words are folded, so the same search
+    costs one entry however it was reached: toggling "Translate my keyword"
+    off after a translated search, or typing "King" instead of "king", must
+    not miss the cache and buy the same results again."""
+    p = {k: v for k, v in (params or {}).items()
+         if k not in ("translate_region", "query_typed")}
+
+    def fold(s):
+        return " ".join(str(s).split()).casefold()
+
+    for k in ("query", "queries"):
+        v = p.get(k)
+        if isinstance(v, str):
+            p[k] = fold(v)
+        elif isinstance(v, (list, tuple)):
+            p[k] = [fold(x) for x in v]
+    langs = p.get("query_langs")
+    if isinstance(langs, dict):
+        p["query_langs"] = {fold(k): v for k, v in langs.items()}
+    blob = json.dumps(p, sort_keys=True, ensure_ascii=False)
     return hashlib.sha1(blob.encode("utf-8")).hexdigest()
 
 
@@ -53,16 +74,19 @@ def niche_cache_fetched_at(key, max_age_hours=12):
         return ""
 
 
-def niche_cache_put(key, params, rows):
+def niche_cache_put(key, params, rows, fetched_at=None):
+    """Store rows. `fetched_at` keeps the LIST's original age when a cache hit
+    only refreshed its live numbers — otherwise every refresh would reset the
+    12 h TTL and a keyword's result list would never expire."""
     try:
         conn = db_connect(DATA_DB_PATH)
         cur = conn.cursor()
+        stamp = fetched_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         cur.execute(
             "INSERT OR REPLACE INTO niche_cache (key, params, rows, fetched_at) "
             "VALUES (?, ?, ?, ?)",
             (key, json.dumps(params, ensure_ascii=False),
-             json.dumps(rows, ensure_ascii=False),
-             datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")))
+             json.dumps(rows, ensure_ascii=False), stamp))
         # keep the cache from growing forever
         cur.execute("DELETE FROM niche_cache WHERE key NOT IN "
                     "(SELECT key FROM niche_cache ORDER BY fetched_at DESC LIMIT 40)")

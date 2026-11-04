@@ -835,6 +835,15 @@ def card_label(row):
 #   1. channel.snippet.country  — registered in a different market -> out.
 #      Same-language neighbours stay (Austria/Switzerland for Germany,
 #      Mexico for Spain, the UK for the US): same audience, same content.
+#      v1.0.3 exception, "registered abroad": a channel whose title (or
+#      declared spoken language) is confidently in the market's language, and
+#      that language is NOT one its registered country speaks itself, stays
+#      as MARKET_MATCH. That is the diaspora / monetise-abroad creator, and
+#      for some markets it is most of the market: Iranian creators register
+#      in Turkey, the UAE, Germany or the US because AdSense does not pay out
+#      in Iran; Turkish creators in Germany; Spanish-language channels in the
+#      US. An English title from a UK or Indian channel still is not
+#      content for India or the US respectively.
 #   2. the title's own language — confidently in a language the country does
 #      not speak -> out. This is the hard gate the user asked for: Germany
 #      means a German title, and a confident English or Hindi title is out
@@ -858,7 +867,13 @@ def primary_language(region):
 
 def primary_language_api(region):
     """primary_language() in the form search.list's relevanceLanguage takes."""
-    code = primary_language(region)
+    return language_api(primary_language(region))
+
+
+def language_api(code):
+    """Any catalogue language code in the form search.list's
+    relevanceLanguage takes ('zh-hant' -> 'zh-Hant', 'he' -> 'iw')."""
+    code = norm_lang(code)
     return next((api for _n, c, api in LANGUAGES if c == code), code)
 
 
@@ -890,9 +905,9 @@ def market_fit(row, region):
 
     ev = row_evidence(row)
     cc = ev["country"]
-    # 1 · registered in another market
-    if cc and not _same_market(cc, region):
-        return ""
+    # 1 · registered in another market (decided at the end: a local-language
+    #     channel registered abroad still counts, see the note above)
+    abroad = bool(cc) and not _same_market(cc, region)
     # 2 · the title decides the language
     title_local = False
     if ev.get("title") and ev.get("title_conf", 0) >= _TITLE_SURE:
@@ -912,6 +927,25 @@ def market_fit(row, region):
                 or local(ev["meta"]) or (cc == region))
     if not positive:
         return ""
+    if abroad:
+        # Registered elsewhere: keep only strong local-language evidence in a
+        # language that is not simply the home country's own (an English
+        # title from a UK channel is UK content, not Indian content).
+        if title_local:
+            content = ev["title"]
+        elif text_local and ev["text_conf"] >= _TEXT_SURE:
+            content = ev["text"]
+        elif local(ev["audio"]):
+            content = ev["audio"]
+        else:
+            return ""
+        # Any language the home country itself speaks means the video is
+        # most likely for that home audience (an English title from an Indian
+        # channel is not US content, even though English is not India's
+        # first language).
+        if _family(content) in {_family(x) for x in country_languages(cc)}:
+            return ""
+        return MARKET_MATCH
     return MARKET_NATIVE if cc == region else MARKET_MATCH
 
 

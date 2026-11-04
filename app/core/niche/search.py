@@ -13,7 +13,8 @@ from app.core.monetization import _YT_UA_HEADERS, extract_balanced_json, fetch_y
 from app.core.net import _urlopen, configured_proxy
 from app.core.niche.helpers import _DIGIT_MAP, _digits_to_int, build_youtube_sp, days_to_sp_bucket, detect_short, iso_age_hours, rel_time_to_iso
 from app.core.utils import parse_iso8601_duration
-from app.core.youtube_api import ScrapeCancelled, execute_with_retry
+from app.core.youtube_api import (QuotaExceededError, ScrapeCancelled,
+                                  execute_with_retry)
 from app.i18n import tr
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -93,9 +94,21 @@ PHASE_STATS = "stats"           # videos.list — exact view/like counts
 PHASE_CHANNELS = "channels"     # channels.list — subscriber counts
 
 
+def _lang_for(lang, query):
+    """The relevanceLanguage hint for one query.
+
+    `lang` is either one code for every query or {query: code} — a translated
+    Hindi keyword and the original English one kept beside it must not share a
+    single hint, or half the search is ranked against the wrong language."""
+    if isinstance(lang, dict):
+        return lang.get(query) or ""
+    return lang or ""
+
+
 def niche_search_api(yt, queries, order, windows, pages, region=None,
                      lang=None, video_duration=None, stop_check=None,
-                     progress=None, target=None):
+                     progress=None, target=None, tokens_out=None,
+                     quota_note=None):
     """Collect candidate video IDs via search.list. Each page costs 1 call
     from the daily search bucket, so the caller decides `pages`.
 
@@ -105,7 +118,16 @@ def niche_search_api(yt, queries, order, windows, pages, region=None,
     rolls over to the slices after it. Discovery stops the moment the target
     is reached, so no search call — and no videos/channels enrichment call —
     is ever spent on ids beyond it. `target=None` keeps the old uncapped
-    behaviour: every page of every slice."""
+    behaviour: every page of every slice.
+
+    `tokens_out` (optional dict) receives {(query, after, before): nextPageToken}
+    for every slice that has another page. That is what lets a later widening
+    pass continue from where this one stopped instead of re-buying the same
+    pages.
+
+    `quota_note` (optional dict) is set to {"partial": True} when the quota
+    runs out after some ids were already found; those ids are returned rather
+    than thrown away. With no ids yet the QuotaExceededError propagates."""
     ids, seen = [], set()
     slices = [(q, w) for q in queries for w in windows]
     total_steps = max(1, len(slices))
@@ -124,6 +146,7 @@ def niche_search_api(yt, queries, order, windows, pages, region=None,
             slice_cap = None
         slice_got = 0
         token = None
+        slice_key = (q, after, before)
         # The last slice may take one extra page: duplicates across slices can
         # leave it a few ids short, and nothing comes after it to roll into.
         extra = 1 if (target is not None and step == total_steps) else 0
@@ -138,15 +161,24 @@ def niche_search_api(yt, queries, order, windows, pages, region=None,
                 kwargs["publishedBefore"] = before
             if region:
                 kwargs["regionCode"] = region
-            if lang:
-                kwargs["relevanceLanguage"] = lang
+            lq = _lang_for(lang, q)
+            if lq:
+                kwargs["relevanceLanguage"] = lq
             if video_duration:
                 kwargs["videoDuration"] = video_duration
             if token:
                 kwargs["pageToken"] = token
-            resp = execute_with_retry(yt.search().list(**kwargs), stop_check)
+            try:
+                resp = execute_with_retry(yt.search().list(**kwargs), stop_check)
+            except QuotaExceededError:
+                if quota_note is not None and ids:
+                    quota_note["partial"] = True
+                    return ids[:target] if target is not None else ids
+                raise
+            cut_mid_page = False
             for it in resp.get("items", []):
                 if slice_cap is not None and slice_got >= slice_cap:
+                    cut_mid_page = True
                     break
                 vid = (it.get("id") or {}).get("videoId")
                 if vid and vid not in seen:
@@ -154,6 +186,13 @@ def niche_search_api(yt, queries, order, windows, pages, region=None,
                     ids.append(vid)
                     slice_got += 1
             token = resp.get("nextPageToken")
+            if tokens_out is not None:
+                # A page abandoned half-way cannot be resumed from its token:
+                # the next page would silently skip the items we did not read.
+                if token and not cut_mid_page:
+                    tokens_out[slice_key] = token
+                else:
+                    tokens_out.pop(slice_key, None)
             if not token:
                 break
             if slice_cap is not None and slice_got >= slice_cap:
@@ -165,6 +204,51 @@ def niche_search_api(yt, queries, order, windows, pages, region=None,
     if target is not None:
         return ids[:target]
     return ids
+
+
+def niche_search_api_more(yt, tokens, order, region=None, lang=None,
+                          video_duration=None, stop_check=None, limit=None):
+    """Continue unfinished (query × window) slices from their nextPageToken.
+
+    `tokens` maps {(query, after, before): pageToken} and is updated in place;
+    a slice YouTube has no more pages for is dropped. Returns (ids, calls).
+
+    This is the widening pass's whole budget story: it buys only the pages the
+    first pass has NOT already paid for, so going one page deeper across every
+    slice costs one call per slice — not a second full run."""
+    ids, calls = [], 0
+    todo = list(tokens.items())
+    if limit is not None:
+        todo = todo[:max(0, int(limit))]
+    for (q, after, before), token in todo:
+        if stop_check and stop_check():
+            raise ScrapeCancelled()
+        kwargs = {"part": "id", "type": "video", "q": q,
+                  "maxResults": 50, "order": order, "pageToken": token}
+        if after:
+            kwargs["publishedAfter"] = after
+        if before:
+            kwargs["publishedBefore"] = before
+        if region:
+            kwargs["regionCode"] = region
+        lq = _lang_for(lang, q)
+        if lq:
+            kwargs["relevanceLanguage"] = lq
+        if video_duration:
+            kwargs["videoDuration"] = video_duration
+        resp = execute_with_retry(yt.search().list(**kwargs), stop_check)
+        calls += 1
+        for it in resp.get("items", []):
+            vid = (it.get("id") or {}).get("videoId")
+            if vid:
+                ids.append(vid)
+        nxt = resp.get("nextPageToken")
+        slice_key = (q, after, before)
+        if nxt:
+            tokens[slice_key] = nxt
+        else:
+            tokens.pop(slice_key, None)
+    return ids, calls
 
 
 # ═════════════════════════════════════════════════════════════════════════

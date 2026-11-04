@@ -7,6 +7,32 @@ Version numbering restarted at **1.0.0** for the public release.
 
 ---
 
+## Unreleased (v1.0.2 update) — Country translations, quota, remembered Country
+
+- **Country filter keeps local creators registered abroad.** A Persian title
+  from a channel registered in Turkey / the UAE / Germany / the US now counts
+  as Iran content (AdSense does not pay out in Iran, so many Iranian creators
+  register elsewhere); same for Turkish channels in Germany, Hindi channels in
+  the US. Content in a language the registering country speaks itself is still
+  excluded (an English title from an Indian channel is not US content).
+- **The Niche Finder remembers the Country you picked** (stored as a code, so
+  reordering the list cannot shift it).
+- **Keyword translation is more accurate for the picked country.** Google is
+  told the source language when it is known ("para" no longer comes back as a
+  bare "à"), answers in the wrong script or a sentence are rejected, and
+  markets where English is co-official (India, the UAE, the Philippines …)
+  search both the translation and the original English keyword with a
+  per-query relevanceLanguage. Region-specific codes are used for pt-BR/pt-PT
+  and zh-HK/zh-TW, and an unusable Google answer falls through to the
+  configured AI provider.
+- **Search quota is spent more carefully.** Widening a narrow search now
+  resumes from the stored nextPageToken instead of re-buying pages already
+  fetched; an unaffordable run is stopped before the first search.list call
+  with an actionable message; results found before the quota ran out are
+  shown instead of an empty grid; cached numbers are not re-read within five
+  minutes, and the list's 12 h TTL is preserved; the cache key ignores the
+  translation toggle, case and extra whitespace.
+
 ## v1.0.2 — 2026-11-03 — Content Lab loading rework, Aurora Pro icons, faster grids
 
 - **A blueprint no longer builds all four acts before anything is shown.** The
