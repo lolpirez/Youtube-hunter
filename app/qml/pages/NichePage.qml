@@ -117,6 +117,20 @@ Item {
 
     // ═══════════════════════ page-level knobs ═══════════════════════
     readonly property bool _motion: App.ambientMotion !== undefined ? App.ambientMotion : true
+    // v1.1 scroll perf (Search Archive parity, and a bit further):
+    //   * ambient motion (wash drift, radar beam, live dot) stands down while
+    //     the page is gliding, so the GUI thread spends scroll frames on the
+    //     scroll, not on 30 Hz radar bindings and a 12 Hz wash timer
+    //   * the big panels above the grid stop painting (opacity 0, layout kept)
+    //     once they are fully scrolled out of view, same trick the cards use
+    readonly property real _scrollY: scroller.contentItem ? scroller.contentItem.contentY : 0
+    readonly property real _scrollH: scroller.height
+    function _onScreen(item) {
+        if (!item || _scrollH <= 0) return true
+        const top = content.y + item.y
+        return top + item.height > _scrollY - 240 && top < _scrollY + _scrollH + 240
+    }
+    readonly property bool _calm: page._motion && !scroller.gliding
     // The statement scales with the column: 30px on a laptop, 48px wide.
     readonly property int _heroSize: Math.round(Math.max(30, Math.min(48, content.width / 30)))
     // Wide enough for the console monitor and the two-zone drawer.
@@ -954,6 +968,7 @@ Item {
                 anchors.right: parent.right
                 anchors.top: parent.top
                 height: 460
+                ambient: page._calm && page.visible && page._scrollY < 460
             }
 
             ColumnLayout {
@@ -967,6 +982,8 @@ Item {
                 C.GlassPanel {
                     id: consolePanel
                     Layout.fillWidth: true
+                    readonly property bool _shown: page._onScreen(consolePanel)
+                    opacity: _shown ? 1 : 0
                     radius: Tokens.radiusXl
                     implicitHeight: consoleRow.implicitHeight + Tokens.space6 * 2
 
@@ -1005,7 +1022,7 @@ Item {
                                             color: Theme.primary
                                             anchors.verticalCenter: parent.verticalCenter
                                             SequentialAnimation on opacity {
-                                                running: page._motion && page.visible && (Niche.isRunning || Tokens.appActive)
+                                                running: page._calm && consolePanel._shown && page.visible && (Niche.isRunning || Tokens.appActive)
                                                 loops: Animation.Infinite
                                                 NumberAnimation { to: 0.25; duration: Niche.isRunning ? 420 : 1100; easing.type: Easing.InOutQuad }
                                                 NumberAnimation { to: 1.0; duration: Niche.isRunning ? 420 : 1100; easing.type: Easing.InOutQuad }
@@ -1170,9 +1187,9 @@ Item {
                                         C.Dropdown {
                                             id: sourcePick
                                             visible: Niche.mode === 0
-                                            // short names now ("Smart"), so the
-                                            // field no longer has to be wide
-                                            Layout.preferredWidth: Math.max(150, Math.min(190, cmdBar.width * 0.16))
+                                            // two short names (Official API / Web scrape);
+                                            // wide enough that neither is elided
+                                            Layout.preferredWidth: Math.max(176, Math.min(210, cmdBar.width * 0.18))
                                             Layout.alignment: Qt.AlignVCenter
                                             transparentBg: true
                                             borderColor: "transparent"
@@ -1427,7 +1444,8 @@ Item {
                                     Layout.preferredWidth: 216
                                     Layout.preferredHeight: 216
                                     active: Niche.isRunning
-                                    motion: page._motion
+                                    // paused while gliding / scrolled away (it holds its angle)
+                                    motion: page._calm && consolePanel._shown
                                     hits: Niche.hasResults
                                 }
 
@@ -1496,8 +1514,10 @@ Item {
 
                 // ═══════════════ 2 · TUNER — cut ═══════════════
                 C.GlassPanel {
+                    id: tunerPanel
                     objectName: "tour_nicheFilters"
                     Layout.fillWidth: true
+                    opacity: page._onScreen(tunerPanel) ? 1 : 0
                     radius: Tokens.radiusXl
                     implicitHeight: tunerCol.implicitHeight + Tokens.space5 * 2
 
@@ -2390,7 +2410,7 @@ Item {
                         C.ViralRadarBar {
                             Layout.fillWidth: true
                             visible: Niche.viralActive || Niche.viralSetupOpen
-                            motion: page._motion
+                            motion: page._calm
                         }
 
                         // results toolbar
@@ -2826,6 +2846,8 @@ Item {
                                 return vy - grid.mapToItem(fl.contentItem, 0, 0).y
                             }
                             readonly property real _viewH: scroller.height
+                            // v1.1: same paint window as the Search Archive deck
+                            readonly property real _paintPad: cardW * 9 / 16 + 320
                             // instant hide, soft show
                             opacity: revealed ? 1 : 0
                             Behavior on opacity {
@@ -2894,8 +2916,8 @@ Item {
                                     // layout geometry. y/height are read so the
                                     // binding re-runs when the grid reflows.
                                     opacity: (grid._viewH <= 0
-                                              || (ncard.y + ncard.height > grid._viewTop - ncard.height - 320
-                                                  && ncard.y < grid._viewTop + grid._viewH + ncard.height + 320)) ? 1 : 0
+                                              || (ncard.y + ncard.height > grid._viewTop - grid._paintPad
+                                                  && ncard.y < grid._viewTop + grid._viewH + grid._paintPad)) ? 1 : 0
                                     Layout.preferredWidth: grid.cardW
                                     Layout.fillHeight: true
                                     Layout.alignment: Qt.AlignTop

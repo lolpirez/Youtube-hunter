@@ -7,6 +7,27 @@ Version numbering restarted at **1.0.0** for the public release.
 
 ---
 
+## Unreleased (v1.1): downloads stop feedback, API-only Niche Finder, smoother grid
+
+- **Downloads: Stop/Pause now shows at once.** The row flips to "Stopping…" /
+  "Pausing…" (amber bar, spinner instead of the stop button) the moment it is
+  pressed. Fixed the root bug: grid downloads cleared the live entry BEFORE
+  writing "stopped"/"done" to the DB, and the Downloads list re-read in between,
+  so the row stayed on "downloading" until the page was reopened. The list now
+  rebuilds on the next event-loop turn and the Niche/Archive VMs write the DB
+  first. Stop on an orphaned "downloading" row parks it immediately.
+- **Niche Finder: "Smart" source removed.** Official API is the default (Web
+  scrape stays as the free option; a stale Smart setting maps to the API).
+- **Quota saver:** new per-page search.list cache (6 h, `search_pages` table),
+  time windows anchored to the hour so repeat runs hit it, cached pages don't
+  count against the dig budget, results note shows units saved. "Ignore cache"
+  and "Clear cache" bypass / wipe it.
+- **Niche grid scroll:** wash drift, radar and live dot pause while gliding or
+  off-screen; panels above the grid stop painting once scrolled away; card
+  paint window matches the Search Archive deck.
+
+---
+
 ## Unreleased (v1.0.8): performance pass, safe VPN switching, paged History
 
 - **Performance pass (smoothness inside every section).**

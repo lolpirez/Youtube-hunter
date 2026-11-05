@@ -17,6 +17,7 @@ from app.core.niche.helpers import _DIGIT_MAP, _digits_to_int, build_youtube_sp,
 from app.core.utils import parse_iso8601_duration
 from app.core.youtube_api import (QuotaExceededError, ScrapeCancelled,
                                   execute_with_retry)
+from app.core.db.search_pages import page_get, page_put
 from app.i18n import tr
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -33,7 +34,15 @@ def build_time_windows(days, deep_scan, now=None, max_windows=None):
     has only so many search pages to spend; more windows than pages would
     leave the newest windows unsearched, so the period is cut into fewer,
     wider slices instead and every part of it still gets a turn."""
-    now = now or datetime.now(timezone.utc)
+    # v1.1: anchored to the start of the current UTC hour, and the newest
+    # window is left open-ended (no publishedBefore). Two runs minutes apart
+    # then send byte-identical windows, which is what lets the per-page cache
+    # (app.core.db.search_pages) answer the second one for 0 units instead of
+    # buying the same 100-unit pages again. Open-ended also means the last
+    # hour's uploads are never cut off by the rounding.
+    if now is None:
+        now = datetime.now(timezone.utc).replace(minute=0, second=0,
+                                                 microsecond=0)
     if not days:
         return [(None, None)]
     start = now - timedelta(days=days)
@@ -51,9 +60,35 @@ def build_time_windows(days, deep_scan, now=None, max_windows=None):
         w_end = start + step * (i + 1)
         windows.append((
             w_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            (now if i == n - 1 else w_end).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            None if i == n - 1 else w_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
         ))
     return windows
+
+
+def _search_page(yt, kwargs, stop_check=None, use_cache=True, spend=None):
+    """One search.list page as (video_ids, next_token).
+
+    Served from the per-page cache when the exact same request was bought in
+    the last few hours (0 units); otherwise bought (100 units) and stored.
+    `spend` (optional dict) counts {"bought": n, "cached": n} for the caller's
+    status line."""
+    if use_cache:
+        hit = page_get(kwargs)
+        if hit is not None:
+            if spend is not None:
+                spend["cached"] = spend.get("cached", 0) + 1
+            return hit
+    resp = execute_with_retry(yt.search().list(**kwargs), stop_check)
+    ids = []
+    for it in resp.get("items", []):
+        vid = (it.get("id") or {}).get("videoId")
+        if vid:
+            ids.append(vid)
+    nxt = resp.get("nextPageToken") or None
+    if spend is not None:
+        spend["bought"] = spend.get("bought", 0) + 1
+    page_put(kwargs, ids, nxt)
+    return ids, nxt
 
 
 def estimate_search_calls(n_queries, n_windows, pages, target=None):
@@ -110,7 +145,8 @@ def _lang_for(lang, query):
 def niche_search_api(yt, queries, order, windows, pages, region=None,
                      lang=None, video_duration=None, stop_check=None,
                      progress=None, target=None, tokens_out=None,
-                     quota_note=None, category_id=None):
+                     quota_note=None, category_id=None, use_cache=True,
+                     spend=None):
     """Collect candidate video IDs via search.list. Each page costs 1 call
     from the daily search bucket, so the caller decides `pages`.
 
@@ -174,23 +210,22 @@ def niche_search_api(yt, queries, order, windows, pages, region=None,
             if token:
                 kwargs["pageToken"] = token
             try:
-                resp = execute_with_retry(yt.search().list(**kwargs), stop_check)
+                page_ids, token = _search_page(yt, kwargs, stop_check,
+                                               use_cache=use_cache, spend=spend)
             except QuotaExceededError:
                 if quota_note is not None and ids:
                     quota_note["partial"] = True
                     return ids[:target] if target is not None else ids
                 raise
             cut_mid_page = False
-            for it in resp.get("items", []):
+            for vid in page_ids:
                 if slice_cap is not None and slice_got >= slice_cap:
                     cut_mid_page = True
                     break
-                vid = (it.get("id") or {}).get("videoId")
                 if vid and vid not in seen:
                     seen.add(vid)
                     ids.append(vid)
                     slice_got += 1
-            token = resp.get("nextPageToken")
             if tokens_out is not None:
                 # A page abandoned half-way cannot be resumed from its token:
                 # the next page would silently skip the items we did not read.
@@ -213,7 +248,7 @@ def niche_search_api(yt, queries, order, windows, pages, region=None,
 
 def niche_search_api_more(yt, tokens, order, region=None, lang=None,
                           video_duration=None, stop_check=None, limit=None,
-                          category_id=None):
+                          category_id=None, use_cache=True, spend=None):
     """Continue unfinished (query × window) slices from their nextPageToken.
 
     `tokens` maps {(query, after, before): pageToken} and is updated in place;
@@ -244,13 +279,14 @@ def niche_search_api_more(yt, tokens, order, region=None, lang=None,
             kwargs["videoDuration"] = video_duration
         if category_id:
             kwargs["videoCategoryId"] = category_id
-        resp = execute_with_retry(yt.search().list(**kwargs), stop_check)
-        calls += 1
-        for it in resp.get("items", []):
-            vid = (it.get("id") or {}).get("videoId")
-            if vid:
-                ids.append(vid)
-        nxt = resp.get("nextPageToken")
+        before_bought = (spend or {}).get("bought", 0)
+        local = spend if spend is not None else {}
+        page_ids, nxt = _search_page(yt, kwargs, stop_check,
+                                     use_cache=use_cache, spend=local)
+        # only pages actually BOUGHT count against the dig budget; a cached
+        # page is free, so it must not end the dig early
+        calls += local.get("bought", 0) - before_bought
+        ids.extend(page_ids)
         slice_key = (q, after, before)
         # re-insert at the END: a pass that buys fewer pages than there are
         # slices then rotates through every window instead of draining one

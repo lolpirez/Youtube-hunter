@@ -115,7 +115,17 @@ Item {
             return I18n.tr("{done} of {total}").replace("{done}", d).replace("{total}", t)
         return d !== "" ? d : t
     }
+    // v1.1: true from the moment Stop / Pause is pressed until the worker has
+    // unwound and the row is parked. Before, nothing on screen changed in that
+    // window, so a stop looked like it had been ignored.
+    function _stopping(live) {
+        return !!(live && live.cancelling)
+    }
+    function _stoppingText(live) {
+        return live && live.intent === "pause" ? I18n.tr("Pausing…") : I18n.tr("Stopping…")
+    }
     function _statusLine(row, live, pct) {
+        if (page._stopping(live)) return page._stoppingText(live)
         var k = page._kind(row.status)
         if (k === "merging") {
             // At 99% the engine is muxing or converting. Its live phase text
@@ -1365,6 +1375,10 @@ Item {
         id: ra
         property var row: ({})
         property string kind: "queued"
+        readonly property bool _stopping: {
+            var _ = Downloads.progressTick
+            return page._stopping(page._live(row.videoId))
+        }
         spacing: Tokens.space1
 
         C.IconButton {
@@ -1383,10 +1397,12 @@ Item {
         }
         C.IconButton {
             visible: ra.kind === "active" || ra.kind === "merging"
+            enabled: !ra._stopping
+            opacity: ra._stopping ? 0.4 : 1
             width: 36; height: 36
             iconName: "stop_circle"
-            accent: Theme.error
-            tip: I18n.tr("Stop this download")
+            accent: ra._stopping ? Theme.warn : Theme.error
+            tip: ra._stopping ? I18n.tr("Stopping…") : I18n.tr("Stop this download")
             onClicked: Downloads.cancelDownload(ra.row.videoId)
         }
         C.IconButton {
@@ -1433,6 +1449,7 @@ Item {
         }
         readonly property string kind: page._kind(row.status)
         readonly property int _pct: liveData ? (liveData.pct || 0) : (row.pct || 0)
+        readonly property bool _stopping: page._stopping(liveData)
 
         Layout.fillWidth: true
         implicitHeight: 116
@@ -1500,7 +1517,10 @@ Item {
                     Layout.topMargin: Tokens.space2
                     implicitHeight: 8
                     value: lr._pct / 100
-                    indeterminate: lr.kind === "merging"
+                    indeterminate: lr.kind === "merging" && !lr._stopping
+                    accent: lr._stopping ? Theme.warn : Theme.primary
+                    opacity: lr._stopping ? 0.7 : 1
+                    Behavior on opacity { NumberAnimation { duration: Tokens.durMed } }
                 }
                 RowLayout {
                     Layout.fillWidth: true
@@ -1513,18 +1533,18 @@ Item {
                         mono: true
                         weight: Tokens.weightBold
                         font.pixelSize: Tokens.fontCaption
-                        color: Theme.primary
+                        color: lr._stopping ? Theme.warn : Theme.primary
                     }
                     C.AppText {
                         text: {
                             var s = page._sizeText(lr.row, lr.liveData)
                             var st = page._statusLine(lr.row, lr.liveData, lr._pct)
-                            if (lr.kind === "merging" || s === "") return st
+                            if (lr._stopping || lr.kind === "merging" || s === "") return st
                             return s
                         }
                         mono: true
                         font.pixelSize: Tokens.fontCaption
-                        color: Theme.on_surface_var
+                        color: lr._stopping ? Theme.warn : Theme.on_surface_var
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                     }
@@ -1536,7 +1556,7 @@ Item {
                                      ? I18n.tr("{t} left").replace("{t}", lr.liveData.etaText) : ""
                             return sp !== "" && et !== "" ? sp + "  ·  " + et : sp + et
                         }
-                        visible: text !== ""
+                        visible: text !== "" && !lr._stopping
                         mono: true
                         font.pixelSize: Tokens.fontCaption
                         color: Theme.on_surface_var
@@ -1544,13 +1564,27 @@ Item {
                 }
             }
 
-            C.IconButton {
+            Item {
                 Layout.alignment: Qt.AlignVCenter
                 implicitWidth: 40; implicitHeight: 40
-                iconName: "stop_circle"
-                accent: Theme.error
-                tip: I18n.tr("Stop this download")
-                onClicked: Downloads.cancelDownload(lr.row.videoId)
+                C.IconButton {
+                    anchors.fill: parent
+                    visible: !lr._stopping
+                    iconName: "stop_circle"
+                    accent: Theme.error
+                    tip: I18n.tr("Stop this download")
+                    onClicked: Downloads.cancelDownload(lr.row.videoId)
+                }
+                // stopping: the button becomes a small spinner, so the click
+                // visibly "took" while yt-dlp unwinds
+                C.SpinnerGlyph {
+                    anchors.centerIn: parent
+                    visible: lr._stopping
+                    spinning: lr._stopping
+                    name: "autorenew"
+                    size: 20
+                    glyphColor: Theme.warn
+                }
             }
         }
 
@@ -1573,6 +1607,7 @@ Item {
         }
         readonly property string kind: page._kind(row.status)
         readonly property bool _running: kind === "active" || kind === "merging"
+        readonly property bool _stopping: page._stopping(liveData)
         readonly property int _pct: liveData ? (liveData.pct || 0) : (row.pct || 0)
         readonly property bool _picked: page.selectedIds.indexOf(row.videoId) !== -1
         readonly property bool _anySel: page.selectedIds.length > 0
@@ -1778,10 +1813,12 @@ Item {
                     }
                     C.IconButton {
                         visible: lib._running
+                        enabled: !lib._stopping
+                        opacity: lib._stopping ? 0.4 : 1
                         width: 38; height: 38
                         iconName: "stop_circle"
-                        accent: Theme.error
-                        tip: I18n.tr("Stop this download")
+                        accent: lib._stopping ? Theme.warn : Theme.error
+                        tip: lib._stopping ? page._stoppingText(lib.liveData) : I18n.tr("Stop this download")
                         onClicked: Downloads.cancelDownload(lib.row.videoId)
                     }
                     C.IconButton {

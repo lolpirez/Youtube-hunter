@@ -256,6 +256,16 @@ class DownloadsVM(QObject):
         self._live_timer.setSingleShot(True)
         self._live_timer.setInterval(80)
         self._live_timer.timeout.connect(self.progressChanged.emit)
+        # v1.1: structural changes rebuild the row list on the NEXT event-loop
+        # turn, not synchronously inside the publish. The grid VMs (Niche /
+        # Archive) clear the live entry and THEN write the final status to the
+        # DB in the same slot; a synchronous refresh read the DB in between,
+        # still saw "downloading", and the row sat there with a dead bar until
+        # the page was reopened ("I press stop and nothing shows it stopped").
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(0)
+        self._refresh_timer.timeout.connect(self._structural_refresh)
         dlp.add_listener(self._on_live_change)
         self._reconcile_orphaned_rows()
         self.refresh()
@@ -269,11 +279,18 @@ class DownloadsVM(QObject):
         """
         self._tick += 1
         if structural:
-            self.refresh()
+            # immediate live tick (the strip reacts now), row rebuild next turn
             self._live_timer.stop()
             self.progressChanged.emit()
+            self._refresh_timer.start()
         elif not self._live_timer.isActive():
             self._live_timer.start()
+
+    @Slot()
+    def _structural_refresh(self):
+        self._tick += 1
+        self.refresh()
+        self.progressChanged.emit()
 
     # ── properties ─────────────────────────────────────────────────────
     @Property("QVariantList", notify=changed)
@@ -420,6 +437,11 @@ class DownloadsVM(QObject):
                          if frag_total > 0 else "")
             out[vid] = {
                 "running": bool(d.get("running")),
+                # v1.1: lets the row show "Stopping…" / "Pausing…" the moment
+                # the button is pressed, instead of a bar that keeps saying
+                # "Downloading 42%" until the worker unwinds
+                "cancelling": bool(d.get("cancelling")),
+                "intent": d.get("intent") or "",
                 "pct": pct,
                 "text": d.get("text") or "",
                 "doneText": done_text,
@@ -655,13 +677,28 @@ class DownloadsVM(QObject):
         be resumed later; the trash icon is the destructive option.
         """
         if not dlp.is_running(video_id):
+            # Nothing is actually transferring (the worker already ended, or
+            # the row was left "downloading" by a run that died). Pressing
+            # Stop used to do nothing at all here; park it so the row turns
+            # into a resumable "Stopped" one immediately.
+            row = downloads_get(video_id) or {}
+            if (row.get("status") or "") in ("downloading", "merging"):
+                downloads_upsert(video_id, status="stopped", error_message="",
+                                 create_if_missing=False)
+                self.refresh()
+                self._tick += 1
+                self.progressChanged.emit()
+                self.toast.emit(tr("Download stopped."), "info")
             return
+        if dlp.is_cancelling(video_id):
+            return    # already stopping; a second click must not re-toast
         request_cancel(video_id)
         # `cancelling` makes late ticks from the still-unwinding worker get
         # dropped rather than reviving the row. `intent` tells _on_dl_done
         # whether to park the row for resume or delete it outright.
+        # structural: the row must flip to its "Stopping…" state right now
         dlp.publish(video_id, text=tr("Stopping…"), cancelling=True,
-                    intent="stop")
+                    intent="stop", speed=0.0, eta=0, structural=True)
         self.toast.emit(tr("Stopping download…"), "info")
 
     # ── v3.43: pause / resume (the live card's ⏸ / ▶) ─────────────────────
@@ -679,7 +716,7 @@ class DownloadsVM(QObject):
             return False
         request_cancel(video_id)
         dlp.publish(video_id, text=tr("Pausing…"), cancelling=True,
-                    intent="pause", speed=0.0, eta=0)
+                    intent="pause", speed=0.0, eta=0, structural=True)
         return True
 
     @Slot(str, result=bool)
@@ -838,6 +875,8 @@ class DownloadsVM(QObject):
         # removes it for good. Both flow through the same cancel path.
         intent = entry.get("intent") or "stop"
         stopped_pct = int(entry.get("pct") or 0)
+        # The notify this fires rebuilds the Downloads list on the NEXT turn
+        # (see _on_live_change), i.e. after the final status below is written.
         dlp.clear(video_id)
         clear_cancel(video_id)
         self._owned.discard(video_id)
@@ -860,6 +899,8 @@ class DownloadsVM(QObject):
                                  progress=stopped_pct, error_message="",
                                  create_if_missing=False)
             self.refresh()
+            self._tick += 1
+            self.progressChanged.emit()
             if intent == "resume":
                 QTimer.singleShot(0, lambda v=video_id: self.resumeDownload(v))
             elif intent == "pause":
@@ -874,6 +915,8 @@ class DownloadsVM(QObject):
                          file_size=file_size_of(filepath) if ok else 0,
                          create_if_missing=False)
         self.refresh()
+        self._tick += 1
+        self.progressChanged.emit()
         if ok:
             self.toast.emit(tr("Download finished — {p}").format(
                 p=os.path.basename(filepath or "")), "success")

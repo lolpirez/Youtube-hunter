@@ -104,3 +104,9 @@ def niche_cache_clear():
         conn.close()
     except Exception:
         pass
+    # v1.1: the per-page search cache goes with it ("clear cache" means fresh)
+    try:
+        from app.core.db.search_pages import page_cache_clear
+        page_cache_clear()
+    except Exception:
+        pass

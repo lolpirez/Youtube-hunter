@@ -1542,13 +1542,24 @@ class ArchiveVM(QObject):
         # up; the Downloads-page row is parked the same way.
         if message == DOWNLOAD_CANCELLED or was_cancelling:
             stopped_pct = int(entry.get("pct") or 0)
+            # v1.1: DB first, then the live entry. _set_download clears the
+            # shared store, which tells the Downloads page to re-read the DB;
+            # writing "stopped" afterwards left that row stuck on
+            # "downloading" until the page was reopened.
+            downloads_upsert(video_id, status="stopped", progress=stopped_pct,
+                             error_message="", create_if_missing=False)
             self._set_download(video_id, "stopped", stopped_pct,
                                tr("Stopped"), cancelling=False,
                                speed=0.0, eta=0)
-            downloads_upsert(video_id, status="stopped", progress=stopped_pct,
-                             error_message="", create_if_missing=False)
             self.toast.emit(tr("Download stopped."), "info")
             return
+        # v1.1: DB first (see the stopped branch above)
+        downloads_upsert(video_id, status="done" if ok else "error",
+                         progress=100 if ok else 0,
+                         filepath=filepath if ok else None,
+                         error_message=None if ok else message,
+                         file_size=file_size_of(filepath) if ok else 0,
+                         create_if_missing=False)
         self._set_download(video_id, "done" if ok else "error",
                            100 if ok else 0,
                            tr("Open") if ok else tr("Failed"),
@@ -1558,12 +1569,6 @@ class ArchiveVM(QObject):
             # fired from _set_download above; downloadedIds re-syncs here).
             self._downloaded.add(video_id)
             self._sync_page_downloaded()
-        downloads_upsert(video_id, status="done" if ok else "error",
-                         progress=100 if ok else 0,
-                         filepath=filepath if ok else None,
-                         error_message=None if ok else message,
-                         file_size=file_size_of(filepath) if ok else 0,
-                         create_if_missing=False)
         if ok:
             self.toast.emit(tr("Download finished — {p}").format(
                 p=os.path.basename(filepath or "")), "success")

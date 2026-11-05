@@ -308,10 +308,12 @@ class NicheVM(QObject):
 
         # form state
         self._mode = 0                 # 0 keyword, 1 channel
-        # 0 api, 1 scrape, 2 smart (v1.0.3 default): find videos on the free
-        # web results, read their numbers through the API (~2 units / 50), and
-        # fall back to search.list only when YouTube's page is unavailable
-        self._source = 2
+        # 0 Official API (v1.1 default), 1 Web scrape. The v1.0.3 "Smart"
+        # hybrid (scrape the results page, read numbers via the API) is gone:
+        # its results depended on YouTube's web page staying parseable. The
+        # Official API path is now the quota-lean one instead: per-page search
+        # cache, stable time windows, server-side cuts (see _fetch_api).
+        self._source = 0
         self._fell_back = False
         # v1.0.3: a filtered search keeps ONLY its matches (see
         # _lock_to_search_filters). {scanned, kept, filters} of the last lock.
@@ -466,6 +468,8 @@ class NicheVM(QObject):
         # Set when quota ran out after some results were already collected, so
         # the status line can say the run is partial rather than failed.
         self._quota_note = ""
+        # v1.1: "{n} search pages reused from cache, {u} units saved"
+        self._saved_note = ""
 
         self._searchDone.connect(self._on_done)
         self._archiveDone.connect(self._on_archive_done)
@@ -550,10 +554,6 @@ class NicheVM(QObject):
             return tr("Filters on: reads deeper until {n} videos match them, "
                       "and keeps only those. Web scrape spends no API quota "
                       "at all.").format(n=n_txt)
-        if self._source == 2:
-            return tr("Filters on: reads deeper until {n} videos match them, "
-                      "and keeps only those. No search quota; ~2 units per "
-                      "50 videos for exact numbers.").format(n=n_txt)
         return tr("Filters on: digs until {n} videos match them, with up to "
                   "{c} extra search calls (stops early when it can).").format(
                       n=n_txt, c=self._dig_budget())
@@ -671,18 +671,16 @@ class NicheVM(QObject):
     def sourceOptions(self):
         # Short names: the closed field is narrow. What each one costs lives
         # in sourceHints (second line in the list + the field's tooltip).
-        return [tr("Official API"), tr("Web scrape"), tr("Smart")]
+        return [tr("Official API"), tr("Web scrape")]
 
     @Property("QStringList", notify=labelsChanged)
     def sourceHints(self):
-        return [tr("Exact numbers. Every search spends search quota "
-                   "(about 100 searches a day)."),
+        return [tr("Exact numbers, every filter. Recommended. Search pages "
+                   "are cached for 6 hours, so re-running or changing a "
+                   "filter doesn't spend the same quota twice."),
                 tr("100% free: reads youtube.com directly, zero API quota. "
                    "Subscriber counts are YouTube's rounded ones; likes and "
-                   "category are unknown."),
-                tr("Free search on youtube.com, exact numbers from the API "
-                   "(~2 units per 50 videos). Uses the API search only if "
-                   "YouTube's page fails. Recommended.")]
+                   "category are unknown.")]
 
     @Property("QStringList", notify=labelsChanged)
     def presetOptions(self):
@@ -902,7 +900,21 @@ class NicheVM(QObject):
         return Property(bool, getter, setter, notify=sig)
 
     mode = _prop_int("mode", changed, lambda self: self._refresh_signal_counts())
-    source = _prop_int("source", changed)
+    def _get_source(self):
+        return self._source
+
+    def _set_source(self, v):
+        # 0 Official API, 1 Web scrape. Anything else (a stale "Smart" = 2
+        # from an older build) lands on the Official API.
+        v = int(v)
+        if v not in (0, 1):
+            v = 0
+        if v != self._source:
+            self._source = v
+            self.changed.emit()
+            self._update_quota()
+
+    source = Property(int, _get_source, _set_source, notify=changed)
     query = _prop_str("query", changed)
     sortIndex = Property(int, _get_sort_ui, _set_sort_ui, notify=changed)
     formatIndex = _prop_int("format", changed)
@@ -1770,9 +1782,6 @@ class NicheVM(QObject):
         elif self._mode == 1:
             # channel scan → no search.list bucket spend
             self._quota_text = tr("No search-quota cost")
-        elif self._source == 2:
-            self._quota_text = tr("No search-quota cost · ~2 units per 50 videos "
-                                  "for exact numbers (API search only as a backup)")
         else:
             cost = self._search_plan()
             left = search_quota_remaining([self._api_key])
@@ -2443,13 +2452,24 @@ class NicheVM(QObject):
         # up; the Downloads-page row is parked the same way.
         if message == DOWNLOAD_CANCELLED or was_cancelling:
             stopped_pct = int(entry.get("pct") or 0)
+            # v1.1: DB first, then the live entry. _set_download clears the
+            # shared store, which tells the Downloads page to re-read the DB;
+            # writing "stopped" afterwards left that row stuck on
+            # "downloading" until the page was reopened.
+            downloads_upsert(video_id, status="stopped", progress=stopped_pct,
+                             error_message="", create_if_missing=False)
             self._set_download(video_id, "stopped", stopped_pct,
                                tr("Stopped"), cancelling=False,
                                speed=0.0, eta=0)
-            downloads_upsert(video_id, status="stopped", progress=stopped_pct,
-                             error_message="", create_if_missing=False)
             self.toast.emit(tr("Download stopped."), "info")
             return
+        # v1.1: DB first (see the stopped branch above)
+        downloads_upsert(video_id, status="done" if ok else "error",
+                         progress=100 if ok else 0,
+                         filepath=filepath if ok else None,
+                         error_message=None if ok else message,
+                         file_size=file_size_of(filepath) if ok else 0,
+                         create_if_missing=False)
         self._set_download(video_id, "done" if ok else "error", 100 if ok else 0,
                            tr("Open") if ok else tr("Failed"),
                            speed=0.0, eta=0)
@@ -2458,12 +2478,6 @@ class NicheVM(QObject):
             # fires from _set_download above, and downloadedIds notifies on
             # the same signal) — no need to wait for a page revisit.
             self._downloaded.add(video_id)
-        downloads_upsert(video_id, status="done" if ok else "error",
-                         progress=100 if ok else 0,
-                         filepath=filepath if ok else None,
-                         error_message=None if ok else message,
-                         file_size=file_size_of(filepath) if ok else 0,
-                         create_if_missing=False)
         if ok:
             self.toast.emit(tr("Download finished — {p}").format(
                 p=os.path.basename(filepath or "")), "success")
@@ -2495,7 +2509,7 @@ class NicheVM(QObject):
         # the app runs, so re-read it here — otherwise the first search after
         # saving a key still sees the old (empty) value until a restart.
         self.refreshApiKeys()
-        scrape_mode = (not channel_mode) and self._source in (1, 2)
+        scrape_mode = (not channel_mode) and self._source == 1
         self._fell_back = False
         # a new search always starts from the whole pool, not a chip's country
         self._market_view = ""
@@ -2577,8 +2591,6 @@ class NicheVM(QObject):
                 # Web scrape = zero API quota: numbers come from YouTube's
                 # pages, never from videos.list / channels.list
                 params["free_stats"] = True
-            if self._source == 2 and api_key:
-                params["fallback_api"] = True
 
         self._requested_days = days
         self._from_cache = ""
@@ -2594,6 +2606,9 @@ class NicheVM(QObject):
         self._scrape_note = ""
         self._translate_note = ""
         self._quota_note = ""
+        # v1.1: "{n} search pages reused from cache, {u} units saved"
+        self._saved_note = ""
+        self._spend = {"bought": 0, "cached": 0}
         self._slice_tokens = {}
         self._slice_meta = {}
         self._stop = False
@@ -2835,6 +2850,8 @@ class NicheVM(QObject):
                     video_duration=meta.get("duration"),
                     category_id=meta.get("category") or None,
                     stop_check=self._stop_check,
+                    use_cache=not self._force,
+                    spend=self._spend_dict(),
                     limit=min(len(tokens), budget - spent,
                               self._pages_for(target - matched, matched, len(pool))))
             except ScrapeCancelled:
@@ -2994,30 +3011,6 @@ class NicheVM(QObject):
             self._from_cache = ""
         if params["mode"] == "channel":
             rows = self._fetch_channel(params)
-        elif params["source"] == "scrape" and params.get("fallback_api"):
-            # Smart: the free web results first; the paid search only when
-            # YouTube's page could not be read (blocked, changed, offline).
-            # A page that was read fine and simply had no results (or whose
-            # candidates the cheap cuts removed) is NOT a failure — falling
-            # back there would spend 100 units to find the same nothing.
-            scrape_failed = False
-            try:
-                rows = self._fetch_scrape(params)
-            except ScrapeCancelled:
-                raise
-            except Exception:                      # noqa: BLE001
-                log_crash("smart source: scrape failed, using the API\n"
-                          + traceback.format_exc())
-                scrape_failed = True
-                rows = []
-            if scrape_failed:
-                self._fell_back = True
-                api_params = dict(params, source="api")
-                self._ensure_search_quota(api_params)
-                rows = self._fetch_api(api_params)
-                self._scrape_note = tr(
-                    "YouTube's web results were unavailable, so this run used "
-                    "the official API.")
         elif params["source"] == "scrape":
             rows = self._fetch_scrape(params)
         else:
@@ -3025,6 +3018,23 @@ class NicheVM(QObject):
             rows = self._fetch_api(params)
         niche_cache_put(key, params, rows)
         return rows
+
+    def _spend_dict(self):
+        sp = getattr(self, "_spend", None)
+        if sp is None:
+            sp = self._spend = {"bought": 0, "cached": 0}
+        return sp
+
+    def _update_saved_note(self):
+        """One line for the results notes when the page cache paid off."""
+        sp = getattr(self, "_spend", None) or {}
+        n = int(sp.get("cached") or 0)
+        if n <= 0:
+            self._saved_note = ""
+            return
+        self._saved_note = tr(
+            "{n} search page(s) reused from the last 6 hours, {u} quota units "
+            "saved.").format(n=n, u=n * 100)
 
     def _fetch_api(self, params):
         yt = build_youtube_service((self._api_key or "").strip())
@@ -3056,6 +3066,9 @@ class NicheVM(QObject):
             "category": category or "",
         }
         quota_note = {}
+        # v1.1: every search page goes through the 6 h per-page cache unless
+        # "Ignore cache" is on; `spend` counts what was bought vs reused
+        self._spend = {"bought": 0, "cached": 0}
         video_ids = niche_search_api(
             yt, queries, params["order"], windows,
             params["pages"], region=api_region or None,
@@ -3064,7 +3077,9 @@ class NicheVM(QObject):
             category_id=category,
             stop_check=self._stop_check, progress=self._progress,
             target=target, tokens_out=self._slice_tokens,
-            quota_note=quota_note)
+            quota_note=quota_note, use_cache=not self._force,
+            spend=self._spend)
+        self._update_saved_note()
         if quota_note.get("partial"):
             self._quota_note = tr(
                 "Search quota ran out — showing the results found so far.")
@@ -3447,8 +3462,8 @@ class NicheVM(QObject):
                 or filters.get("channel_max_age_days")
                 or filters.get("outlier_min") is not None):
             return tr("Web scrape can't read likes, category, channel age or the "
-                      "channel's average views. Switch the source to Smart for "
-                      "those filters.")
+                      "channel's average views. Switch the source to Official "
+                      "API for those filters.")
         return ""
 
     # ── in-memory filter/sort (zero API) ────────────────────────────────
@@ -3561,6 +3576,8 @@ class NicheVM(QObject):
             add("info", self._scrape_note)
             add("translate", self._translate_note)
             add("quota", self._quota_note)
+            self._update_saved_note()
+            add("info", self._saved_note)
             add("audience", self._audience_note(pool, rows, filters))
             add("tip", self._refilter_hint(filters, len(rows)))
             facts = {
