@@ -1,11 +1,14 @@
 # In-app updates
 
-The app checks GitHub Releases of `reyzodev/youtube-hunter` 6 s after launch and every 6 h.
+The app checks GitHub Releases of `lolpirez/Youtube-hunter` 6 s after launch and every 6 h.
+
+Source-only releases are **skipped**: the app walks the release list newest-first and only offers one
+that carries a valid Windows installer, so a source drop can never hide or block a published update.
 
 ## Publishing an update
 1. Bump the version in **three** places: `app/constants.py` (`APP_VERSION`), `installer.iss` (`MyAppVersion`), `version_info.txt`.
 2. Run `build.bat` -> `Output\YouTubeHunter-Setup.exe`.
-3. On GitHub: **Releases -> Draft a new release**, tag `v1.0.1` (must be higher than the installed version), write the notes (Markdown, shown in the popup), attach the installer, **Publish** (not draft, not pre-release).
+3. On GitHub: **Releases -> Draft a new release**, tag `v1.1.0` or higher (must be higher than the installed version), write the notes (Markdown, shown in the popup), attach the installer, **Publish** (not draft, not pre-release).
 
    Name the asset `YouTubeHunter-Setup-<version>-x64.exe` so the download says what it is. The app picks the release asset whose name contains `YouTubeHunter-Setup` (see `UPDATE_ASSET_HINT` in `app/constants.py`), so the version in the file name is fine.
 

@@ -193,8 +193,8 @@ class UpdateVM(QObject):
             return
         if not rel.get("asset_url"):
             # Newer tag, but no usable installer attached (missing, still
-            # uploading, or a zip renamed to .exe). Say so and offer the
-            # release page instead of pretending the app is up to date.
+            # uploading, or a zip renamed to .exe). latest_release() already
+            # skips such releases, so this is only a safety net.
             self._rel = rel
             self._set_state("error", tr("v{v} is out, but its installer isn't on "
                                         "GitHub yet. Open the release page to "
@@ -300,4 +300,4 @@ class UpdateVM(QObject):
     @Slot()
     def openReleasePage(self):
         open_external_url(self._rel.get("page")
-                          or "https://github.com/reyzodev/youtube-hunter/releases/latest")
+                          or "https://github.com/lolpirez/Youtube-hunter/releases/latest")

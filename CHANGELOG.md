@@ -7,7 +7,13 @@ Version numbering restarted at **1.0.0** for the public release.
 
 ---
 
-## Unreleased (v1.1): downloads stop feedback, API-only Niche Finder, smoother grid
+## 1.1.0: downloads stop feedback, API-only Niche Finder, smoother grid
+
+- **Updates follow the project to `lolpirez/Youtube-hunter`.** The updater now
+  reads the new repository, and releases that carry no Windows installer are
+  skipped — a source-only release can no longer hide or block a published
+  installer. The build itself is versioned **1.1.0** so this is the baseline
+  every future update is measured against.
 
 - **Downloads: Stop/Pause now shows at once.** The row flips to "Stopping…" /
   "Pausing…" (amber bar, spinner instead of the stop button) the moment it is

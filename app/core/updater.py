@@ -28,7 +28,7 @@ import urllib.request
 from app.constants import APP_VERSION, UPDATE_ASSET_HINT, UPDATE_REPO
 from app.core.net import _urlopen, configured_proxy
 
-_API = "https://api.github.com/repos/{repo}/releases/latest"
+_API = "https://api.github.com/repos/{repo}/releases?per_page=30"
 _HEADERS = {
     "Accept": "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
@@ -67,6 +67,14 @@ def parse_version(text):
 
 def is_newer(remote, local=APP_VERSION):
     return parse_version(remote) > parse_version(local)
+
+
+def _display_version(tag):
+    """'v1.1-fixes' -> '1.1.0' so the popup shows a number, not the tag text."""
+    raw = str(tag or "").lstrip("vV")
+    if re.fullmatch(r"\d+(?:\.\d+){0,3}", raw):
+        return raw or "0.0.0"
+    return ".".join(str(n) for n in parse_version(tag)[:3])
 
 
 def _looks_like_installer(a):
@@ -116,14 +124,20 @@ _ASSET_VERSION_RE = re.compile(r"(?<![\d.])v?(\d+\.\d+(?:\.\d+){0,2})(?![\d.])")
 
 def _asset_version(name):
     """'YouTubeHunter-Setup-1.0.1-x64.exe' -> (1, 0, 1); None when the file
-    name carries no dotted version ('-x64' is not one)."""
-    m = _ASSET_VERSION_RE.search(str(name or "").lower())
+    name carries no dotted version ('-x64' is not one). The .exe suffix is
+    dropped first: without that, 'Setup-1.0.2.exe' looked version-less because
+    the dot before 'exe' blocks the trailing lookahead."""
+    stem = re.sub(r"\.(exe|msi)$", "", str(name or "").lower())
+    m = _ASSET_VERSION_RE.search(stem)
     return parse_version(m.group(1)) if m else None
 
 
 def latest_release(timeout=12):
-    """Newest non-draft, non-prerelease release as a plain dict, or raises
-    UpdateError with a message the dialog can show."""
+    """Newest published release that actually carries a Windows installer.
+
+    Source-only releases are published here too; they must never win the
+    check, or the update button would point at a release with no installer
+    (or an error) while a usable installer sits one release behind."""
     req = urllib.request.Request(_API.format(repo=UPDATE_REPO), headers=_HEADERS)
     try:
         with _urlopen(req, timeout, configured_proxy()) as resp:
@@ -144,23 +158,31 @@ def latest_release(timeout=12):
         raise UpdateError(f"GitHub answered HTTP {exc.code}.") from exc
     except (urllib.error.URLError, OSError, ValueError) as exc:
         raise UpdateError("Couldn't reach GitHub to check for updates.") from exc
-    tag = data.get("tag_name") or ""
-    # The TAG is the version. The release title is free text: v1.0.0 was
-    # titled "YouTube Hunter 1.0.1", which no installed copy could ever see.
-    asset = _pick_asset(data.get("assets"), tag)
-    digest = (asset or {}).get("digest") or ""
-    return {
-        "tag": tag,
-        "version": tag.lstrip("vV") or "0.0.0",
-        "name": data.get("name") or tag,
-        "notes": (data.get("body") or "").strip(),
-        "published": (data.get("published_at") or "")[:10],
-        "page": data.get("html_url") or f"https://github.com/{UPDATE_REPO}/releases/latest",
-        "asset_name": (asset or {}).get("name", ""),
-        "asset_url": (asset or {}).get("browser_download_url", ""),
-        "asset_size": int((asset or {}).get("size") or 0),
-        "sha256": digest.split(":", 1)[1].lower() if digest.startswith("sha256:") else "",
-    }
+    if not isinstance(data, list):
+        data = []
+    for rel in data:
+        if rel.get("draft") or rel.get("prerelease"):
+            continue
+        tag = rel.get("tag_name") or ""
+        # The TAG is the version. The release title is free text: v1.0.0 was
+        # titled "YouTube Hunter 1.0.1", which no installed copy could see.
+        asset = _pick_asset(rel.get("assets"), tag)
+        if not asset:
+            continue
+        digest = asset.get("digest") or ""
+        return {
+            "tag": tag,
+            "version": _display_version(tag),
+            "name": rel.get("name") or tag,
+            "notes": (rel.get("body") or "").strip(),
+            "published": (rel.get("published_at") or "")[:10],
+            "page": rel.get("html_url") or f"https://github.com/{UPDATE_REPO}/releases/latest",
+            "asset_name": asset.get("name", ""),
+            "asset_url": asset.get("browser_download_url", ""),
+            "asset_size": int(asset.get("size") or 0),
+            "sha256": digest.split(":", 1)[1].lower() if digest.startswith("sha256:") else "",
+        }
+    raise UpdateError("No installer has been published on GitHub yet.")
 
 
 def update_dir():

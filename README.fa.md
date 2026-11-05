@@ -10,7 +10,7 @@
 
 [نصب](docs/INSTALL.md) · [افزونه مرورگر](docs/EXTENSION.md) · [ساخت از سورس](#ساخت-از-سورس) · [تغییرات](CHANGELOG.md)
 
-![Version](https://img.shields.io/badge/version-1.0.2-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-1.1.0-22c55e?style=flat-square)
 ![Platform](https://img.shields.io/badge/Windows-10%201809%2B%20%7C%2011%20(x64)-0ea5e9?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab?style=flat-square&logo=python&logoColor=white)
 ![Qt](https://img.shields.io/badge/Qt%20Quick-6.12-41cd52?style=flat-square&logo=qt&logoColor=white)
@@ -30,7 +30,7 @@ YouTube Hunter یک فضای کار دسکتاپ برای افرادی است ک
 
 ## دانلود و نصب
 
-1. **[آخرین نسخه](../../releases/latest)** را باز کنید و **`YouTubeHunter-Setup-1.0.2-x64.exe`** را دانلود کنید.
+1. **[آخرین نسخه](../../releases/latest)** را باز کنید و **`YouTubeHunter-Setup-1.1.0-x64.exe`** را دانلود کنید.
 2. آن را اجرا کنید. نصب **برای هر کاربر** در `%LOCALAPPDATA%\Programs\YouTube Hunter` انجام می‌شود — بدون درخواست مدیر، بدون UAC و بدون نوشتن چیزی در `Program Files`.
 3. **YouTube Hunter** را از منوی Start یا میانبر دسکتاپ اجرا کنید.
 
@@ -128,7 +128,7 @@ YouTube Hunter یک فضای کار دسکتاپ برای افرادی است ک
 پیش‌نیازها: **Python 3.11+ (64-bit)** روی ویندوز و [Inno Setup 6](https://jrsoftware.org/isdl.php) در صورت نیاز به ساخت نصب‌کننده.
 
 ```bat
-git clone https://github.com/reyzodev/youtube-hunter.git
+git clone https://github.com/lolpirez/Youtube-hunter.git
 cd youtube-hunter
 build.bat
 ```
@@ -199,7 +199,7 @@ installer.iss             Inno Setup script (bundles the app, the extension, the
 
 ## نسخه
 
-**1.0.2** — بلوپرینت‌های Content Lab فقط همان چیزی را می‌سازند که روی صفحه است: کاور و پرده باز برای اولین رنگ ساخته می‌شوند و بقیه پرده‌ها یکی‌یکی در زمان بیکاری بار می‌شوند؛ بنابراین اولین بلوپرینت در حدود ۱ ثانیه آماده می‌شود (قبلاً ۲.۴ تا ۳.۶ ثانیه) و سوئیچ بین ایده‌ها در ۰.۲ تا ۰.۹ ثانیه می‌نشیند. مجموعه آیکون‌ها بازطراحی شده (Aurora Pro)؛ هر دو شبکه ویدیویی با چرخ گلدان‌دار اسکرول می‌شوند و hover به‌محض نشانه‌گیری برمی‌گردد؛ پیکر دانلود فوراً فرمت را عوض می‌کند؛ Niche Finder با دستور‌های هدف («Pick a hunt») و Fine-tune شروع می‌شود؛ greenlight ایده‌های AI از اسکیمای v10 «Masterplan» پیروی می‌کند. Scraper وقتی YouTube IP را بلاک می‌کند اعلان دسکتاپ می‌فرستد و بلاک را به‌صورت کارت شیشه‌ای نشان می‌دهد. Monetize Checker نرخ RPM را بر اساس مخاطب قیمت می‌گذارد و از برنامه واقعی Partner Program پیروی می‌کند؛ زنگ اعلان‌ها همان لحظه کلیک پر می‌شود؛ تنظیمات در پس‌زمینه ذخیره می‌شوند؛ My channel یک کارت شناسنامه کانال است (Format، Channel، Stage، Voice، Limits)؛ و AI Chat پاسخ‌های طولانی را آرام‌تر رندر می‌کند.
+**1.1.0** — دانلودها همان لحظه که توقف را می‌زنید «Stopping…» / «Pausing…» را نشان می‌دهند؛ از هر گریدی، با نوار کهربایی و اسپینر به‌جای دکمه توقف. Niche Finder منبع Smart را حذف می‌کند (Official API پیش‌فرض است و Web scrape رایگان می‌ماند) و جست‌وجوهای تکراری از کش شش‌ساعتهٔ هر صفحه سرو می‌شوند تا اجرای دوبارهٔ یک هانت quota مصرف نکند. به‌روزرسانی‌ها حالا از همین ریپو می‌آیند و برنامه فقط ریلیزهایی را پیشنهاد می‌دهد که واقعاً نصب‌ساز دارند.
 
 ## مجوز
 

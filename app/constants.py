@@ -7,7 +7,7 @@
 # Single source of truth: the sidebar footer shows it and the build stamps it
 # onto the .exe. installer.iss carries its own copy (Inno Setup cannot read a
 # Python constant) — keep the two in step when bumping.
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.1.0"
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -17,7 +17,7 @@ APP_VERSION = "1.0.2"
 # (e.g. v1.2.0) is newer than APP_VERSION and that carries the installer .exe
 # shows the update button in the title bar. Set "auto_update": false in
 # config.json to turn the check off.
-UPDATE_REPO = "reyzodev/youtube-hunter"
+UPDATE_REPO = "lolpirez/Youtube-hunter"
 UPDATE_ASSET_HINT = "YouTubeHunter-Setup"
 UPDATE_CHECK_HOURS = 6
 
