@@ -398,7 +398,7 @@ def _translate_batch(client, cues, ids, src, tgt, brief_txt, tone, dub, title=""
                                          str(getattr(client, "model", "") or "")) if x) or "The model"
             raise RuntimeError(
                 f"{who} answered, but not in the format captions need (JSON). Press Resume, "
-                f"or pick another model in Settings → Which AI does what → Captions.") from e
+                f"or pick another model in Settings → Captions & Dub → Captions.") from e
     got = {}
     for item in (data.get("t") if isinstance(data, dict) else data) or []:
         try:
@@ -427,7 +427,8 @@ def translate_cues(cues, tgt, src="", title="", mode="subtitle", on_progress=Non
     only). raw_asr: the lines are YouTube's automatic captions."""
     if not cues:
         return [], {}
-    client = client or _client("dub" if mode == "dub" else "captions")
+    # v1.7: the dub's lines follow Settings → Captions & Dub → Script
+    client = client or _client("script" if mode == "dub" else "captions")
     dub = mode == "dub"
     polish = mode == "polish"
     if polish:
@@ -522,7 +523,7 @@ def translate_cues(cues, tgt, src="", title="", mode="subtitle", on_progress=Non
 
 def shorten_line(text, seconds, tgt, client=None):
     """One dub line that ran long: ask for a tighter version that fits."""
-    client = client or _client("dub")
+    client = client or _client("script")
     prompt = (f"This {_lang_label(tgt)} dubbing line must be spoken in {seconds:.1f} seconds at a "
               f"natural pace but it is too long:\n{text}\n\n"
               "Rewrite it shorter with the same meaning, emotion and register. Keep any <tags>. "
@@ -541,7 +542,7 @@ def shorten_lines(items, tgt, client=None, should_cancel=None, batch=25):
     skips are simply left out (the caller keeps the long take)."""
     if not items:
         return {}
-    client = client or _client("dub")
+    client = client or _client("script")
     out = {}
     for k in range(0, len(items), batch):
         if should_cancel and should_cancel():

@@ -92,6 +92,10 @@ Item {
         }
         function onToast(msg, kind) { toast.show(msg, kind) }
     }
+    Connections {
+        target: VoiceEngine
+        function onToast(msg, kind) { toast.show(msg, kind) }
+    }
 
     // Arm the AppController nav guard while this page is visible and has unsaved
     // edits, so leaving raises the save/discard/stay dialog (owned by Main.qml).
@@ -173,7 +177,7 @@ Item {
           sub: I18n.tr("Google keys, step by step"), tracked: false,
           keys: "guide help how get create google cloud console credentials ai studio gemini youtube step error 403 " + I18n.tr("guide google key help") },
         { icon: "psychology",  title: I18n.tr("AI Providers"),
-          sub: I18n.tr("Providers, routing & effort"), tracked: true,
+          sub: I18n.tr("Keys, models, ideas & effort"), tracked: true,
           keys: "ai provider providers openai anthropic gemini custom openrouter deepseek groq ollama model key host path proxy router endpoint fetch validate routing effort default ideas chat reports " + I18n.tr("ai provider model proxy routing effort") },
         { icon: "downloading", title: I18n.tr("Download Engine"),
           sub: I18n.tr("Runtime & downloader"), tracked: true,
@@ -184,12 +188,18 @@ Item {
         // v3.43: always reachable, also after "Skip for now"
         { icon: "extension",   title: I18n.tr("Browser extension"),
           sub: I18n.tr("Download button on YouTube"), tracked: true,
-          keys: "extension extensions chrome edge brave browser addon add-on plugin youtube button download unpacked developer " + I18n.tr("extension browser chrome youtube button") }
+          keys: "extension extensions chrome edge brave browser addon add-on plugin youtube button download unpacked developer " + I18n.tr("extension browser chrome youtube button") },
+        // v1.6: everything about captions and the AI dub in one place (was
+        // split between AI Providers → "Which AI does what" and "Voices & quota")
+        { icon: "volume_up",   title: I18n.tr("Captions & Dub"),
+          sub: I18n.tr("Subtitles, dub script, voices, quota"), tracked: false,
+          keys: "script adapt adaptation rewrite model provider caption captions subtitle subtitles srt translate translation listen listens hear audio transcript voice voices dub dubbing elevenlabs eleven labs tts speaker speakers gender quota saver requests limit gemini free tier credits " + I18n.tr("captions subtitles dub voice elevenlabs quota") }
     ]
     function sectionOk(i) {
         return i === 1 ? page.ytOk : i === 3 ? page.aiOk
              : i === 4 ? page.engineOk : i === 5 ? page.outputOk
-             : i === 6 ? ExtensionSetup.connected : true
+             : i === 6 ? ExtensionSetup.connected
+             : i === 7 ? (VoiceEngine.saverOn || VoiceEngine.hasKey) : true
     }
     // The seven cards live inside secLoader (see the comment there): find the
     // one asked for by the name it carries, null until the loader is ready.
@@ -1147,6 +1157,230 @@ Item {
                 color: Theme.on_surface_var
                 wrapMode: Text.WordWrap
                 Layout.fillWidth: true
+            }
+        }
+    }
+
+    // v1.6: a group inside a long section (Captions / AI dub / Gemini
+    // quota): a hairline, an accent glyph tile and a heavier title, so the
+    // section reads as three parts at a glance instead of one long list.
+    component GroupHead: ColumnLayout {
+        id: gh
+        property string icon: ""
+        property string title: ""
+        property string detail: ""
+        property bool first: false
+        // v1.7: a step number ("1", "2" …) shown in the tile instead of the icon
+        property string step: ""
+        Layout.fillWidth: true
+        Layout.topMargin: gh.first ? 0 : Tokens.space4
+        spacing: Tokens.space4
+        Rectangle {
+            visible: !gh.first
+            Layout.fillWidth: true
+            implicitHeight: 1
+            color: Theme.divider_h
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Tokens.space3
+            Rectangle {
+                Layout.preferredWidth: 32; Layout.preferredHeight: 32
+                Layout.alignment: Qt.AlignTop
+                radius: 10
+                color: U.withAlpha(Theme.primary, Theme.isDark ? 0.16 : 0.10)
+                C.IconGlyph { visible: gh.step === ""; anchors.centerIn: parent; name: gh.icon; size: 16; glyphColor: Theme.primary }
+                C.AppText {
+                    visible: gh.step !== ""
+                    anchors.centerIn: parent
+                    text: gh.step
+                    mono: true
+                    weight: Tokens.weightBold
+                    font.pixelSize: Tokens.fontLabel
+                    color: Theme.primary
+                }
+            }
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 2
+                C.AppText {
+                    text: gh.title
+                    weight: Tokens.weightBold
+                    font.pixelSize: Tokens.fontSubtitle
+                    color: Theme.text_strong
+                }
+                C.AppText {
+                    visible: gh.detail !== ""
+                    text: gh.detail
+                    font.pixelSize: Tokens.fontCaption + 1
+                    color: Theme.on_surface_var
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+            }
+        }
+    }
+
+    // v1.6: one of the two voice engines for the dub, as a radio card
+    component EngineCard: AbstractButton {
+        id: ec
+        property string glyph: ""
+        property string name: ""
+        property string desc: ""
+        property string foot: ""
+        property bool selected: false
+        property bool ready: true
+        Layout.fillWidth: true
+        Layout.preferredWidth: 1
+        implicitHeight: ecCol.implicitHeight + Tokens.space4 * 2
+        hoverEnabled: true
+        padding: 0
+        HoverHandler { cursorShape: Qt.PointingHandCursor }
+        Accessible.role: Accessible.RadioButton
+        Accessible.name: ec.name
+        Accessible.checked: ec.selected
+        background: Rectangle {
+            radius: Tokens.radiusLg
+            color: ec.selected ? U.withAlpha(Theme.primary, Theme.isDark ? 0.10 : 0.06)
+                 : ec.hovered ? U.hoverTint(Theme.surface_low, Theme.isDark) : Theme.surface_low
+            border.width: ec.selected ? 2 : 1
+            border.color: ec.selected ? Theme.primary : Theme.border
+            Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+        }
+        contentItem: Item {
+            ColumnLayout {
+                id: ecCol
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: Tokens.space4
+                spacing: Tokens.space2
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Tokens.space3
+                    Rectangle {
+                        Layout.preferredWidth: 34; Layout.preferredHeight: 34
+                        radius: 10
+                        color: ec.selected ? U.withAlpha(Theme.primary, Theme.isDark ? 0.2 : 0.13)
+                                           : U.withAlpha(Theme.on_surface, Theme.isDark ? 0.07 : 0.05)
+                        C.IconGlyph { anchors.centerIn: parent; name: ec.glyph; fill: ec.selected; size: 17
+                                      glyphColor: ec.selected ? Theme.primary : Theme.on_surface_var }
+                    }
+                    C.AppText {
+                        Layout.fillWidth: true
+                        text: ec.name
+                        weight: Tokens.weightBold
+                        font.pixelSize: Tokens.fontLabel
+                        color: Theme.text_strong
+                        elide: Text.ElideRight
+                    }
+                    // radio dot
+                    Rectangle {
+                        Layout.preferredWidth: 20; Layout.preferredHeight: 20
+                        radius: 10
+                        color: "transparent"
+                        border.width: 2
+                        border.color: ec.selected ? Theme.primary : Theme.border_med
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: 10; height: 10; radius: 5
+                            color: Theme.primary
+                            visible: ec.selected
+                        }
+                    }
+                }
+                C.AppText {
+                    Layout.fillWidth: true
+                    text: ec.desc
+                    font.pixelSize: Tokens.fontCaption + 1
+                    lineHeight: 1.3
+                    color: Theme.on_surface_var
+                    wrapMode: Text.WordWrap
+                }
+                RowLayout {
+                    visible: ec.foot !== ""
+                    Layout.fillWidth: true
+                    spacing: 6
+                    C.IconGlyph { name: ec.ready ? "check_circle" : "warning"; size: 13
+                                  glyphColor: ec.ready ? Theme.secondary_container : Theme.warn }
+                    C.AppText {
+                        Layout.fillWidth: true
+                        text: ec.foot
+                        font.pixelSize: Tokens.fontCaption
+                        weight: Tokens.weightDemiBold
+                        color: ec.ready ? Theme.secondary_container : Theme.warn
+                        wrapMode: Text.WordWrap
+                    }
+                }
+            }
+        }
+    }
+
+    // v1.6: one step of "how your dub is made" (Words → Script → Voices).
+    // v1.7: numbered, shows whether it is set up (tone 1 ok / 2 needs setup)
+    // and clicks through to its step below.
+    component FlowStep: AbstractButton {
+        id: fs
+        property string glyph: ""
+        property string label: ""
+        property string value: ""
+        property string step: ""
+        property int tone: 0
+        property bool lead: false
+        hoverEnabled: true
+        padding: 0
+        implicitWidth: fsRow.implicitWidth + 24
+        implicitHeight: 44
+        HoverHandler { cursorShape: Qt.PointingHandCursor }
+        Accessible.name: fs.label + ": " + fs.value
+        background: Rectangle {
+            radius: Tokens.radiusMd
+            color: fs.lead ? U.withAlpha(Theme.primary, Theme.isDark ? 0.14 : 0.09)
+                 : fs.hovered ? U.withAlpha(Theme.on_surface, Theme.isDark ? 0.08 : 0.06)
+                 : U.withAlpha(Theme.on_surface, Theme.isDark ? 0.05 : 0.035)
+            border.width: 1
+            border.color: fs.tone === 2 ? U.withAlpha(Theme.warn, 0.5)
+                        : fs.lead ? U.withAlpha(Theme.primary, 0.32) : Theme.border
+            Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+        }
+        contentItem: Item {
+            Row {
+                id: fsRow
+                anchors.centerIn: parent
+                spacing: 9
+                // the step number, ringed: green tick when set up, amber when not
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 22; height: 22; radius: 11
+                    color: fs.tone === 1 ? U.withAlpha(Theme.secondary_container, 0.16)
+                         : fs.tone === 2 ? U.withAlpha(Theme.warn, 0.16)
+                         : U.withAlpha(Theme.on_surface, 0.06)
+                    C.AppText {
+                        visible: fs.tone === 0
+                        anchors.centerIn: parent
+                        text: fs.step
+                        mono: true
+                        weight: Tokens.weightBold
+                        font.pixelSize: Tokens.fontMicro
+                        color: Theme.on_surface_var
+                    }
+                    C.IconGlyph {
+                        visible: fs.tone !== 0
+                        anchors.centerIn: parent
+                        name: fs.tone === 1 ? "check_circle" : "warning"
+                        size: 13
+                        glyphColor: fs.tone === 1 ? Theme.secondary_container : Theme.warn
+                    }
+                }
+                Column {
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 0
+                    C.AppText { text: (fs.step !== "" ? fs.step + " · " : "") + fs.label
+                                font.pixelSize: Tokens.fontMicro; weight: Tokens.weightBold
+                                font.capitalization: Font.AllUppercase; font.letterSpacing: 0.6; color: Theme.on_surface_var }
+                    C.AppText { text: fs.value; font.pixelSize: Tokens.fontCaption; weight: Tokens.weightDemiBold
+                                color: fs.tone === 2 ? Theme.warn : Theme.text_strong }
+                }
             }
         }
     }
@@ -2613,14 +2847,55 @@ Item {
                                     }
                                 }
 
-                                // ── routing: which AI does what ──
+                                // ── routing: ideas (captions & the dub live in Captions & Dub) ──
                                 BlockHead {
                                     Layout.topMargin: Tokens.space3
                                     icon: "route"
-                                    title: I18n.tr("Which AI does what")
-                                    detail: I18n.tr("Pin ideas, captions and the AI dub to their own provider and model, then Test each one. Any model translates captions (a Gemini model listens for the ones that can't hear audio). The dub works with Gemini models only. AI Chat picks its own model in the chat.")
+                                    title: I18n.tr("Which AI writes ideas")
+                                    detail: I18n.tr("Pin AI Ideas and Content Lab blueprints to one provider and model, and set how hard it thinks. AI Chat picks its own model in the chat.")
                                 }
-                                C.AiRoutingPanel { Layout.fillWidth: true }
+                                C.AiRoutingPanel { Layout.fillWidth: true; features: ["ideas"] }
+
+                                // v1.6: the captions & dub picks moved; say where, one click away
+                                AbstractButton {
+                                    id: toCapDub
+                                    Layout.fillWidth: true
+                                    implicitHeight: 52
+                                    hoverEnabled: true
+                                    padding: 0
+                                    HoverHandler { cursorShape: Qt.PointingHandCursor }
+                                    onClicked: page.jumpTo(7, true)
+                                    background: Rectangle {
+                                        radius: 14
+                                        color: toCapDub.hovered ? U.withAlpha(Theme.on_surface, Theme.isDark ? 0.07 : 0.05)
+                                                                : U.withAlpha(Theme.on_surface, Theme.isDark ? 0.035 : 0.025)
+                                        border.width: 1
+                                        border.color: toCapDub.hovered ? Theme.border_med : Theme.border
+                                        Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durFast } }
+                                    }
+                                    contentItem: Item {
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.leftMargin: Tokens.space4
+                                            anchors.rightMargin: Tokens.space4
+                                            spacing: Tokens.space3
+                                            C.IconGlyph { name: "volume_up"; size: 17; glyphColor: Theme.on_surface_var }
+                                            C.AppText {
+                                                Layout.fillWidth: true
+                                                text: I18n.tr("Captions and the AI dub have their own AI picks, voices and quota.")
+                                                color: Theme.on_surface
+                                                elide: Text.ElideRight
+                                            }
+                                            C.AppText {
+                                                text: I18n.tr("Captions & Dub")
+                                                weight: Tokens.weightBold
+                                                font.pixelSize: Tokens.fontCaption + 1
+                                                color: Theme.primary
+                                            }
+                                            C.IconGlyph { name: I18n.rtl ? "arrow_back" : "arrow_forward"; size: 16; glyphColor: Theme.primary }
+                                        }
+                                    }
+                                }
 
                                 // what the default provider can do for the AI features
                                 Rectangle {
@@ -3085,6 +3360,358 @@ Item {
                                 C.ExtensionGuide {
                                     visible: secExtension.showSteps
                                     Layout.fillWidth: true
+                                }
+                            }
+
+                            // ═══ CAPTIONS & DUB ═══ v1.7: one guided page.
+                            // The map at the top is the table of contents AND
+                            // the status: ① Words → ② Script → ③ Voices, each
+                            // with a check or a warning, and a click scrolls
+                            // to that step. The groups below carry the same
+                            // numbers, in the order the work happens, so a
+                            // first-time user just reads down. Things most
+                            // people never touch (ElevenLabs while Gemini
+                            // voices are picked, the Gemini listening model
+                            // with ElevenLabs, quota) stay folded or last.
+                            SettingsSection {
+                                id: secVoices
+                                objectName: "settingsSection7"
+                                icon: "volume_up"
+                                title: I18n.tr("Captions & Dub")
+                                subtitle: I18n.tr("Subtitles and AI dubbing in another language. Set it up once, top to bottom: every video then uses these picks.")
+                                dimmed: !page.matches(7)
+                                readonly property bool eleven: VoiceEngine.engine === "elevenlabs"
+                                readonly property bool geminiKey: String((Settings.aiProfileMap["gemini"] || {}).apiKey || "") !== ""
+                                // the ElevenLabs card was clicked before a key existed
+                                property bool elevenOpen: false
+                                // ElevenLabs voices: show the (optional) Gemini listening model
+                                property bool listenOpen: false
+
+                                function route(f) {
+                                    var rs = Settings.aiRoutes || []
+                                    for (var i = 0; i < rs.length; i++)
+                                        if (rs[i].feature === f) return rs[i]
+                                    return ({})
+                                }
+                                function shortModel(m) {
+                                    var s = String(m || "")
+                                    var k = s.lastIndexOf("/")
+                                    return k >= 0 ? s.substring(k + 1) : s
+                                }
+                                readonly property var capR: route("captions")
+                                readonly property var scriptR: route("script")
+                                readonly property bool capOk: capR.ready !== false
+                                readonly property bool scriptOk: scriptR.ready !== false
+                                readonly property bool voicesOk: eleven ? VoiceEngine.hasKey : geminiKey
+                                readonly property int todo: (capOk ? 0 : 1) + (scriptOk ? 0 : 1) + (voicesOk ? 0 : 1)
+                                function goTo(it) { if (it) scroll.scrollToItem(it, Tokens.space5) }
+
+                                trailing: [
+                                    StatusChip {
+                                        text: secVoices.todo === 0 ? I18n.tr("Ready")
+                                                                   : I18n.tr("{n} to set up").replace("{n}", secVoices.todo)
+                                        tint: secVoices.todo === 0 ? Theme.secondary_container : Theme.warn
+                                    },
+                                    StatusChip {
+                                        text: I18n.tr("Gemini today: {n}").replace("{n}", VoiceEngine.usage.total || 0)
+                                        tint: (VoiceEngine.usage.total || 0) >= 15 ? Theme.warn : Theme.secondary_container
+                                    }
+                                ]
+                                Component.onCompleted: VoiceEngine.refreshUsage()
+
+                                // ── the map: how a dub is made, live from the picks ──
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    radius: Tokens.radiusLg
+                                    color: U.withAlpha(Theme.on_surface, Theme.isDark ? 0.03 : 0.02)
+                                    border.width: 1
+                                    border.color: Theme.border
+                                    implicitHeight: dubMap.implicitHeight + Tokens.space4 * 2
+                                    ColumnLayout {
+                                        id: dubMap
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        anchors.margins: Tokens.space4
+                                        spacing: Tokens.space3
+                                        C.AppText {
+                                            text: I18n.tr("How a dub is made")
+                                            font.pixelSize: Tokens.fontMicro
+                                            font.capitalization: Font.AllUppercase
+                                            font.letterSpacing: 0.8
+                                            weight: Tokens.weightBold
+                                            color: Theme.on_surface_var
+                                        }
+                                        Flow {
+                                            Layout.fillWidth: true
+                                            spacing: 6
+                                            FlowStep {
+                                                step: "1"
+                                                glyph: "subject"
+                                                label: I18n.tr("Words")
+                                                value: secVoices.capOk ? I18n.tr("YouTube captions, or AI listens")
+                                                                       : I18n.tr("Needs an AI provider")
+                                                tone: secVoices.capOk ? 1 : 2
+                                                onClicked: secVoices.goTo(grpWords)
+                                            }
+                                            Item { width: 13; height: 44; C.IconGlyph { anchors.centerIn: parent; name: I18n.rtl ? "arrow_back" : "arrow_forward"; size: 13; glyphColor: Theme.on_surface_var } }
+                                            FlowStep {
+                                                step: "2"
+                                                glyph: "translate"
+                                                label: I18n.tr("Script")
+                                                value: secVoices.scriptOk
+                                                       ? (secVoices.scriptR.resolvedName || "") + " · " + secVoices.shortModel(secVoices.scriptR.resolvedModel)
+                                                       : I18n.tr("Not set up")
+                                                tone: secVoices.scriptOk ? 1 : 2
+                                                onClicked: secVoices.goTo(grpScript)
+                                            }
+                                            Item { width: 13; height: 44; C.IconGlyph { anchors.centerIn: parent; name: I18n.rtl ? "arrow_back" : "arrow_forward"; size: 13; glyphColor: Theme.on_surface_var } }
+                                            FlowStep {
+                                                step: "3"
+                                                lead: true
+                                                glyph: "volume_up"
+                                                label: I18n.tr("Voices")
+                                                value: secVoices.eleven ? I18n.tr("ElevenLabs") : I18n.tr("Gemini")
+                                                tone: secVoices.voicesOk ? 1 : 2
+                                                onClicked: secVoices.goTo(grpVoices)
+                                            }
+                                        }
+                                        C.AppText {
+                                            Layout.fillWidth: true
+                                            text: I18n.tr("Subtitles only need step 1. Who speaks, and whether it's a man or a woman, is detected from the voice itself, free.")
+                                            font.pixelSize: Tokens.fontCaption
+                                            color: Theme.on_surface_var
+                                            wrapMode: Text.WordWrap
+                                        }
+                                    }
+                                }
+
+                                // ── 1. WORDS ──
+                                GroupHead {
+                                    id: grpWords
+                                    step: "1"
+                                    title: I18n.tr("Words")
+                                    detail: I18n.tr("Where the lines come from. YouTube's own captions are free; when a video has none, Gemini listens to the audio. The same AI translates subtitles.")
+                                }
+                                C.AiRoutingPanel { Layout.fillWidth: true; features: ["captions"] }
+
+                                // ── 2. SCRIPT ──
+                                GroupHead {
+                                    id: grpScript
+                                    step: "2"
+                                    title: I18n.tr("Script")
+                                    detail: I18n.tr("Who writes the dub: translates the lines and rewrites them so they sound natural and fit the timing. Gemini by default; any provider from AI Providers works.")
+                                }
+                                C.AiRoutingPanel { Layout.fillWidth: true; features: ["script"] }
+
+                                // ── 3. VOICES ──
+                                GroupHead {
+                                    id: grpVoices
+                                    step: "3"
+                                    title: I18n.tr("Voices")
+                                    detail: I18n.tr("Who speaks the dub. Every speaker gets a voice of their own, a woman a female voice and a man a male one.")
+                                }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Tokens.space3
+                                    EngineCard {
+                                        glyph: "provider_gemini"
+                                        name: I18n.tr("Gemini voices")
+                                        desc: I18n.tr("Free with a Google Gemini key. Uses Gemini requests from the daily limit.")
+                                        selected: !secVoices.eleven
+                                        ready: secVoices.geminiKey
+                                        foot: secVoices.geminiKey ? I18n.tr("Gemini key ready") : I18n.tr("Needs a Gemini key")
+                                        onClicked: VoiceEngine.setEngine("gemini")
+                                    }
+                                    EngineCard {
+                                        glyph: "volume_up"
+                                        name: I18n.tr("ElevenLabs voices")
+                                        desc: I18n.tr("The most natural voices, 90+ languages. Uses ElevenLabs credits, not Gemini requests.")
+                                        selected: secVoices.eleven
+                                        ready: VoiceEngine.hasKey
+                                        foot: VoiceEngine.hasKey ? I18n.tr("Key saved · {v}").replace("{v}", VoiceEngine.voiceName)
+                                                                 : I18n.tr("Needs an ElevenLabs key")
+                                        onClicked: {
+                                            if (VoiceEngine.hasKey) {
+                                                VoiceEngine.setEngine("elevenlabs")
+                                            } else {
+                                                secVoices.elevenOpen = true
+                                                Qt.callLater(function () { elField.inputItem.forceActiveFocus() })
+                                            }
+                                        }
+                                    }
+                                }
+                                // Gemini voices picked, no key: one clear way out
+                                Callout {
+                                    visible: !secVoices.eleven && !secVoices.geminiKey
+                                    icon: "key"
+                                    tint: Theme.warn
+                                    text: I18n.tr("Gemini voices need a Google Gemini key (free from Google AI Studio). Add it in AI Providers, or pick ElevenLabs voices.")
+                                }
+                                C.PrimaryButton {
+                                    visible: !secVoices.eleven && !secVoices.geminiKey
+                                    variant: "ghost"
+                                    iconName: "key"
+                                    text: I18n.tr("Add a Gemini key")
+                                    onClicked: page.jumpTo(3, true)
+                                }
+
+                                // ElevenLabs: key, model, main voice. Only while it's
+                                // picked (or its card was clicked to add the key).
+                                ColumnLayout {
+                                    visible: secVoices.eleven || secVoices.elevenOpen
+                                    Layout.fillWidth: true
+                                    spacing: Tokens.space3
+                                    BlockHead {
+                                        Layout.topMargin: Tokens.space2
+                                        icon: "key"
+                                        title: I18n.tr("ElevenLabs")
+                                        detail: I18n.tr("Paste your API key (free plan: 10,000 credits a month). It needs the Text to Speech permission. Once it checks out, ElevenLabs voices are picked.")
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: Tokens.space3
+                                        C.SmartField {
+                                            id: elField
+                                            Layout.fillWidth: true
+                                            label: I18n.tr("ELEVENLABS API KEY")
+                                            icon: "vpn_key"
+                                            mono: true
+                                            echoMode: TextInput.Password
+                                            placeholder: VoiceEngine.hasKey ? VoiceEngine.keyMasked : "sk_…"
+                                            helper: VoiceEngine.statusText
+                                            tone: VoiceEngine.status === 2 ? "ok" : VoiceEngine.status === 3 ? "error" : ""
+                                            onAccepted: if (elField.text.trim() !== "") { VoiceEngine.setKey(elField.text); elField.text = "" }
+                                        }
+                                        C.ActionButton {
+                                            Layout.alignment: Qt.AlignTop
+                                            iconName: "verified"
+                                            text: elField.text.trim() !== "" ? I18n.tr("Save & check") : I18n.tr("Check")
+                                            busyText: I18n.tr("Checking …")
+                                            okText: I18n.tr("Valid")
+                                            failText: I18n.tr("Failed")
+                                            enabled: elField.text.trim() !== "" || VoiceEngine.hasKey
+                                            status: VoiceEngine.status
+                                            onClicked: {
+                                                if (elField.text.trim() !== "") { VoiceEngine.setKey(elField.text); elField.text = "" }
+                                                else VoiceEngine.checkKey()
+                                            }
+                                        }
+                                    }
+                                    // the key just arrived from the open card: pick ElevenLabs
+                                    Connections {
+                                        target: VoiceEngine
+                                        function onChanged() {
+                                            if (VoiceEngine.hasKey && secVoices.elevenOpen && !secVoices.eleven) {
+                                                secVoices.elevenOpen = false
+                                                VoiceEngine.setEngine("elevenlabs")
+                                            }
+                                        }
+                                    }
+                                    Flow {
+                                        Layout.fillWidth: true
+                                        spacing: Tokens.space2
+                                        C.PrimaryButton {
+                                            variant: "ghost"
+                                            iconName: "open_in_new"
+                                            text: I18n.tr("Get a key")
+                                            onClicked: Qt.openUrlExternally(VoiceEngine.keyPageUrl())
+                                        }
+                                        C.PrimaryButton {
+                                            visible: VoiceEngine.hasKey
+                                            variant: "ghost"
+                                            iconName: "delete"
+                                            text: I18n.tr("Remove key")
+                                            onClicked: VoiceEngine.clearKey()
+                                        }
+                                    }
+                                    RowGroup {
+                                        visible: VoiceEngine.hasKey
+                                        SettingRow {
+                                            icon: "tune"
+                                            label: I18n.tr("Model")
+                                            description: I18n.tr("v4 / v3 act out laughs and sighs and speak Persian. Flash uses half the credits.")
+                                            C.Dropdown {
+                                                implicitWidth: 240
+                                                model: VoiceEngine.models.map(function (m) { return m.label })
+                                                currentIndex: VoiceEngine.modelIndex
+                                                onActivated: VoiceEngine.setModel(currentIndex)
+                                            }
+                                        }
+                                        RowSep {}
+                                        SettingRow {
+                                            icon: "user"
+                                            label: I18n.tr("Main voice")
+                                            description: I18n.tr("For the speaker who talks the most; everyone else gets a different voice of their own gender. Your own voices appear after Check.")
+                                            C.Dropdown {
+                                                implicitWidth: 280
+                                                model: VoiceEngine.voices.map(function (v) { return v.label })
+                                                currentIndex: VoiceEngine.voiceIndex
+                                                onActivated: VoiceEngine.setVoice(currentIndex)
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // the Gemini model that listens (and, with Gemini
+                                // voices, speaks). Optional with ElevenLabs.
+                                C.PrimaryButton {
+                                    visible: secVoices.eleven
+                                    variant: "ghost"
+                                    iconName: secVoices.listenOpen ? "expand_less" : "expand_more"
+                                    text: secVoices.listenOpen ? I18n.tr("Hide the Gemini listening model")
+                                                               : I18n.tr("Gemini listening model (optional)")
+                                    onClicked: secVoices.listenOpen = !secVoices.listenOpen
+                                }
+                                ColumnLayout {
+                                    visible: !secVoices.eleven || secVoices.listenOpen
+                                    Layout.fillWidth: true
+                                    spacing: Tokens.space3
+                                    BlockHead {
+                                        Layout.topMargin: Tokens.space2
+                                        icon: "auto_awesome"
+                                        title: secVoices.eleven ? I18n.tr("Gemini listening model")
+                                                                : I18n.tr("Gemini model for listening & voices")
+                                        detail: secVoices.eleven
+                                                ? I18n.tr("Only used when a video has no captions: Gemini hears who speaks and how. The voices still come from ElevenLabs.")
+                                                : I18n.tr("Hears who speaks and how when there are no captions, then speaks the dub. Gemini models only.")
+                                    }
+                                    C.AiRoutingPanel { Layout.fillWidth: true; features: ["dub"] }
+                                }
+
+                                // ── GEMINI QUOTA ──
+                                GroupHead {
+                                    id: grpQuota
+                                    icon: "bolt"
+                                    title: I18n.tr("Gemini quota")
+                                    detail: I18n.tr("The free tier gives about 20 requests a day per model.")
+                                }
+                                RowGroup {
+                                    SettingRow {
+                                        icon: "bolt"
+                                        label: I18n.tr("Quota saver")
+                                        description: I18n.tr("Recommended. A short dub drops from 8-15 Gemini requests to about 3: one voice take per speaker, and one listening request that also reads the performance.")
+                                        C.AppSwitch {
+                                            checked: VoiceEngine.saverOn
+                                            onToggled: VoiceEngine.setSaver(checked)
+                                        }
+                                    }
+                                    RowSep {}
+                                    SettingRow {
+                                        icon: "query_stats"
+                                        label: I18n.tr("Gemini requests today: {n}").replace("{n}", VoiceEngine.usage.total || 0)
+                                        description: I18n.tr("Listening, captions & scripts: {a} · Gemini voices: {b} · resets in {t} (midnight Pacific).")
+                                                     .replace("{a}", VoiceEngine.usage.text || 0)
+                                                     .replace("{b}", VoiceEngine.usage.voice || 0)
+                                                     .replace("{t}", VoiceEngine.usage.resetsIn || "")
+                                        C.ActionButton {
+                                            compact: true
+                                            variant: "ghost"
+                                            iconName: "refresh"
+                                            text: I18n.tr("Refresh")
+                                            onClicked: VoiceEngine.refreshUsage()
+                                        }
+                                    }
                                 }
                             }
                         }

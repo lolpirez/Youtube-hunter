@@ -48,12 +48,15 @@ BUILTIN_KINDS = ("openai", "anthropic", "gemini")
 BUILTIN_NAMES = {"openai": "OpenAI", "anthropic": "Anthropic", "gemini": "Gemini"}
 
 # Features that can be pointed at their own provider / model / effort.
-FEATURES = ("ideas", "chat", "reports", "captions", "dub")
+# v1.7: "script" = the dub's script (translate + adapt the lines). Any
+# provider; left on Default it uses the dub's Google Gemini, and only when
+# there is no Gemini key the Captions pick (exactly the v1.6 behaviour).
+FEATURES = ("ideas", "chat", "reports", "captions", "dub", "script")
 
 # The routes Settings edits. "chat" is owned by the AI Chat composer (it picks
 # its own provider / model / effort there), and "reports" is retired with the
 # Reports feature — Settings must never overwrite either from a stale copy.
-SETTINGS_FEATURES = ("ideas", "captions", "dub")
+SETTINGS_FEATURES = ("ideas", "captions", "dub", "script")
 
 # v1.4.8: features that can only run on Gemini. The dub LISTENS to the audio,
 # adapts the lines and VOICES them with Gemini TTS, so its route may only
@@ -100,6 +103,20 @@ def gemini_for(state, route=None):
     if dub_capable(picked):
         return picked
     return cands[0] if cands else None
+
+def script_gemini(state):
+    """v1.7: the Gemini the dub script uses when its route is on Default: the
+    dub's own Google Gemini profile (and the model pinned there), when it has
+    a key. (None, "") when there is no usable Gemini."""
+    dub = state["routes"].get("dub") or {}
+    p = gemini_for(state, dub)
+    if not (dub_capable(p) and _usable(p)):
+        return None, ""
+    pin = (dub.get("model") or "").strip() if (dub.get("profile") or "") in ("", p["id"]) else ""
+    if pin and pin not in allowed_models(p):
+        pin = ""
+    return p, pin
+
 
 _FIELDS = ("id", "kind", "name", "api_key", "model", "base_url", "path",
            "api_mode", "models", "picked")
@@ -355,6 +372,17 @@ def resolve(feature=None, cfg=None):
         cfg = load_app_config()
     state = load_state(cfg)
     route = state["routes"].get(feature or "", {}) if feature else {}
+    if feature == "script" and not (route.get("profile") or "").strip():
+        # v1.7: Default = Gemini (the dub's), else the Captions pick
+        gem, pin = script_gemini(state)
+        if gem is None:
+            return resolve("captions", cfg)
+        own = (route.get("model") or "").strip()
+        if own and own in allowed_models(gem):
+            pin = own
+        r = resolve_profile(state, gem, pin)
+        r["effort"] = norm_effort(route.get("effort"))
+        return r
     prof = find(state, route.get("profile") or "") or find(state, state["active"]) \
         or state["profiles"][0]
     gem = gemini_for(state, route) if feature in GEMINI_ONLY else None

@@ -581,6 +581,13 @@ def _with_retry(fn, attempts=3, should_cancel=None, model=""):
         GATE.acquire(should_cancel)
         ok = False
         try:
+            # v1.5: every attempt that leaves the app is counted (Google
+            # counts refused attempts against the daily limit too)
+            try:
+                from app.core.captions import gemini_budget as _B
+                _B.note(model)
+            except Exception:            # noqa: BLE001 - counting never fails a job
+                pass
             out = fn()
             ok = True
             return out
@@ -829,6 +836,73 @@ def _listen_openai(creds, audio_path, prompt, system=None, timeout=300, should_c
 # ── TTS ──────────────────────────────────────────────────────────────────
 
 _SHAPE_CACHE = {}          # model -> shape index that worked
+# v1.5: the shape that worked is remembered ON DISK (per host + model). It
+# used to be re-probed on every launch, and with 4 voice workers starting at
+# once, each one sent its own doomed probe (up to 4 wasted requests per
+# unsupported shape, every session, all counted against the daily limit).
+_SHAPE_LOCKS = {}
+_SHAPE_LOCKS_GUARD = threading.Lock()
+_SHAPE_DISK = [None]
+
+
+def _shape_file():
+    try:
+        from app.config import CONFIG_PATH
+        return os.path.join(os.path.dirname(CONFIG_PATH), "gemini_tts_shapes.json")
+    except Exception:                    # noqa: BLE001
+        return ""
+
+
+def _shape_key(creds, m):
+    return f"{(creds.get('base_url') or DEFAULT_BASE).rstrip('/')}|{m}"
+
+
+def _shape_load(creds, m):
+    if m in _SHAPE_CACHE:
+        return _SHAPE_CACHE[m]
+    if _SHAPE_DISK[0] is None:
+        _SHAPE_DISK[0] = {}
+        path = _shape_file()
+        if path and os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    _SHAPE_DISK[0] = {str(k): int(v) for k, v in data.items()}
+            except Exception:            # noqa: BLE001
+                pass
+    v = _SHAPE_DISK[0].get(_shape_key(creds, m))
+    if v is not None and 0 <= v < 3:
+        _SHAPE_CACHE[m] = v
+        return v
+    return None
+
+
+def _shape_save(creds, m, idx):
+    _SHAPE_CACHE[m] = idx
+    if _SHAPE_DISK[0] is None:
+        _SHAPE_DISK[0] = {}
+    k = _shape_key(creds, m)
+    if _SHAPE_DISK[0].get(k) == idx:
+        return
+    _SHAPE_DISK[0][k] = idx
+    path = _shape_file()
+    if not path:
+        return
+    try:
+        with open(path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(_SHAPE_DISK[0], f)
+        os.replace(path + ".tmp", path)
+    except Exception:                    # noqa: BLE001
+        pass
+
+
+def _shape_lock(m):
+    with _SHAPE_LOCKS_GUARD:
+        lk = _SHAPE_LOCKS.get(m)
+        if lk is None:
+            lk = _SHAPE_LOCKS[m] = threading.Lock()
+        return lk
 _ANGLE_TAG = re.compile(r"<([a-z][a-z \-]{1,24})>", re.I)
 
 
@@ -929,48 +1003,36 @@ def tts(creds, text, out_wav, voice="Kore", style="", model=None, lang="",
             quota_err = quota_err or QuotaExhausted(f"Gemini quota for {m} is used up.", m)
             continue
         order = list(range(len(_SHAPES)))
-        if m in _SHAPE_CACHE:
-            order.remove(_SHAPE_CACHE[m])
-            order.insert(0, _SHAPE_CACHE[m])
-        elif not m.startswith("gemini-3.8"):
-            order = [2, 1, 0]             # older models only speak the legacy shape
-        next_model = False
-        for idx in order:
-            url, body = _SHAPES[idx](creds, m, text, voice, style, lang)
-            payload = None
-            for _again in range(2):       # one extra try for "no audio in reply"
-                try:
-                    payload = _with_retry(lambda: _post(creds, url, body, timeout), 3,
-                                          should_cancel, m)
-                except QuotaExhausted as q:
-                    quota_err = q
-                    next_model = True
-                    break
-                except urllib.error.HTTPError as e:
-                    last_err = RuntimeError(f"Gemini TTS ({m}) error {e.code}: {_http_msg(e)}")
-                    if e.code in (401, 403):
-                        raise last_err from e
-                    if e.code not in (400, 404, 405, 501):
-                        raise last_err from e     # served, just failed: don't fan out
-                    payload = None
-                    break                         # this shape isn't served here
-                b64, mime = _find_audio_b64(payload)
-                if b64:
-                    break
-                last_err = RuntimeError("Gemini TTS returned no audio.")
-                payload = None
-            if next_model:
-                break
-            if payload is None:
-                continue
-            b64, mime = _find_audio_b64(payload)
-            raw = base64.b64decode(b64)
-            if raw[:4] != b"RIFF":
-                raw = _pcm_to_wav(raw, _rate_from_mime(mime))
-            with open(out_wav, "wb") as f:
-                f.write(raw)
-            _SHAPE_CACHE[m] = idx
+        known = _shape_load(creds, m)
+        probe_lock = None
+        if known is not None:
+            order.remove(known)
+            order.insert(0, known)
+        else:
+            if not m.startswith("gemini-3.8"):
+                order = [2, 1, 0]         # older models only speak the legacy shape
+            # v1.5: one worker probes, the others wait for its answer
+            probe_lock = _shape_lock(m)
+            probe_lock.acquire()
+            known = _shape_load(creds, m)
+            if known is not None:
+                probe_lock.release()
+                probe_lock = None
+                order = list(range(len(_SHAPES)))
+                order.remove(known)
+                order.insert(0, known)
+        try:
+            got = _tts_try_model(creds, m, order, text, voice, style, lang, should_cancel,
+                                 timeout, out_wav)
+        finally:
+            if probe_lock is not None:
+                probe_lock.release()
+        if got.get("ok"):
             return m
+        if got.get("quota"):
+            quota_err = got["quota"]
+        if got.get("err"):
+            last_err = got["err"]
     if quota_err and (last_err is None or all(is_exhausted(x) for x in models)):
         raise quota_err
     if creds.get("bearer") and last_err is not None:
@@ -979,6 +1041,53 @@ def tts(creds, text, out_wav, voice="Kore", style="", model=None, lang="",
             f"can't voice the dub. Add a Google Gemini key (free from Google AI Studio) and pick "
             f"it for AI dub. ({last_err})")
     raise last_err or quota_err or RuntimeError("Gemini TTS failed.")
+
+
+def _tts_try_model(creds, m, order, text, voice, style, lang, should_cancel, timeout, out_wav):
+    """v1.5: one model, its request shapes in `order`. Returns
+    {"ok": True} | {"quota": QuotaExhausted} | {"err": Exception}."""
+    last_err = None
+    quota_err = None
+    next_model = False
+    for idx in order:
+        url, body = _SHAPES[idx](creds, m, text, voice, style, lang)
+        payload = None
+        for _again in range(2):       # one extra try for "no audio in reply"
+            try:
+                payload = _with_retry(lambda: _post(creds, url, body, timeout), 3,
+                                      should_cancel, m)
+            except QuotaExhausted as q:
+                quota_err = q
+                next_model = True
+                break
+            except urllib.error.HTTPError as e:
+                last_err = RuntimeError(f"Gemini TTS ({m}) error {e.code}: {_http_msg(e)}")
+                if e.code in (401, 403):
+                    raise last_err from e
+                if e.code not in (400, 404, 405, 501):
+                    raise last_err from e     # served, just failed: don't fan out
+                payload = None
+                break                         # this shape isn't served here
+            b64, mime = _find_audio_b64(payload)
+            if b64:
+                break
+            last_err = RuntimeError("Gemini TTS returned no audio.")
+            payload = None
+        if next_model:
+            break
+        if payload is None:
+            continue
+        b64, mime = _find_audio_b64(payload)
+        raw = base64.b64decode(b64)
+        if raw[:4] != b"RIFF":
+            raw = _pcm_to_wav(raw, _rate_from_mime(mime))
+        with open(out_wav, "wb") as f:
+            f.write(raw)
+        _shape_save(creds, m, idx)
+        return {"ok": True}
+    if quota_err is not None:
+        return {"quota": quota_err, "err": last_err}
+    return {"err": last_err}
 
 
 def silence_wav(path, seconds, rate=24000):

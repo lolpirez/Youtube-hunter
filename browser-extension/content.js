@@ -208,8 +208,14 @@
       postAiNote: "Your Captions AI listens and writes the lines, and translates them too.",
       postAiNoteBy: "{who} listens and writes the lines, and translates them too.",
       postAiNoteYt: "Uses YouTube's own captions; the AI makes them fluent and translates them. No captions? It listens instead.",
-      postNeedListen: "Pick a provider that can hear audio for Captions in the app (Settings → Which AI does what).",
-      postNeedGemini: "Needs a Google Gemini key in the app (Settings → AI Providers).",
+      postNeedListen: "Pick a provider that can hear audio for Captions in the app (Settings → Captions & Dub).",
+      postNeedGemini: "Gemini voices need a Google Gemini key in the app (Settings → AI Providers), or pick ElevenLabs.",
+      postEngine: "Voices by",
+      postEngGem: "Gemini",
+      postEngEl: "ElevenLabs",
+      postNeedEleven: "ElevenLabs needs your key in the app (Settings → Captions & Dub), or pick Gemini.",
+      postElNote: "ElevenLabs voices ({v}), each speaker matched to their gender. Uses ElevenLabs credits.",
+      postGemNote: "Gemini voices, each speaker matched to their gender. Uses Gemini requests.",
       postNeedAi: "Translating needs an AI provider in the app.",
       postOnePass: "Dub + captions in one pass: one video at the end.",
       postNoPlay: "Play unlocks when captions & dub are done.",
@@ -2756,6 +2762,24 @@
         if (!o().youtube.length && p.src === "youtube" && p.cap) p.src = "ai";
         rerender();
       }
+      // v1.6: which voices are ready, re-read every few seconds while the dub
+      // box is open (turning ElevenLabs on in the app shows here at once)
+      let readyAt = 0, readyBusy = false;
+      async function refreshReady() {
+        const v = vid();
+        if (!v || readyBusy || Date.now() - readyAt < 3000) return;
+        readyBusy = true; readyAt = Date.now();
+        try {
+          const r = await call("/v1/dubready", { timeout: 4000 });
+          const cur = opts[v];
+          if (r && r.data && r.data.ok && cur && !cur.loading) {
+            const k = ["engine", "eleven", "geminiVoices", "elevenVoice"];
+            const changed = k.some((x) => cur[x] !== r.data[x]);
+            k.forEach((x) => { cur[x] = r.data[x]; });
+            if (changed) setTimeout(rerender, 0);
+          }
+        } catch (_) {} finally { readyBusy = false; }
+      }
       function rerender() {
         if (!root || !isOpen()) return;
         const box = root.querySelector(".post");
@@ -2888,7 +2912,14 @@
             p.dubLang, locked, t("postInto")));
           h += row(t("postVoices"), seg("pvoices", [["auto", t("postAuto")], ["single", t("postOne")]], p.voices, locked));
           h += row(t("postBg"), seg("pbg", [["duck", t("postDuck")], ["bed", t("postBed")], ["replace", t("postReplace")]], p.bg, locked));
-          if (!d.gemini) h += `<p class="note warn">${esc(t("postNeedGemini"))}</p>`;
+          // v1.6: both engines, always; the default follows the app's setting live
+          const eng = p.engine || d.engine || "gemini";
+          h += row(t("postEngine"), seg("pengine", [["gemini", t("postEngGem")], ["elevenlabs", t("postEngEl")]], eng, locked));
+          if (eng === "elevenlabs") h += d.eleven === false ? `<p class="note warn">${esc(t("postNeedEleven"))}</p>`
+                                                           : `<p class="note ok">${esc(t("postElNote").replace("{v}", d.elevenVoice || "ElevenLabs"))}</p>`;
+          else h += (d.geminiVoices === false || (d.geminiVoices === undefined && !d.gemini))
+                    ? `<p class="note warn">${esc(t("postNeedGemini"))}</p>` : `<p class="note">${esc(t("postGemNote"))}</p>`;
+          refreshReady();
           h += `</div>`;
         }
         if (p.cap && p.dub && !audio) h += `<p class="note">${esc(t("postOnePass"))}</p>`;
@@ -2906,6 +2937,7 @@
         else if (act === "ppos") p.pos = ["bottom", "middle", "top"].includes(v) ? v : "bottom";
         else if (act === "pvoices") p.voices = v;
         else if (act === "pbg") p.bg = v;
+        else if (act === "pengine") p.engine = v === "elevenlabs" ? "elevenlabs" : "gemini";
         else if (act === "ppick") {
           const k = el.getAttribute("data-pset");
           if (k === "track") p.track = parseInt(v, 10) || 0;
@@ -2940,7 +2972,7 @@
           } else out.captions = { source: "ai", target: p.lang || "", style: p.style, output: audio ? "srt" : p.out };
           if (out.captions) { out.captions.size = p.size || "m"; out.captions.position = p.pos || "bottom"; }
         }
-        if (p.dub) out.dub = { target: p.dubLang || "fa", voices: p.voices, bg: p.bg };
+        if (p.dub) out.dub = { target: p.dubLang || "fa", voices: p.voices, bg: p.bg, engine: p.engine || d.engine || "" };
         return Object.keys(out).length ? out : null;
       }
       function stepsHTML(steps) {

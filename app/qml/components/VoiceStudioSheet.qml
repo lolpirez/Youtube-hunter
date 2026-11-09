@@ -73,6 +73,14 @@ Popup {
     property bool acting: true
     property string bgMode: "duck"
     property int ttsIndex: 0
+    // v1.6: who speaks this dub. "" follows Settings → Captions & Dub
+    property string voiceEngine: ""
+    property int elVoiceIndex: -1             // -1 = the main voice from Settings
+    readonly property string _engine: voiceEngine !== "" ? voiceEngine : VoiceEngine.engine
+    readonly property bool _eleven: _engine === "elevenlabs"
+    readonly property bool _geminiKey: String((Settings.aiProfileMap["gemini"] || {}).apiKey || "") !== ""
+    readonly property bool _voicesReady: _eleven ? VoiceEngine.hasKey : (_geminiKey || VoiceStudio.geminiReady && VoiceEngine.engine === "gemini")
+    readonly property int _elIdx: elVoiceIndex >= 0 ? elVoiceIndex : VoiceEngine.voiceIndex
     property bool dubCaptions: false
     property bool showSource: false
     property bool showAllJobs: false
@@ -99,6 +107,8 @@ Popup {
         root.offset = 0
         root.showSource = false
         root.showAllJobs = false
+        root.voiceEngine = ""        // v1.6: each opening starts on the Settings choice
+        root.elVoiceIndex = -1
         if (o.tab !== undefined) root.tab = o.tab
         root.open()
         flick.contentY = 0
@@ -154,7 +164,10 @@ Popup {
         var o = _baseOpts()
         o.target = root.dubTarget
         o.voice_mode = root.voiceMode
-        o.voice = VoiceStudio.voices[root.voiceIndex] ? VoiceStudio.voices[root.voiceIndex].name : "Kore"
+        o.voice = root._eleven
+                  ? (VoiceEngine.voices[root._elIdx] ? VoiceEngine.voices[root._elIdx].id : "")
+                  : (VoiceStudio.voices[root.voiceIndex] ? VoiceStudio.voices[root.voiceIndex].name : "Kore")
+        o.voice_engine = root._engine
         o.acting = root.acting
         o.bg_mode = root.bgMode
         o.tts_model = VoiceStudio.ttsModels[root.ttsIndex] ? VoiceStudio.ttsModels[root.ttsIndex].key : ""
@@ -174,11 +187,11 @@ Popup {
                                       ? (t.videoId !== "" &&
                                          (VoiceStudio.queueMode || (!VoiceStudio.ytLoading && VoiceStudio.ytTracks.length > 0)))
                                     : source === "file" ? subPath !== ""
-                                    : (tab === 1 ? VoiceStudio.geminiReady : VoiceStudio.listenReady)
+                                    : (tab === 1 ? (VoiceStudio.geminiReady || root._geminiKey) : VoiceStudio.listenReady)
     readonly property bool _ready: t.exists === true || VoiceStudio.queueMode
     // a queued choice can be re-set: the newest one wins
     readonly property bool _canCaption: _ready && _sourceOk && (!doTranslate || VoiceStudio.aiReady || _ytTargetTrack !== null)
-    readonly property bool _canDub: _ready && _sourceOk && VoiceStudio.geminiReady && VoiceStudio.aiReady
+    readonly property bool _canDub: _ready && _sourceOk && root._voicesReady && VoiceStudio.aiReady
     // Why the main action is dimmed, in words.
     readonly property string _blockReason: {
         if (!root._ready) return ""
@@ -191,9 +204,11 @@ Popup {
         if (root.source === "file" && root.subPath === "")
             return I18n.tr("Choose a subtitle file first.")
         if (root.source === "ai" && root.tab === 0 && !VoiceStudio.listenReady)
-            return I18n.tr("“AI listens” needs a provider that can hear audio. Pick one for Captions in Settings → Which AI does what.")
-        if (root.tab === 1 && !VoiceStudio.geminiReady)
-            return I18n.tr("AI dub needs a Google Gemini key (free from Google AI Studio), added in Settings → AI Providers.")
+            return I18n.tr("“AI listens” needs a provider that can hear audio. Pick one in Settings → Captions & Dub.")
+        if (root.tab === 1 && !root._voicesReady)
+            return root._eleven
+                   ? I18n.tr("ElevenLabs voices need your ElevenLabs key, added in Settings → Captions & Dub. Or pick Gemini voices in step 2.")
+                   : I18n.tr("Gemini voices need a Google Gemini key (free from Google AI Studio), added in Settings → AI Providers. Or pick ElevenLabs in step 2.")
         if (!VoiceStudio.aiReady)
             return I18n.tr("This needs an AI provider. Add one in Settings → AI Providers.")
         return ""
@@ -398,7 +413,7 @@ Popup {
                             glyph: "volume_up"
                             title: I18n.tr("AI dub")
                             desc: I18n.tr("A new voice in another language, acted like the original")
-                            badge: I18n.tr("Uses Gemini")
+                            badge: root._eleven ? I18n.tr("ElevenLabs voices") : I18n.tr("Gemini voices")
                             selected: root.tab === 1
                             done: VoiceStudio.queueMode && root._queued.dub
                             onPicked: root.tab = 1
@@ -407,10 +422,12 @@ Popup {
                 }
 
                 Banner {
-                    visible: root.tab === 1 && !VoiceStudio.geminiReady
+                    visible: root.tab === 1 && !root._voicesReady
                     tint: Theme.warn
                     glyph: "key"
-                    text: I18n.tr("AI dub uses Google Gemini to listen and to speak. Add a Google Gemini key (free from Google AI Studio) in Settings → AI Providers.")
+                    text: root._eleven
+                          ? I18n.tr("ElevenLabs voices are picked, but there is no ElevenLabs key yet. Add it in Settings → Captions & Dub, or pick Gemini voices in step 2.")
+                          : I18n.tr("Gemini voices need a Google Gemini key (free from Google AI Studio) in Settings → AI Providers. Or pick ElevenLabs voices in step 2.")
                 }
 
                 // ═══ CAPTIONS ═══
@@ -493,7 +510,28 @@ Popup {
                     visible: root.tab === 1
                     num: 2
                     title: I18n.tr("Voices")
-                    summary: root.voiceMode === "auto" ? I18n.tr("Auto-cast") : (VoiceStudio.voices[root.voiceIndex] ? VoiceStudio.voices[root.voiceIndex].name : "")
+                    summary: (root._eleven ? "ElevenLabs" : "Gemini") + " · "
+                             + (root.voiceMode === "auto" ? I18n.tr("Auto-cast")
+                                : root._eleven ? (VoiceEngine.voices[root._elIdx] ? VoiceEngine.voices[root._elIdx].label.split(" · ")[0] : "")
+                                : (VoiceStudio.voices[root.voiceIndex] ? VoiceStudio.voices[root.voiceIndex].name : ""))
+                    // v1.6: who speaks, per dub (starts on the Settings choice)
+                    FieldLabel { text: I18n.tr("Who speaks") }
+                    C.SlideSegment {
+                        Layout.fillWidth: true
+                        equal: true; solid: false; cellHeight: 32
+                        fontSize: Tokens.fontCaption + 1
+                        model: [ { label: I18n.tr("Gemini voices"), icon: "provider_gemini" },
+                                 { label: I18n.tr("ElevenLabs"), icon: "volume_up" } ]
+                        currentIndex: root._eleven ? 1 : 0
+                        onActivated: (i) => root.voiceEngine = i === 1 ? "elevenlabs" : "gemini"
+                    }
+                    Hint {
+                        text: root._eleven
+                              ? (VoiceEngine.hasKey ? I18n.tr("ElevenLabs credits, not Gemini requests. Gemini only listens when YouTube has no captions, and adapts the script.")
+                                                    : I18n.tr("No ElevenLabs key yet: add it in Settings → Captions & Dub."))
+                              : I18n.tr("Uses Gemini requests for every voice take (the quota saver keeps it to about one per speaker).")
+                    }
+                    FieldLabel { text: I18n.tr("Cast"); Layout.topMargin: Tokens.space1 }
                     C.SlideSegment {
                         Layout.fillWidth: true
                         equal: true; solid: false; cellHeight: 32
@@ -504,16 +542,24 @@ Popup {
                         onActivated: (i) => root.voiceMode = i === 0 ? "auto" : "single"
                     }
                     Hint {
-                        text: root.voiceMode === "auto" ? I18n.tr("Each speaker gets their own voice, matched to gender, age and character.")
+                        text: root.voiceMode === "auto" ? I18n.tr("Each speaker gets their own voice: a woman a female voice, a man a male one, heard from the voice itself.")
                                                         : I18n.tr("One voice reads every line.")
                     }
                     C.Dropdown {
-                        visible: root.voiceMode === "single"
+                        visible: root.voiceMode === "single" && !root._eleven
                         Layout.fillWidth: true
                         popupMaxHeight: 340
                         model: VoiceStudio.voiceLabels
                         currentIndex: root.voiceIndex
                         onActivated: root.voiceIndex = currentIndex
+                    }
+                    C.Dropdown {
+                        visible: root.voiceMode === "single" && root._eleven
+                        Layout.fillWidth: true
+                        popupMaxHeight: 340
+                        model: VoiceEngine.voices.map(function (v) { return v.label })
+                        currentIndex: root._elIdx
+                        onActivated: root.elVoiceIndex = currentIndex
                     }
                     ToggleRow {
                         text: I18n.tr("Act it out: laughs, sighs, energy and pace from the original")
@@ -526,7 +572,8 @@ Popup {
                     num: 3
                     title: I18n.tr("Sound & finish")
                     summary: (root.bgMode === "duck" ? I18n.tr("Duck") : root.bgMode === "bed" ? I18n.tr("Low bed") : I18n.tr("Replace"))
-                             + " · " + (VoiceStudio.ttsModels[root.ttsIndex] ? VoiceStudio.ttsModels[root.ttsIndex].label : "")
+                             + " · " + (root._eleven ? (VoiceEngine.models[VoiceEngine.modelIndex] || {}).label || "ElevenLabs"
+                                        : (VoiceStudio.ttsModels[root.ttsIndex] ? VoiceStudio.ttsModels[root.ttsIndex].label : ""))
                     FieldLabel { text: I18n.tr("Original audio") }
                     C.SlideSegment {
                         Layout.fillWidth: true
@@ -542,7 +589,13 @@ Popup {
                              : I18n.tr("Only the dub. The original is still kept as a second audio track.")
                     }
                     FieldLabel { text: I18n.tr("Voice quality"); Layout.topMargin: Tokens.space1 }
+                    Hint {
+                        visible: root._eleven
+                        text: I18n.tr("ElevenLabs model: {m}. Change it in Settings → Captions & Dub.")
+                              .replace("{m}", (VoiceEngine.models[VoiceEngine.modelIndex] || {}).label || "")
+                    }
                     C.SlideSegment {
+                        visible: !root._eleven
                         Layout.fillWidth: true
                         equal: true; solid: false; cellHeight: 32
                         fontSize: Tokens.fontCaption + 1
@@ -696,7 +749,7 @@ Popup {
                                 visible: root.source === "ai" && root.tab === 0 && !VoiceStudio.listenReady
                                 tint: Theme.warn
                                 glyph: "key"
-                                text: I18n.tr("“AI listens” needs a provider that can hear audio. Pick one for Captions in Settings → Which AI does what.")
+                                text: I18n.tr("“AI listens” needs a provider that can hear audio. Pick one in Settings → Captions & Dub.")
                             }
                             // clip offset (a stream-copy cut starts on a keyframe)
                             RowLayout {
@@ -783,7 +836,8 @@ Popup {
                              root.outputMode === "burn" ? I18n.tr("Burn in") : root.outputMode === "soft" ? I18n.tr("Subtitle track") : I18n.tr(".srt only")].join(" · ")
                           : [VoiceStudio.languageName(root.dubTarget),
                              root.voiceMode === "auto" ? I18n.tr("Auto-cast") : I18n.tr("One voice"),
-                             VoiceStudio.ttsModels[root.ttsIndex] ? VoiceStudio.ttsModels[root.ttsIndex].label : ""].join(" · ")
+                             root._eleven ? "ElevenLabs"
+                                          : (VoiceStudio.ttsModels[root.ttsIndex] ? VoiceStudio.ttsModels[root.ttsIndex].label : "")].join(" · ")
                 }
                 C.AppText {
                     Layout.fillWidth: true

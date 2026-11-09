@@ -435,7 +435,12 @@ def run_dub(opts, report, cancel):
     preview = float(opts.get("preview_sec") or 0)
     suffix = "dub-preview" if preview > 0 else "dub"
     out = unique_path(f"{_stem(media)}.{tgt}.{suffix}.{ext}")
-    dwork = os.path.join(work, f"dub_{tgt}_{D._sha(opts.get('voice_mode'), opts.get('voice'), opts.get('acting', True), opts.get('tts_model'))}")
+    # v1.5: the voice engine (Gemini / ElevenLabs) is a dub setting too
+    from app.core.captions import elevenlabs as E
+    opts["voice_engine"] = opts.get("voice_engine") or E.engine()
+    eng = opts["voice_engine"]
+    eng_key = "" if eng == "gemini" else f"{eng}:{E.model()}:{E.default_voice()}"
+    dwork = os.path.join(work, f"dub_{tgt}_{D._sha(opts.get('voice_mode'), opts.get('voice'), opts.get('acting', True), opts.get('tts_model'), eng_key)}")
     res = D.dub_media(media, cues, src_lang, tgt, out, dwork, opts, report, cancel,
                       opts.get("title", ""))
     res["lang"] = tgt

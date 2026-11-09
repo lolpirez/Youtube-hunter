@@ -267,7 +267,7 @@ ColumnLayout {
             heading: I18n.tr("AI dub")
             on: deck.dubOn
             focused: deck.lane === 1
-            flag: VoiceStudio.geminiReady ? "" : I18n.tr("Gemini")
+            flag: VoiceStudio.geminiReady ? "" : I18n.tr("Voices")
             summary: deck.dubOn
                      ? (VoiceStudio.languageName(deck.dubLang) + " · "
                         + (deck.dubVoices === "auto" ? I18n.tr("Auto-cast") : I18n.tr("One voice")))
@@ -611,10 +611,10 @@ ColumnLayout {
             Hint {
                 glyph: VoiceStudio.geminiReady ? (deck.capSource === "youtube" ? "youtube" : deck.capSource === "file" ? "description" : "gemini") : "warning"
                 tone: VoiceStudio.geminiReady ? "" : "warn"
-                text: !VoiceStudio.geminiReady ? I18n.tr("AI dub needs a Google Gemini key (free from Google AI Studio).")
-                    : deck.capSource === "youtube" ? I18n.tr("YouTube's captions for timing, Gemini for the voices")
-                    : deck.capSource === "file" ? I18n.tr("Your subtitle file for timing, Gemini for the voices")
-                    : I18n.tr("Gemini listens and speaks")
+                text: !VoiceStudio.geminiReady ? I18n.tr("AI dub needs voices: a Google Gemini key or an ElevenLabs key (Settings → Captions & Dub).")
+                    : deck.capSource === "youtube" ? I18n.tr("YouTube's captions for timing, {v} for the voices").replace("{v}", VoiceEngine.engine === "elevenlabs" ? "ElevenLabs" : "Gemini")
+                    : deck.capSource === "file" ? I18n.tr("Your subtitle file for timing, {v} for the voices").replace("{v}", VoiceEngine.engine === "elevenlabs" ? "ElevenLabs" : "Gemini")
+                    : VoiceEngine.engine === "elevenlabs" ? I18n.tr("Gemini listens, ElevenLabs speaks") : I18n.tr("Gemini listens and speaks")
                 action: VoiceStudio.geminiReady ? "" : I18n.tr("Settings")
                 onActed: deck.settingsRequested()
             }

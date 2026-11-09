@@ -7,7 +7,36 @@ Version numbering restarted at **1.0.0** for the public release.
 
 ---
 
-## 1.3.0: captions & AI dub each get their own AI, fluent YouTube captions
+## 1.3.0 (bundle v1.7): guided Captions & Dub, ElevenLabs voices, Gemini quota saver
+
+- **Settings → Captions & Dub is a guided 1-2-3.** A live map at the top
+  (① Words → ② Script → ③ Voices) shows what runs and what still needs
+  setting up, and clicks through to that step; the groups below carry the
+  same numbers in the order the work happens. AI Providers keeps only
+  providers, the Ideas pick, capabilities and the proxy.
+- **The dub script has its own AI pick.** New `script` route: any provider
+  or model, not just Gemini. Default stays Gemini (the dub's Google Gemini
+  profile and model); with no Gemini key it falls back to the Captions AI,
+  exactly as before. Translate / adapt / tighten of dub lines all use it.
+- **ElevenLabs voices for the AI dub.** Own key, model (v4 default, v3,
+  multilingual v2, flash v2.5), default voice and your own voices after
+  Check, plus credits left. Picked without a key is a clear stop — never a
+  silent switch to Gemini voices. The YouTube panel offers both engines and
+  re-reads readiness live (`GET /v1/dubready`), and Gemini still listens /
+  adapts when it is set up. Plain REST, no new dependency.
+- **Gemini quota saver** (on by default). One TTS take per voice (up to 18
+  lines / 75 s) cut back into lines at the pauses; the listening
+  transcription also returns speaker, delivery and vocal events, so the
+  separate performance read is skipped; long lines are fitted by the timing
+  planner instead of rewritten and re-recorded; the TTS request shape is
+  remembered on disk and probed by one worker; every request is counted per
+  day and the job's note says how many it used.
+- **Speakers and gender from the voice itself** (`captions/pitch.py`,
+  stdlib, no quota): per-cue pitch decides the speaker's gender, and an
+  unlabeled dialogue with two clear pitch groups gets two voices.
+- Launch splash and loading animations are **unchanged**.
+
+## 1.3.0 (bundle v1.4.13): captions & AI dub each get their own AI, fluent YouTube captions
 
 - **Settings → AI Providers → Which AI does what now has three rows.** Ideas,
   Captions and AI dub each keep their own provider + model, with a Test button

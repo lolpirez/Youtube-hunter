@@ -485,6 +485,10 @@ def main():
     # v3.43: "Add the YouTube button" — guided browser-extension install
     ext_setup = ExtensionSetupVM()
     ctx.setContextProperty("ExtensionSetup", ext_setup)
+    # v1.5: Settings → Captions & Dub (Gemini quota saver, ElevenLabs voices)
+    from app.qml_backend.vm.voice_engine_vm import VoiceEngineVM
+    voice_engine = VoiceEngineVM()
+    ctx.setContextProperty("VoiceEngine", voice_engine)
 
     # Live language switching: re-assigning these context properties is what
     # makes every `I18n.tr(...)` / `Fonts.family(...)` binding re-evaluate — a

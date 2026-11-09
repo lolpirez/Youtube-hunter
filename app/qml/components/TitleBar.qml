@@ -8,6 +8,8 @@ import "../Utils.js" as U
 // minimise / maximise / close buttons. `win` is the top-level Window.
 Rectangle {
     id: root
+    // landing spot for the launch splash's hand-off (BrandSplash.dockTarget)
+    readonly property Item brandMark: hdrMark
     property var win
     height: Tokens.titleBarHeight
     color: Theme.header_bg
@@ -177,9 +179,16 @@ Rectangle {
         }
 
         // YouTube Hunter mark: vector, follows the theme accent live.
+        // The launch splash flies its big mark into this exact spot.
         BrandMark {
+            id: hdrMark
+            objectName: "hdrMark"
             width: 22; height: 24
             anchors.verticalCenter: parent.verticalCenter
+            // v16: the logo catches the light when you point at it
+            HoverHandler {
+                onHoveredChanged: if (hovered) hdrMark.shine()
+            }
         }
         AppText {
             text: I18n.tr("YouTube Hunter")

@@ -46,6 +46,8 @@ Transport: a tiny JSON HTTP server on 127.0.0.1:BRIDGE_PORT.
     GET  /v1/captions?v=<id>         → the languages YouTube's OWN captions
                                        come in (no AI), the looks, every
                                        language for AI, voices, readiness
+    GET  /v1/dubready                → v1.6: {engine, eleven, geminiVoices}
+                                       re-read live while the dub box is open
     POST /v1/download {…, post}      → post = {captions?, dub?}: queued for
                                        this video, run when the file lands;
                                        /v1/status stays "running" with
@@ -1070,6 +1072,10 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 return self._status(vid)
             if url.path == "/v1/captions":
                 return self._captions(self._vid(q.get("v")))
+            if url.path == "/v1/dubready":
+                # v1.6: light, no YouTube call: just which voices are ready
+                from app.qml_backend.vm.voice_studio_vm import VoiceStudioVM
+                return self._send(200, dict(VoiceStudioVM.dubReadiness(), ok=True))
             if url.path == "/v1/cut/status":
                 job_id = str(q.get("job") or "")
                 if q.get("watch") == "1":

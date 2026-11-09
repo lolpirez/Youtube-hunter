@@ -78,6 +78,31 @@ v1.4.5 "lean fit" (same sound, a fraction of the processes):
     job at once with a clear message, in the performance read and in the
     voice recording, instead of being swallowed slice after slice; a
     per-slice glitch still falls back to a plain dub, and is logged
+
+
+v1.5 "quota saver" (Settings → Captions & Dub, ON by default). Google AI
+Studio's free tier counts REQUESTS per day (~20), and a 40-second dub used
+to spend 8-15 of them: a transcription, a performance read, a translation,
+then one TTS request PER LINE, plus re-records. Now:
+  * ONE TAKE PER VOICE: every line a voice says is recorded in one TTS
+    request (up to ~18 lines / ~75 s per take), with a long pause between
+    lines, then cut back into lines at the pauses. The cut is checked
+    against each line's expected length (dynamic programming over the
+    silences); a take that doesn't split cleanly falls back to per-line
+    recording for just that take, so the dub is never worse than before;
+  * when the AI listens to the file, the SAME transcription request also
+    returns who speaks and how (sources.ai_transcribe), so the separate
+    performance read is skipped (0 requests instead of 1 per 10 min);
+  * no re-recording of lines that still run long: they are sped up (max
+    1.5x) and fitted by the timing planner instead (each re-record was a
+    rewrite request plus one TTS request per line);
+  * the request shape each TTS model accepts is remembered on disk, and
+    only one worker probes it (gemini_media);
+  * the job's note says how many Gemini requests it used.
+
+v1.5 ElevenLabs: Settings → Captions & Dub can switch the dub's voices to
+ElevenLabs (your own key). Gemini still listens and adapts the script when
+it is set up; the voices cost ElevenLabs credits instead of Gemini requests.
 """
 
 import array
@@ -97,6 +122,9 @@ from app.core.captions import gemini_media as G
 from app.core.captions import languages as L
 from app.core.captions import render as R
 from app.core.captions import translate as T
+from app.core.captions import gemini_budget as B
+from app.core.captions import elevenlabs as E
+from app.core.captions import pitch as P
 
 _SLICE = 600.0
 _MAX_TEMPO = 1.35
@@ -284,6 +312,45 @@ def read_performance(media, cues, work, creds, on_progress=None, should_cancel=N
     return {"speakers": speakers, "lines": {str(k): v for k, v in lines.items()}}
 
 
+def can_dub(cfg=None, engine=""):
+    """v1.5: the dub can run: a Gemini key, or ElevenLabs picked with a key.
+    v1.6: `engine` = the voices picked for this one dub ("" = Settings')."""
+    eng = engine if engine in ("gemini", "elevenlabs") else E.engine(cfg)
+    if eng == "elevenlabs":
+        return E.ready(cfg)
+    return G.has_gemini(cfg)
+
+
+def why_cant_dub(engine=""):
+    """The one-line reason can_dub() said no, for the engine in use."""
+    eng = engine if engine in ("gemini", "elevenlabs") else E.engine()
+    if eng == "elevenlabs":
+        return ("ElevenLabs voices are picked, but there is no ElevenLabs key yet. "
+                "Add it in Settings → Captions & Dub, or pick Gemini voices.")
+    return ("Gemini voices need a Google Gemini key (free from Google AI Studio, Settings → AI Providers). "
+            "Or switch the dub to ElevenLabs voices in Settings → Captions & Dub.")
+
+
+def perf_from_cues(cues):
+    """v1.5: the performance read the transcription already did. When the AI
+    listened with the quota saver on, every cue carries meta["perf"] plus
+    its delivery, vocal-event text and the speaker's gender / age. None when
+    any cue lacks it (YouTube captions, a subtitle file, an older cache)."""
+    if not cues or not all(isinstance(c.meta, dict) and c.meta.get("perf") for c in cues):
+        return None
+    speakers, lines = {}, {}
+    for k, c in enumerate(cues):
+        sid = c.speaker or "S1"
+        if sid not in speakers:
+            speakers[sid] = {"id": sid, "gender": c.meta.get("gender") or "",
+                             "age": c.meta.get("age") or ""}
+        ln = {"id": k, "spk": sid, "style": str(c.meta.get("style") or "")}
+        if c.meta.get("tagged"):
+            ln["tagged"] = str(c.meta["tagged"])
+        lines[str(k)] = ln
+    return {"speakers": speakers, "lines": lines}
+
+
 def cast_voices(speakers, mode="auto", single_voice="Kore"):
     """speaker id → voice name. Distinct voices per speaker, gender respected."""
     if mode == "single":
@@ -469,6 +536,192 @@ def _prep_clip(src_wav, should_cancel=None):
     return dst, d
 
 
+# ── v1.5: one take per voice ─────────────────────────────────────────────
+#
+# A batch take is the lines of ONE voice, read in order with a long pause
+# between them. It is cut back into lines at the pauses: every silence of
+# 0.18 s+ is a candidate cut, and dynamic programming picks the n-1 cuts
+# that (a) sit in the longest silences and (b) give each line a length
+# close to what its text predicts. A take that can't be cut cleanly (a
+# line skipped, two merged, pauses missing) is rejected and those lines
+# are recorded one by one, exactly as before.
+
+_BATCH_LINES = 18          # lines per take
+_BATCH_CHARS = 1400        # characters per take (the TTS prompt stays small)
+_BATCH_SEC = 75.0          # predicted speech per take (long takes drift)
+_BATCH_WORKERS = 2
+_CAND_GAP = 0.18           # shortest silence that may be a cut
+_MIN_CUT_GAP = 0.28        # every chosen cut must be at least this long
+_MAX_RATIO = 2.4           # a line may be at most this far off its prediction
+_GAP_WEIGHT = 1.6          # how strongly long silences win
+_BATCH_SEP = "\n\n<long pause>\n\n"
+
+
+def _window_rms(a, rate, win_s=_SIL_WIN):
+    win = max(1, int(rate * win_s))
+    out = []
+    for i in range(0, len(a), win):
+        seg = a[i:i + win]
+        if not seg:
+            break
+        out.append((sum(x * x for x in seg) / len(seg)) ** 0.5)
+    return out, win
+
+
+def split_take(wav_path, expected, rate_hint=_RATE):
+    """Cut a batch take into len(expected) clips. `expected` = predicted
+    speech seconds per line. Returns [(start_sample, end_sample)] or None
+    when the take doesn't split cleanly."""
+    n = len(expected)
+    got = _read_wav16(wav_path)
+    if not got or n < 1:
+        return None
+    a, rate = got
+    if n == 1:
+        return [(0, len(a))]
+    rms, win = _window_rms(a, rate)
+    if not rms:
+        return None
+    loud = sorted(rms)
+    ref = loud[int(len(loud) * 0.9)] if loud else 0
+    thr = max(_SIL_AMP, ref * 0.06)
+    quiet = [v <= thr for v in rms]
+    # voiced region of the whole take
+    first = next((k for k, q in enumerate(quiet) if not q), None)
+    last = next((k for k in range(len(quiet) - 1, -1, -1) if not quiet[k]), None)
+    if first is None or last is None or last <= first:
+        return None
+    # candidate gaps: silent runs strictly inside the voiced region
+    cands = []
+    k = first
+    while k <= last:
+        if quiet[k]:
+            j = k
+            while j <= last and quiet[j]:
+                j += 1
+            length = (j - k) * win / rate
+            if length >= _CAND_GAP:
+                cands.append((k, j, length))     # [k, j) windows are silent
+            k = j
+        else:
+            k += 1
+    m = len(cands)
+    if m < n - 1:
+        return None
+    # voiced seconds between two cut positions (silence excluded)
+    pre = [0]
+    for q in quiet:
+        pre.append(pre[-1] + (0 if q else 1))
+
+    def voiced(w0, w1):
+        return max(0, pre[w1] - pre[w0]) * win / rate
+
+    total_voiced = voiced(first, last + 1)
+    exp_total = sum(max(0.2, e) for e in expected) or 1.0
+    scale = total_voiced / exp_total
+
+    import math
+
+    def seg_cost(w0, w1, idx):
+        d = voiced(w0, w1)
+        e = max(0.2, expected[idx]) * scale
+        if d <= 0.05:
+            return 1e9, 99.0
+        r = d / e
+        return math.log(r) ** 2, r
+
+    INF = float("inf")
+    # dp[j][c]: best cost for lines 0..j with line j ending at candidate c
+    dp = [[INF] * m for _ in range(n - 1)]
+    back = [[-1] * m for _ in range(n - 1)]
+    for c in range(m):
+        cost, _r = seg_cost(first, cands[c][0], 0)
+        dp[0][c] = cost - _GAP_WEIGHT * min(1.5, cands[c][2])
+    for j in range(1, n - 1):
+        for c in range(j, m):
+            best, arg = INF, -1
+            for p in range(j - 1, c):
+                if dp[j - 1][p] == INF:
+                    continue
+                cost, _r = seg_cost(cands[p][1], cands[c][0], j)
+                v = dp[j - 1][p] + cost
+                if v < best:
+                    best, arg = v, p
+            if arg >= 0:
+                dp[j][c] = best - _GAP_WEIGHT * min(1.5, cands[c][2])
+                back[j][c] = arg
+    best, arg = INF, -1
+    for c in range(n - 2, m):
+        if dp[n - 2][c] == INF:
+            continue
+        cost, _r = seg_cost(cands[c][1], last + 1, n - 1)
+        v = dp[n - 2][c] + cost
+        if v < best:
+            best, arg = v, c
+    if arg < 0:
+        return None
+    picks = [arg]
+    for j in range(n - 2, 0, -1):
+        picks.append(back[j][picks[-1]])
+    picks.reverse()
+    # validate: every cut a real pause, every line close to its prediction
+    if min(cands[c][2] for c in picks) < _MIN_CUT_GAP:
+        return None
+    bounds = [first] + [x for c in picks for x in (cands[c][0], cands[c][1])] + [last + 1]
+    for idx in range(n):
+        _cost, r = seg_cost(bounds[2 * idx], bounds[2 * idx + 1], idx)
+        if r > _MAX_RATIO or r < 1.0 / _MAX_RATIO:
+            return None
+    # cut in the middle of each chosen silence
+    cuts = [0] + [((cands[c][0] + cands[c][1]) // 2) * win for c in picks] + [len(a)]
+    return [(cuts[i], cuts[i + 1]) for i in range(n)]
+
+
+def _batch_style(styles, lang_name, acting):
+    """One delivery for a take: the most common cues of its lines."""
+    if not acting:
+        base = "natural, clear, conversational"
+    else:
+        words = {}
+        for st in styles:
+            for w in str(st or "").replace(";", ",").split(","):
+                w = w.strip().lower()
+                if w and not w.startswith("then"):
+                    words[w] = words.get(w, 0) + 1
+        top = [w for w, _n in sorted(words.items(), key=lambda kv: -kv[1])[:3]]
+        base = ", ".join(top) if top else "natural and conversational"
+    return (f"{base}. Native {lang_name} speaker, natural dubbing performance. These are "
+            f"separate lines of one video: read each as its own take and leave a clear "
+            f"two-second silence at every long pause").strip()
+
+
+def plan_batches(ids, voice_of, text_of, seconds_of):
+    """[(voice, [line ids])]: lines grouped per voice, in order, cut to the
+    take limits. Single-line groups are left to the per-line path."""
+    by = {}
+    order = []
+    for i in ids:
+        v = voice_of(i)
+        if v not in by:
+            by[v] = []
+            order.append(v)
+        by[v].append(i)
+    out = []
+    for v in order:
+        cur, chars, sec = [], 0, 0.0
+        for i in by[v]:
+            t, d = len(text_of(i)), seconds_of(i)
+            if cur and (len(cur) >= _BATCH_LINES or chars + t > _BATCH_CHARS or sec + d > _BATCH_SEC):
+                out.append((v, cur))
+                cur, chars, sec = [], 0, 0.0
+            cur.append(i)
+            chars += t
+            sec += d
+        if cur:
+            out.append((v, cur))
+    return [(v, g) for v, g in out if len(g) >= 2]
+
+
 def plan_timing(starts, durs, total, max_drift=_MAX_DRIFT, gap=_GAP,
                 max_tempo=_MAX_TEMPO, hard_tempo=_HARD_TEMPO):
     """v1.4.4: place every line on the timeline at once.
@@ -607,7 +860,36 @@ def dub_media(media, cues, src_lang, tgt_lang, out_path, work, opts=None, report
     shared = opts.get("shared_dir") or os.path.dirname(os.path.abspath(work))
     os.makedirs(shared, exist_ok=True)
     t0 = time.monotonic()
-    creds = G.credentials(feature="dub")
+    snap = B.snapshot()
+    saver = B.saver_on() if "saver" not in opts else bool(opts.get("saver"))
+    # v1.5: the voices come from Gemini (default) or ElevenLabs
+    engine = opts.get("voice_engine") or E.engine()
+    if engine not in ("gemini", "elevenlabs"):
+        engine = E.engine()
+    # v1.6: ElevenLabs picked but no key is a clear stop, never a silent
+    # switch to Gemini voices (that read as "it keeps using Gemini")
+    if engine == "elevenlabs" and not E.ready():
+        raise G.GeminiFatal("ElevenLabs voices are picked for this dub, but there is no ElevenLabs "
+                            "key. Add it in Settings → Captions & Dub, or pick Gemini voices.",
+                            "key", 0, "elevenlabs")
+    eleven = engine == "elevenlabs"
+    if eleven:
+        # Gemini is optional here: it still listens and adapts when it is set
+        # up, the voices themselves come from ElevenLabs
+        try:
+            creds = G.credentials(feature="dub")
+        except (G.GeminiUnavailable, RuntimeError):
+            creds = None
+    else:
+        creds = G.credentials(feature="dub")
+    # v1.7: the script (translate + adapt + tighten) has its own pick in
+    # Settings → Captions & Dub → Script. Default: Gemini, else the Captions AI.
+    text_client = None
+    if T.ai_ready("script"):
+        try:
+            text_client = T._client("script")
+        except Exception:                # noqa: BLE001 - same language still works
+            text_client = None
     info = R.probe(media)
     total = info["duration"] or (cues[-1].end + 1 if cues else 0)
     preview = float(opts.get("preview_sec") or 0)
@@ -624,10 +906,21 @@ def dub_media(media, cues, src_lang, tgt_lang, out_path, work, opts=None, report
     # 1. performance
     report("Listening to the performance", 0.02)
     perf = {"speakers": {}, "lines": {}}
-    if acting or opts.get("voice_mode", "auto") == "auto":
+    heard = perf_from_cues(cues)
+    if heard is not None and (acting or opts.get("voice_mode", "auto") == "auto"):
+        # v1.5: the transcription already heard who speaks and how
+        perf = heard
+    elif (creds is not None and (acting or opts.get("voice_mode", "auto") == "auto")
+          and not (eleven and saver)):
+        # v1.6: with ElevenLabs voices + the quota saver, Gemini isn't asked
+        # to read the performance; the voice itself tells who speaks (below)
         perf = read_performance(media, cues, shared, creds,
                                 lambda p: report("Listening to the performance", 0.02 + 0.13 * p),
                                 cancel)
+    # v1.6: speakers and genders from the voice itself (pitch), free and
+    # offline. Fills what the performance read didn't say: a man and a woman
+    # on YouTube captions get two voices, and a woman a female voice.
+    perf = P.enrich(media, cues, perf, shared, cancel)
     utts = build_utterances(cues, perf, acting)
     speakers = perf.get("speakers") or {}
     for u in utts:
@@ -635,7 +928,19 @@ def dub_media(media, cues, src_lang, tgt_lang, out_path, work, opts=None, report
             speakers[u.speaker] = {"id": u.speaker}
     if not speakers:
         speakers = {"": {"id": ""}}
-    voices = cast_voices(speakers, opts.get("voice_mode", "auto"), opts.get("voice") or "Kore")
+    if eleven:
+        pick = str(opts.get("voice") or "")
+        single = pick if pick and pick not in G.VOICE_NAMES else E.default_voice()
+        weights = {}
+        for u in utts:
+            weights[u.speaker] = weights.get(u.speaker, 0.0) + max(0.1, u.end - u.start)
+        if opts.get("voice_mode") == "single" and pick and pick not in G.VOICE_NAMES:
+            # a voice hand-picked in the Voice Studio: exactly that one
+            voices = {sid: pick for sid in (speakers or {"": {}})}
+        else:
+            voices = E.cast(speakers, opts.get("voice_mode", "auto"), single, weights=weights)
+    else:
+        voices = cast_voices(speakers, opts.get("voice_mode", "auto"), opts.get("voice") or "Kore")
     default_voice = next(iter(voices.values()))
 
     # 3. adaptation (cached at the file level: changing voices or the TTS
@@ -661,7 +966,7 @@ def dub_media(media, cues, src_lang, tgt_lang, out_path, work, opts=None, report
             lines, _brief = T.translate_cues(utts, tgt_lang, src_lang, title, mode="dub",
                                              on_progress=lambda p: report("Adapting the script", 0.15 + 0.17 * p),
                                              should_cancel=cancel, cache_dir=shared,
-                                             raw_asr=C.looks_raw_asr(cues))
+                                             raw_asr=C.looks_raw_asr(cues), client=text_client)
         for a, b in zip(lines, utts):
             a.speaker, a.meta = b.speaker, dict(a.meta, style=b.meta.get("style", ""))
 
@@ -676,7 +981,7 @@ def dub_media(media, cues, src_lang, tgt_lang, out_path, work, opts=None, report
         if long_ones:
             report("Tightening long lines", 0.33)
             try:
-                short = T.shorten_lines(long_ones, tgt_lang, should_cancel=cancel)
+                short = T.shorten_lines(long_ones, tgt_lang, client=text_client, should_cancel=cancel)
             except Exception:            # noqa: BLE001 — timing fit still copes
                 short = {}
             for i, x in short.items():
@@ -705,6 +1010,9 @@ def dub_media(media, cues, src_lang, tgt_lang, out_path, work, opts=None, report
             return "natural, clear, conversational"
         return f"{base}. Native {lang_name} speaker, natural dubbing performance".strip(". ")
 
+    e_model = E.model() if eleven else ""
+    voice_model = ("11:" + e_model) if eleven else model
+
     def clip_path(idx, text=None):
         u = lines[idx]
         txt = text or u.text
@@ -712,15 +1020,49 @@ def dub_media(media, cues, src_lang, tgt_lang, out_path, work, opts=None, report
             txt = G._strip_tags(txt)
         voice = voices.get(u.speaker, default_voice)
         sty = style_for(u)
-        return txt, voice, sty, os.path.join(tts_dir, _sha(txt, voice, sty, model) + ".wav")
+        return txt, voice, sty, os.path.join(tts_dir, _sha(txt, voice, sty, voice_model) + ".wav")
 
     def speak(idx, text=None):
         txt, voice, sty, path = clip_path(idx, text)
         if not os.path.isfile(path):
             tmp = f"{path}.{threading.get_ident()}.part"
-            G.tts(creds, txt, tmp, voice, sty, model, tgt_lang, cancel)
+            if eleven:
+                E.tts(txt, tmp, voice, e_model, tgt_lang, sty, cancel)
+            else:
+                G.tts(creds, txt, tmp, voice, sty, model, tgt_lang, cancel)
             os.replace(tmp, path)
         return path
+
+    rate = T.speak_rate(tgt_lang)
+
+    def speak_batch(voice, ids):
+        """v1.5: one TTS request for many lines of one voice. Returns the
+        ids that were recorded; the rest go to the per-line path."""
+        items = [clip_path(i) for i in ids]
+        text = _BATCH_SEP.join(it[0] for it in items)
+        sty = _batch_style([lines[i].meta.get("style", "") for i in ids], lang_name, acting)
+        key = _sha("batch", text, voice, sty, model)
+        take = os.path.join(tts_dir, "batch_" + key + ".wav")
+        if not os.path.isfile(take):
+            tmp = f"{take}.{threading.get_ident()}.part"
+            G.tts(creds, text, tmp, voice, sty, model, tgt_lang, cancel,
+                  timeout=max(120, 30 + 4 * len(ids)))
+            os.replace(tmp, take)
+        expected = [max(0.3, len(G._strip_tags(it[0])) / rate) for it in items]
+        parts = split_take(take, expected)
+        if not parts:
+            G._log(f"batch take of {len(ids)} lines didn't split cleanly; recording them one by one")
+            return []
+        got = _read_wav16(take)
+        if not got:
+            return []
+        a, r = got
+        for (s0, s1), it in zip(parts, items):
+            seg = a[s0:s1]
+            tmp = f"{it[3]}.{threading.get_ident()}.part"
+            _write_wav16(tmp, seg, r)
+            os.replace(tmp, it[3])
+        return list(ids)
 
     raw = [None] * len(lines)
     errors = []
@@ -761,8 +1103,44 @@ def dub_media(media, cues, src_lang, tgt_lang, out_path, work, opts=None, report
             done[0] += 1
             report(rec_label(), 0.36 + 0.46 * done[0] / max(1, n_all))
 
-    if todo:
-        with cf.ThreadPoolExecutor(max_workers=_TTS_WORKERS) as ex:
+    # v1.5 quota saver: one take per voice first (Gemini voices only;
+    # ElevenLabs bills characters, so it gains nothing from batching)
+    if todo and saver and not eleven and creds is not None:
+        groups = plan_batches(todo, lambda i: clip_path(i)[1], lambda i: clip_path(i)[0],
+                              lambda i: len(G._strip_tags(clip_path(i)[0])) / rate)
+
+        def batch_job(g):
+            voice, ids = g
+            if cancel() or quota or fatal:
+                return
+            try:
+                ok_ids = speak_batch(voice, ids)
+            except G.GeminiFatal as f:
+                with lock:
+                    if not fatal:
+                        fatal.append(f)
+                return
+            except G.QuotaExhausted as q:
+                with lock:
+                    if not quota:
+                        quota.append(q)
+                return
+            except Exception as e:       # noqa: BLE001 - per-line path takes over
+                G._log(f"batch take failed ({e!r}); recording its lines one by one")
+                return
+            with lock:
+                for i in ok_ids:
+                    raw[i] = clip_path(i)[3]
+                done[0] += len(ok_ids)
+                report(rec_label(), 0.36 + 0.46 * done[0] / max(1, n_all))
+
+        if groups:
+            report("Recording voices (one take per voice)", 0.36 + 0.46 * done[0] / max(1, n_all))
+            with cf.ThreadPoolExecutor(max_workers=_BATCH_WORKERS) as ex:
+                list(ex.map(batch_job, groups))
+        todo = [i for i in todo if not raw[i]]
+    if todo and not quota and not fatal:
+        with cf.ThreadPoolExecutor(max_workers=2 if eleven else _TTS_WORKERS) as ex:
             list(ex.map(job, todo))
     # v1.4.4: a line that failed (timeout, a busy server) gets one calmer
     # second try before it is left as a gap in the dub
@@ -777,10 +1155,15 @@ def dub_media(media, cues, src_lang, tgt_lang, out_path, work, opts=None, report
         raise fatal[0]
     voiced = sum(1 for r in raw if r)
     if quota:
+        if eleven:
+            raise QuotaStop(
+                f"ElevenLabs credits ran out after {voiced} of {n_all} lines. Everything recorded is "
+                f"saved: top up (or switch to Gemini voices in Settings → Captions & Dub) and press "
+                f"Resume; only the {n_all - voiced} missing lines are recorded.")
         raise QuotaStop(
             f"Gemini's voice quota ran out after {voiced} of {n_all} lines. Everything recorded is "
-            f"saved: press Resume later (or switch to the Fast voice / another key) and only the "
-            f"{n_all - voiced} missing lines are recorded.")
+            f"saved: press Resume later (or switch to the Fast voice / another key / ElevenLabs) "
+            f"and only the {n_all - voiced} missing lines are recorded.")
     if not voiced:
         raise RuntimeError(errors[-1] if errors else "No voice lines were produced.")
     if n_all - voiced > max(1, int(n_all * _MAX_FAILED)):
@@ -810,9 +1193,13 @@ def dub_media(media, cues, src_lang, tgt_lang, out_path, work, opts=None, report
 
     redo = [(i, lines[i].text, slot_of(i)) for i in range(len(lines))
             if tdur[i] and slot_of(i) > 0.8 and tdur[i] > slot_of(i) * _MAX_TEMPO + 0.15]
+    if saver:
+        # v1.5: a rewrite + a fresh recording per long line is the most
+        # expensive fix there is; the planner speeds it up / fits it instead
+        redo = []
     if redo:
         try:
-            short = T.shorten_lines(redo, tgt_lang, should_cancel=cancel)
+            short = T.shorten_lines(redo, tgt_lang, client=text_client, should_cancel=cancel)
         except Exception:                # noqa: BLE001
             short = {}
 
@@ -949,6 +1336,14 @@ def dub_media(media, cues, src_lang, tgt_lang, out_path, work, opts=None, report
                      f"(Resume records them)")
     if trimmed:
         notes.append(f"{trimmed} long line(s) were shortened to stay in sync")
+    used = B.since(snap)
+    if eleven:
+        names = ", ".join(dict.fromkeys(E.voice_name(v) for v in voices.values()))
+        notes.append(f"voiced with ElevenLabs ({names})"
+                     + (f" · {used} Gemini request(s) for listening / the script" if used
+                        else " · no Gemini requests"))
+    else:
+        notes.append(f"{used} Gemini request(s)" if used else "no Gemini requests (all cached)")
     return {"video": out_path, "wav": wav_out, "srt": srt_path,
             "voices": voices, "lines": len(lines), "failed_lines": failed,
             "trimmed_lines": trimmed, "note": " · ".join(notes),

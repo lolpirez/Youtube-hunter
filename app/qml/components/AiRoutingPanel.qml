@@ -32,11 +32,22 @@ ColumnLayout {
     readonly property var choiceLabels: choices.map(function (c) { return c.label })
     readonly property var choiceIcons: choices.map(function (c) { return c.glyph })
 
+    // v1.6: which feature rows to show ([] = all). Settings shows "ideas"
+    // under AI Providers and "captions" / "dub" under Captions & Dub.
+    property var features: []
+    readonly property var _rows: {
+        var rs = Settings.aiRoutes || []
+        var out = []
+        for (var i = 0; i < rs.length; i++)
+            if (!root.features.length || root.features.indexOf(rs[i].feature) >= 0) out.push(i)
+        return out
+    }
+
     Repeater {
-        model: (Settings.aiRoutes || []).length
+        model: root._rows.length
         delegate: Rectangle {
             id: row
-            readonly property var r: (Settings.aiRoutes || [])[index] || ({})
+            readonly property var r: (Settings.aiRoutes || [])[root._rows[index]] || ({})
             Layout.fillWidth: true
             radius: Tokens.radiusLg
             color: rowHover.hovered ? U.hoverTint(Theme.surface_low, Theme.isDark) : Theme.surface_low

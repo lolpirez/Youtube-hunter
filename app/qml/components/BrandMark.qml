@@ -61,6 +61,19 @@ Item {
     readonly property real _ePlay: _outBack(playPop)
     readonly property real _sheenX: sheen < 0 ? -100000 : (-300 + sheen * (_vw + 600))
 
+    // v16: one light sweep on demand (the title-bar logo uses it when the
+    // splash docks into it, and on hover). Only for marks whose `sheen` is
+    // not bound: calling it replaces a binding with a plain value.
+    function shine() {
+        if (shineRun.running) return
+        shineRun.start()
+    }
+    SequentialAnimation {
+        id: shineRun
+        NumberAnimation { target: root; property: "sheen"; from: 0; to: 1; duration: 760; easing.type: Easing.InOutSine }
+        PropertyAction { target: root; property: "sheen"; value: -1 }
+    }
+
     Item {
         id: stage
         anchors.fill: parent

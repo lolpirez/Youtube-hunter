@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.captions import cues as C            # noqa: E402
 from app.core.captions import dubbing as D          # noqa: E402
+from app.core.captions import elevenlabs as E       # noqa: E402
 from app.core.captions import gemini_media as G     # noqa: E402
 from app.core.captions import jobs as J             # noqa: E402
 from app.core.captions import render as R           # noqa: E402
@@ -82,6 +83,9 @@ def main():
     G.has_gemini = lambda cfg=None, feature="dub": True
     G.listen_json = fake_listen
     G.tts = fake_tts
+    # The real config may have ElevenLabs picked: this check is offline and
+    # must never spend the user's ElevenLabs credits.
+    E.engine = lambda cfg=None: "gemini"
     print("subtitles filter:", R.has_filter("subtitles"))
     for style in ST.STYLE_KEYS:
         for mode in ("burn", "soft", "srt"):

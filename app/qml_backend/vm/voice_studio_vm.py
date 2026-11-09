@@ -20,6 +20,7 @@ import uuid
 
 from PySide6.QtCore import QObject, Property, QTimer, Signal, Slot
 
+from app.core.captions import dubbing as D
 from app.core.captions import gemini_media as G
 from app.core.captions import jobs as J
 from app.core.captions import languages as L
@@ -309,7 +310,7 @@ class VoiceStudioVM(QObject):
         """Re-read which AI keys exist. v1.3.3: only notifies when the answer
         changed, so the inline decks can call it on show without waking
         every binding on the page in its entrance frame."""
-        gem, ai = G.has_gemini(), T.ai_ready()
+        gem, ai = D.can_dub(), T.ai_ready()
         label = T.provider_label() if ai else ""
         lis = G.can_listen("captions")
         lis_label = G.listen_label("captions") if lis else ""
@@ -480,8 +481,8 @@ class VoiceStudioVM(QObject):
         if not opts.get("media") or not os.path.isfile(opts["media"]):
             self.toast.emit(tr("The file couldn't be found — it may have been moved or deleted."), "error")
             return ""
-        if kind == "dub" and not G.has_gemini():
-            self.toast.emit(tr("Dubbing needs a Gemini model: a Google Gemini key, or a provider that serves Gemini (Settings → Which AI does what → AI dub)."), "error")
+        if kind == "dub" and not D.can_dub(engine=opts.get("voice_engine") or ""):
+            self.toast.emit(tr(D.why_cant_dub(opts.get("voice_engine") or "")), "error")
             return ""
         if (opts.get("source") == "ai" and kind != "dub" and not G.can_listen("captions")
                 and not opts.get("video_id")):        # v1.4.10: YouTube's words will do
@@ -520,8 +521,8 @@ class VoiceStudioVM(QObject):
         """Keep the choices until the cut/download exists, with the same
         provider checks a live run would make before starting."""
         opts = self._opts(raw)
-        if kind == "dub" and not G.has_gemini():
-            self.toast.emit(tr("Dubbing needs a Gemini model: a Google Gemini key, or a provider that serves Gemini (Settings → Which AI does what → AI dub)."), "error")
+        if kind == "dub" and not D.can_dub(engine=opts.get("voice_engine") or ""):
+            self.toast.emit(tr(D.why_cant_dub(opts.get("voice_engine") or "")), "error")
             return ""
         if (opts.get("source") == "ai" and kind != "dub" and not G.can_listen("captions")
                 and not opts.get("video_id")):        # v1.4.10: YouTube's words will do
@@ -924,8 +925,8 @@ class VoiceStudioVM(QObject):
 
     def _check(self, kind, opts):
         """The same provider checks a manual start makes. '' = fine."""
-        if kind == "dub" and not G.has_gemini():
-            return tr("AI dub needs a Gemini model: a Google Gemini key, or a provider that serves Gemini (Settings → Which AI does what → AI dub).")
+        if kind == "dub" and not D.can_dub(engine=opts.get("voice_engine") or ""):
+            return tr(D.why_cant_dub(opts.get("voice_engine") or ""))
         if (opts.get("source") == "ai" and kind != "dub" and not G.can_listen("captions")
                 and not opts.get("video_id")):        # v1.4.10: YouTube's words will do
             return self._listen_why()
@@ -941,7 +942,7 @@ class VoiceStudioVM(QObject):
             return ""
         except Exception as e:            # noqa: BLE001
             return FR.short(str(e)) if str(e) else tr(
-                "“AI listens” needs a provider that can hear audio (Settings → Which AI does what).")
+                "“AI listens” needs a provider that can hear audio (Settings → Captions & Dub).")
 
     @staticmethod
     def _step_weight(kind, opts):
@@ -1224,6 +1225,8 @@ class VoiceStudioVM(QObject):
                     "acting": True,
                     "bg_mode": dub.get("bg") if dub.get("bg") in ("duck", "bed", "replace") else "duck",
                     "tts_model": dub.get("model") if dub.get("model") in models else (models[0] if models else ""),
+                    # v1.6: the panel can pick the voices per dub; "" = Settings' choice
+                    "voice_engine": dub.get("engine") if dub.get("engine") in ("gemini", "elevenlabs") else "",
                     "keep_original": True, "burn_style": "", "size": "m", "position": "bottom"}
         if into is not None:
             into.update(clean)
@@ -1234,6 +1237,19 @@ class VoiceStudioVM(QObject):
             self._bump_queue()
         return sorted(clean)
 
+    @staticmethod
+    def dubReadiness():
+        """v1.6: which voices can speak a dub right now. Read fresh on every
+        call (the panel asks again whenever its dub box is open), so turning
+        ElevenLabs on in the app shows in the panel at once."""
+        from app.core.captions import elevenlabs as E
+        try:
+            gem = bool(G.has_gemini())
+        except Exception:                # noqa: BLE001
+            gem = False
+        return {"engine": E.engine(), "eleven": bool(E.ready()), "geminiVoices": gem,
+                "elevenVoice": E.voice_name(E.default_voice()) if E.ready() else ""}
+
     @Slot(result="QVariantMap")
     def panelOptions(self):
         """What the YouTube panel needs to draw its Captions & dub section."""
@@ -1243,7 +1259,8 @@ class VoiceStudioVM(QObject):
                                "native": l["native"], "name": l["name"]} for l in L.LANGUAGES],
                 "voices": [n for n, _g, _c in G.VOICES],
                 "models": [{"key": m["key"], "label": tr(m["name"])} for m in G.TTS_MODELS],
-                "gemini": bool(G.has_gemini()), "ai": bool(T.ai_ready()),
+                "gemini": bool(D.can_dub()), "ai": bool(T.ai_ready()),
+                **self.dubReadiness(),
                 # v1.4.9: "AI listens" follows the Captions pick, not Gemini
                 "listen": bool(G.can_listen("captions")),
                 "listenLabel": G.listen_label("captions"),

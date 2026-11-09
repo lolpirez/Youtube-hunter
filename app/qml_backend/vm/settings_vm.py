@@ -525,8 +525,10 @@ class SettingsVM(QObject):
         # with Gemini, so its row only offers Gemini profiles.
         # v1.4.10: any model translates; one that can't hear audio gets a
         # listener borrowed for it (see gemini_media.listen_candidates)
-        ("captions", "Captions", "Writes and translates the lines. Gemini can listen to the audio too", "translate"),
-        ("dub",      "AI dub", "Listening, adapting and voicing. Works with Gemini models only", "volume_up"),
+        ("captions", "Captions", "Writes and translates the subtitles. Gemini can listen to the audio too", "subject"),
+        # v1.7: the dub's script has its own pick, any provider (default Gemini)
+        ("script",   "Dub script", "Translates the lines and rewrites them to sound natural and fit the timing", "translate"),
+        ("dub",      "Listening & Gemini voices", "Hears who speaks when there are no captions, and speaks with Gemini voices. Gemini models only", "auto_awesome"),
         # "AI Chat" picks its provider, model and effort in its own composer
         # (every saved provider's models are listed there), and "Reports" is
         # gone — neither has a row here any more.
@@ -640,6 +642,10 @@ class SettingsVM(QObject):
         for f, title, _sub, _ic in self._AI_FEATURES:
             r = self._ai["routes"].get(f, {})
             target = r.get("profile") or self._ai["active"]
+            if f == "script" and not r.get("profile"):
+                gem, _pin = ai_profiles.script_gemini(self._ai)
+                target = gem["id"] if gem else (self._ai["routes"].get("captions", {}).get("profile")
+                                               or self._ai["active"])
             if target == p["id"]:
                 used.append(tr(title))
         if mode == "google_genai":
@@ -931,6 +937,16 @@ class SettingsVM(QObject):
             if f in ai_profiles.GEMINI_ONLY:
                 prof = ai_profiles.gemini_for(self._ai, r) or prof
             model = r.get("model") or ""
+            resolved_model = None
+            if f == "script":
+                # v1.7: Default resolves to Gemini (or the Captions pick), so
+                # show what really runs, judged on the unsaved edits
+                try:
+                    rr = ai_profiles.resolve("script", ai_profiles.write_state({}, copy.deepcopy(self._ai)))
+                    prof = self._prof(rr["profile_id"]) or prof
+                    resolved_model = rr["model"]
+                except Exception:      # noqa: BLE001
+                    pass
             pq = self._profile_qml(prof)
             ts = self._route_test.get(f, {})
             models = pq["models"]
@@ -941,8 +957,13 @@ class SettingsVM(QObject):
                 models = gm or models
                 if not ai_profiles.dub_capable(prof) or not self._ready(prof):
                     warn = True
-                    note = tr("The AI dub runs on Google Gemini only (custom providers don't serve "
-                              "Gemini's voices). Add a Gemini key in AI Providers, free from Google AI Studio.")
+                    note = tr("No Google Gemini key yet. Gemini voices need one (free from Google AI Studio, "
+                              "add it in AI Providers). With ElevenLabs voices the dub still runs: "
+                              "the voice itself tells who speaks, and your Script AI adapts the lines.")
+            elif f == "script":
+                if not r.get("profile") and prof.get("kind") != "gemini":
+                    note = tr("No Google Gemini key yet, so your Captions AI ({name}) writes the script. "
+                              "Pick any provider above to choose it yourself.").replace("{name}", prof["name"])
             elif f == "captions":
                 note = self._listen_note()
                 warn = "can't hear audio, and none" in note
@@ -961,7 +982,7 @@ class SettingsVM(QObject):
                                if (r.get("effort") or "auto") in EFFORT_LEVELS else 0,
                 "resolvedId": prof["id"],
                 "resolvedName": prof["name"],
-                "resolvedModel": ai_profiles.effective_model(prof, model),
+                "resolvedModel": resolved_model or ai_profiles.effective_model(prof, model),
                 "resolvedGlyph": pq["glyph"],
                 "ready": self._ready(prof) and (f not in ai_profiles.GEMINI_ONLY
                                                 or ai_profiles.dub_capable(prof)),
@@ -1022,6 +1043,13 @@ class SettingsVM(QObject):
         return out
 
     def _route_choices(self, feature):
+        if feature == "script":
+            # v1.7: any provider; Default is Gemini (not the default provider)
+            out = [{"id": "", "label": tr("Default (Gemini)"), "glyph": "gemini", "ready": True}]
+            for p in self._ai["profiles"]:
+                out.append({"id": p["id"], "label": p["name"],
+                            "glyph": self._profile_qml(p)["glyph"], "ready": self._ready(p)})
+            return out
         if feature not in ai_profiles.GEMINI_ONLY:
             return self.aiRouteChoices
         out = [{"id": "", "label": tr("Auto (Gemini)"), "glyph": "gemini", "ready": True}]

@@ -313,10 +313,23 @@ Rules:
 - Write clean, fluent subtitles of exactly what is said: correct punctuation, casing and spelling; numbers as digits; never break a line in the middle of a short phrase.
 - Keep fillers only when meaningful. Mark non-speech only as [music] / [laughs] / [applause] lines when there is no speech.
 - "spk": a short speaker id (S1, S2, …) consistent within the clip{spk_hint}.
-- "lang": the BCP-47 code of the spoken language.
+- "lang": the BCP-47 code of the spoken language.{perf_rules}
 
 Return JSON only:
-{{"lang": "en", "lines": [{{"s": 0.0, "e": 2.4, "t": "text", "spk": "S1"}}]}}"""
+{perf_shape}"""
+
+_SHAPE_PLAIN = '{"lang": "en", "lines": [{"s": 0.0, "e": 2.4, "t": "text", "spk": "S1"}]}'
+
+# v1.5 quota saver: the same request also does the dub's performance read
+# (who speaks, how, and the vocal events), so a dub of this file skips a
+# whole listening request. Only a few output tokens per line.
+_PERF_RULES = """
+- "style": how the line is delivered, in English, max 5 words ("excited, fast" / "deadpan, slow" / "whispered, nervous").
+- "tagged": ONLY when you hear a vocal event in the line: the line text with the event where it happens, using
+  <laugh> <chuckle> <giggle> <sigh> <gasp> <breath> <cough> <sniff> <scoff> <hmm> <short pause> <long pause>. Leave it out otherwise.
+- "speakers": one entry per speaker id with "gender" (male|female) and "age" (child|teen|young adult|adult|senior)."""
+_SHAPE_PERF = ('{"lang": "en", "speakers": [{"id": "S1", "gender": "male", "age": "adult"}], '
+               '"lines": [{"s": 0.0, "e": 2.4, "t": "text", "spk": "S1", "style": "excited, fast"}]}')
 
 
 def _listen_shape(data):
@@ -325,7 +338,7 @@ def _listen_shape(data):
     several slice objects in a list, and other key names for the lines.
     Every shape becomes {"lang": str, "lines": [dict, ...]}; this used to
     crash with "'list' object has no attribute 'get'"."""
-    lang, lines = "", []
+    lang, lines, speakers = "", [], {}
 
     def take(obj):
         nonlocal lang
@@ -337,17 +350,34 @@ def _listen_shape(data):
             return
         if not lang and isinstance(obj.get("lang") or obj.get("language"), str):
             lang = obj.get("lang") or obj.get("language")
+        sps = obj.get("speakers")
+        if isinstance(sps, dict):           # our own cached shape
+            sps = [dict(v, id=k) for k, v in sps.items() if isinstance(v, dict)]
+        for sp in sps if isinstance(sps, list) else []:
+            if isinstance(sp, dict) and sp.get("id"):
+                speakers[str(sp["id"])] = {"gender": str(sp.get("gender") or "").lower(),
+                                           "age": str(sp.get("age") or "")}
         inner = next((obj[k] for k in ("lines", "subtitles", "segments", "captions", "cues")
                       if isinstance(obj.get(k), list)), None)
         if inner is not None:
             take(inner)
         elif any(k in obj for k in ("t", "text")) and any(k in obj for k in ("s", "start")):
-            lines.append({"s": obj.get("s", obj.get("start", 0)),
-                          "e": obj.get("e", obj.get("end", 0)),
-                          "t": obj.get("t", obj.get("text", "")),
-                          "spk": obj.get("spk", obj.get("speaker", ""))})
+            ln = {"s": obj.get("s", obj.get("start", 0)),
+                  "e": obj.get("e", obj.get("end", 0)),
+                  "t": obj.get("t", obj.get("text", "")),
+                  "spk": obj.get("spk", obj.get("speaker", ""))}
+            if "style" in obj:
+                ln["style"] = str(obj.get("style") or "")
+            if obj.get("tagged"):
+                ln["tagged"] = str(obj.get("tagged"))
+            lines.append(ln)
     take(data)
-    return {"lang": str(lang or ""), "lines": lines}
+    out = {"lang": str(lang or ""), "lines": lines}
+    if speakers:
+        out["speakers"] = speakers
+    if isinstance(data, dict) and data.get("_perf"):
+        out["_perf"] = 1
+    return out
 
 
 def ai_transcribe(media_path, start=0.0, end=0.0, chunk=120.0, on_progress=None,
@@ -373,6 +403,11 @@ def ai_transcribe(media_path, start=0.0, end=0.0, chunk=120.0, on_progress=None,
     n = max(1, int((total_end - start + chunk - 1) // chunk))
     i = 0
     known_spk = []
+    # v1.5: with the quota saver on, the transcription also reads the
+    # performance (the dub then skips its own listening request)
+    from app.core.captions import gemini_budget as B
+    with_perf = B.saver_on()
+    spk_info = {}
     while t < total_end - 0.5:
         if should_cancel and should_cancel():
             raise R.Cancelled()
@@ -396,9 +431,14 @@ def ai_transcribe(media_path, start=0.0, end=0.0, chunk=120.0, on_progress=None,
                     if known_spk else "")
             while True:
                 try:
-                    data = _listen_shape(G.listen_json(chain[ear], audio,
-                                                       _TRANSCRIBE_PROMPT.format(dur=dur, spk_hint=hint),
+                    prompt = _TRANSCRIBE_PROMPT.format(
+                        dur=dur, spk_hint=hint,
+                        perf_rules=_PERF_RULES if with_perf else "",
+                        perf_shape=_SHAPE_PERF if with_perf else _SHAPE_PLAIN)
+                    data = _listen_shape(G.listen_json(chain[ear], audio, prompt,
                                                        _TRANSCRIBE_SYS, should_cancel=should_cancel))
+                    if with_perf:
+                        data["_perf"] = 1
                     break
                 except G.ListenUnsupported as e:
                     if ear + 1 >= len(chain):
@@ -416,8 +456,11 @@ def ai_transcribe(media_path, start=0.0, end=0.0, chunk=120.0, on_progress=None,
                 os.remove(audio)
             except OSError:
                 pass
+        perf_slice = bool(isinstance(data, dict) and data.get("_perf"))
         data = _listen_shape(data)          # an old cached slice may be any shape
         lang = lang or str(data.get("lang") or "").split("-")[0]
+        for sid, info in (data.get("speakers") or {}).items():
+            spk_info.setdefault(sid, info)
         for ln in data.get("lines") or []:
             try:
                 s, e = float(ln.get("s", 0)), float(ln.get("e", 0))
@@ -430,7 +473,18 @@ def ai_transcribe(media_path, start=0.0, end=0.0, chunk=120.0, on_progress=None,
             spk = str(ln.get("spk") or "")
             if spk and spk not in known_spk:
                 known_spk.append(spk)
-            out.append(C.Cue(t + s - start, t + max(e, s + 0.3) - start, text, speaker=spk))
+            meta = {}
+            if perf_slice:
+                meta = {"perf": 1, "style": str(ln.get("style") or "")[:60]}
+                if ln.get("tagged"):
+                    meta["tagged"] = C.clean_text(str(ln["tagged"]))
+                info = spk_info.get(spk) or {}
+                if info.get("gender") in ("male", "female"):
+                    meta["gender"] = info["gender"]
+                if info.get("age"):
+                    meta["age"] = info["age"]
+            out.append(C.Cue(t + s - start, t + max(e, s + 0.3) - start, text, speaker=spk,
+                             meta=meta))
         i += 1
         t += dur
         if on_progress:
