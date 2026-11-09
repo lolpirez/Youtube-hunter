@@ -55,6 +55,31 @@ The panel stays open after you press Download — you can start another quality 
 
 Finished clips appear in the app's **Cutter** history with their own card, ready to play, reveal or re-cut.
 
+## 4a. Caption size and place (v1.4.1)
+
+Turn on **Captions** under the quality list: next to *Look* and *Output* are
+**Size** (Small / Medium / Large) and **Place** (Bottom / Middle / Top). They
+apply when the captions are burned in, or drawn over a dub; with *Track* or
+*.srt* the player decides, so the two rows grey out.
+
+## 4b. Move, resize, lock, minimise (v1.4.0)
+
+The panel is yours to place:
+
+- **Move:** drag its header. Let go near a window edge and it docks there;
+  drop it near its usual spot (top right, under YouTube's bar) and it snaps home.
+- **Resize:** drag either side, the bottom edge, or the free bottom corner
+  (a small bracket shows there on hover). The Download and Cut tabs each keep
+  their own width.
+- **Lock:** the padlock in the header freezes position and size, so a
+  stray drag can't move it. While it's locked the padlock wiggles if you try.
+- **Minimise:** the chevron folds the panel into a slim header that keeps
+  showing the live percent and a thin progress line. Tap the header to open it.
+- **Reset:** double-click the header to send it home at its default size.
+
+Position, size and lock are remembered across tabs and restarts (in the
+extension's own storage). Minimise only lasts while the panel is open.
+
 ## 5. What happens when you leave the page
 
 While the panel is open it keeps the desktop **live activity card** away (the panel is already showing the job). Close the panel, switch tabs, or navigate away and the desktop card takes over within a few seconds and follows the job to the end — same as an in-app download or cut.

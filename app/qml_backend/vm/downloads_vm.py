@@ -20,11 +20,13 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 from datetime import datetime, timezone
 
 from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
 
 from app.config import load_app_config
+from app.core import post_fx as FX
 from app.core.db.downloads import (downloads_apply_channel_meta,
                                     downloads_delete, downloads_get, downloads_list,
                                     downloads_upsert, file_size_of)
@@ -37,6 +39,7 @@ from app.core.utils import video_download_dir, reveal_in_file_manager
 from app.crash import log_crash
 from app.i18n import tr
 from app.qml_backend.vm import _dl_progress as dlp
+from app.qml_backend.vm import _post_production as post
 from app.qml_backend.vm.quality_probe import default_quality_rows
 from app.qml_backend.desktop_notifier import announce, announce_download
 
@@ -153,6 +156,19 @@ _QUALITY_KEY_LABELS = {
 _AUDIO_EXTS = frozenset({
     ".mp3", ".m4a", ".aac", ".opus", ".ogg", ".oga", ".wav", ".flac", ".wma",
 })
+
+
+_POST_RE = re.compile(r"^\.([a-z]{2,3}(?:-[a-z0-9]{2,8})?)\.(dub|captions|subs)(?:-preview)?\b", re.I)
+
+
+def _post_tag(rest):
+    """v1.4.4: ".fa.dub.mp4" -> "FA dub" (what captions / dub made of a
+    download), "" for the plain file."""
+    m = _POST_RE.match(rest or "")
+    if not m:
+        return ""
+    kind = {"dub": tr("AI dub"), "captions": tr("Captions"), "subs": tr("Subtitles")}[m.group(2).lower()]
+    return f"{m.group(1).upper()} {kind}"
 
 
 def _is_audio_download(filepath, quality_key=""):
@@ -389,6 +405,8 @@ class DownloadsVM(QObject):
                 # overrides it while a download is actually running.
                 "pct": int(item.get("progress") or 0),
                 "filepath": item.get("filepath") or "",
+                # v1.4.7: captions / dub in the file the row shows
+                "fx": FX.badge(item.get("post_fx"), item.get("filepath") or ""),
                 "error": item.get("error_message") or "",
                 "channelTitle": item.get("channel_title") or "",
                 "dayKey": day_key,
@@ -451,6 +469,9 @@ class DownloadsVM(QObject):
                 "speedText": speed_text,
                 "etaText": eta_text,
                 "fragText": frag_text,
+                # v1.4: the download is in, captions / dub are running
+                "post": bool(d.get("post")),
+                "steps": list(d.get("steps") or []),
                 # The row's tooltip: the same figures, spelled out in words so
                 # the numbers on the line are self-explanatory on first sight.
                 "tipText": _live_tip(
@@ -676,6 +697,12 @@ class DownloadsVM(QObject):
         The row is KEPT (parked as "stopped" once the worker unwinds) so it can
         be resumed later; the trash icon is the destructive option.
         """
+        if post.running(video_id):
+            # v1.4: Stop on a finishing row stops the captions / dub; the
+            # downloaded video itself is kept
+            post.cancel(video_id)
+            self.toast.emit(tr("Stopping captions & dub…"), "info")
+            return
         if not dlp.is_running(video_id):
             # Nothing is actually transferring (the worker already ended, or
             # the row was left "downloading" by a run that died). Pressing
@@ -708,7 +735,7 @@ class DownloadsVM(QObject):
     def canPause(self, video_id):
         entry = dlp.get(video_id) or {}
         return (video_id in self._owned and bool(entry.get("running"))
-                and not entry.get("cancelling"))
+                and not entry.get("cancelling") and not entry.get("post"))
 
     @Slot(str, result=bool)
     def pauseDownload(self, video_id):
@@ -908,6 +935,16 @@ class DownloadsVM(QObject):
             else:
                 self.toast.emit(tr("Download stopped."), "info")
             return
+        # v1.4: captions / a dub were picked for this video → the download
+        # keeps going as "finishing" (second bar), and is only reported done
+        # (and playable) when those are done too
+        if ok and filepath and post.begin(
+                video_id, filepath, on_finish=lambda st, f, sm, v=video_id: self._on_post_done(v, st, f, sm)):
+            self.refresh()
+            self._tick += 1
+            self.progressChanged.emit()
+            self.toast.emit(tr("Downloaded. Now adding captions & dub…"), "info")
+            return
         downloads_upsert(video_id, status="complete" if ok else "failed",
                          progress=100 if ok else None,
                          filepath=filepath if ok else "",
@@ -924,10 +961,35 @@ class DownloadsVM(QObject):
             self.toast.emit(message or tr("Download failed"), "error")
         # v3.40: away notice in the corner of the screen
         announce_download(video_id, ok, message, filepath)
+        if ok and filepath:
+            self._run_queued_studio(video_id, filepath)
+
+    def _on_post_done(self, video_id, state, final, summary):
+        self.refresh()
+        self._tick += 1
+        self.progressChanged.emit()
+        text, kind = post.finish_text(state, summary)
+        self.toast.emit(text.replace("{f}", os.path.basename(final or "")), kind)
+
+    def _run_queued_studio(self, video_id, filepath):
+        """Captions/dub the user picked in the quality picker run now that
+        the file exists."""
+        try:
+            from app.qml_backend.vm.voice_studio_vm import VoiceStudioVM
+            studio = VoiceStudioVM.instance()
+            if studio is None:
+                return
+            title = (downloads_get(video_id) or {}).get("title") or ""
+            studio.runQueued(video_id, filepath, title=title)
+        except Exception:                 # noqa: BLE001 — never break a download
+            log_crash("DownloadsVM queued Voice Studio failed:\n"
+                      + traceback.format_exc())
 
     # ── row actions ──────────────────────────────────────────────────────
     @Slot(str)
     def deleteEntry(self, video_id):
+        if post.running(video_id):
+            post.cancel(video_id)
         # If it's still downloading, stop it for real first — otherwise the row
         # leaves the list while yt-dlp keeps pulling bytes in the background.
         # The cancel flag is also what makes late progress ticks from the
@@ -1053,9 +1115,18 @@ class DownloadsVM(QObject):
                 # in the player's quality menu opened a truncated file.
                 if not os.path.isfile(full) or ".part" in low or low.endswith(".ytdl"):
                     continue
+                # v1.4.4: the .srt / voice track a dub writes beside the video
+                # are not something the player can switch to
+                if low.endswith((".srt", ".vtt", ".ass", ".json", ".voice.wav", ".subs-tmp.mp4", ".subs-tmp.mkv")):
+                    continue
                 key = m.group(1).strip().lower()
                 label = _QUALITY_KEY_LABELS.get(key) or (key.upper() if key
                                                         else tr("Downloaded"))
+                # v1.4.4: "x [id] 1080p.fa.dub.mp4" is not a second 1080p:
+                # name what was done to it, so the menu tells them apart
+                post_tag = _post_tag(name[m.end():])
+                if post_tag:
+                    label = f"{label} · {post_tag}"
                 variants.append({"label": label, "key": key,
                                  "filePath": full,
                                  "fileUrl": QUrl.fromLocalFile(full).toString()})

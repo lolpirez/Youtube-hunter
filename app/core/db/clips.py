@@ -7,6 +7,7 @@ twice keeps both files instead of overwriting). Survives page switches and
 app restarts — the Cutter page rebuilds its "Clips" section from here.
 """
 
+import os
 import sqlite3
 
 from app.core.db._sqlite import connect as db_connect
@@ -52,6 +53,9 @@ _CHANNEL_COLUMNS = {
     "channel_url":       "TEXT",
     "channel_thumb_url": "TEXT",
     "subscriber_count":  "INTEGER",
+    # v1.4.7: the plain cut + what captions / dub did to it (see post_fx.py)
+    "original_path":     "TEXT",
+    "post_fx":           "TEXT",
 }
 
 
@@ -71,7 +75,8 @@ def _subs_or_none(v):
 
 
 def clips_add(title, source_label="", video_id="", start_sec=0.0, end_sec=0.0,
-              quality_label="", filepath="", file_size=0, channel=None):
+              quality_label="", filepath="", file_size=0, channel=None,
+              original_path="", post_fx=""):
     """Insert one finished clip. Returns the new row id, or 0 on failure.
 
     `channel` is the source video's identity (channel_title, channel_id,
@@ -87,14 +92,15 @@ def clips_add(title, source_label="", video_id="", start_sec=0.0, end_sec=0.0,
                 (title, source_label, video_id, start_sec, end_sec,
                  quality_label, filepath, file_size, created_at,
                  channel_title, channel_id, channel_url, channel_thumb_url,
-                 subscriber_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 subscriber_count, original_path, post_fx)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (title or "", source_label or "", video_id or "",
               float(start_sec or 0), float(end_sec or 0),
               quality_label or "", filepath or "", int(file_size or 0), now,
               ch.get("channel_title") or "", ch.get("channel_id") or "",
               ch.get("channel_url") or "", ch.get("channel_thumb_url") or "",
-              _subs_or_none(ch.get("subscriber_count"))))
+              _subs_or_none(ch.get("subscriber_count")),
+              original_path or "", post_fx or ""))
         row_id = cur.lastrowid or 0
         conn.commit()
         conn.close()
@@ -174,4 +180,53 @@ def clips_clear():
         conn.close()
         return True
     except Exception:
+        return False
+
+
+def clips_find_by_path(path):
+    """v1.4.7: the clip a file belongs to (current file or original)."""
+    from app.core import post_fx as FX
+    if not path:
+        return None
+    for row in clips_list():
+        if FX.same_path(row.get("filepath"), path) or FX.same_path(row.get("original_path"), path):
+            return row
+    return None
+
+
+def clips_adopt(clip_id, final, layers, base_path):
+    """v1.4.7: point a clip at its captioned / dubbed version (the plain cut
+    stays on disk as original_path). Same stacking rules as downloads."""
+    from app.core import post_fx as FX
+    if not clip_id or not final or not os.path.isfile(final):
+        return False
+    try:
+        conn = db_connect(DATA_DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        _ensure_channel_columns(cur)
+        cur.execute("SELECT * FROM clips WHERE id = ?", (int(clip_id),))
+        row = cur.fetchone()
+        if row is None:
+            conn.close()
+            return False
+        row = dict(row)
+        current = row.get("filepath") or ""
+        original = row.get("original_path") or ""
+        if not original or not os.path.isfile(original):
+            original = current
+        on_current = FX.same_path(base_path, current) and not FX.same_path(current, original)
+        new_layers = FX.stack(row.get("post_fx") or FX.from_name(current), layers, on_current)
+        try:
+            size = os.path.getsize(final)
+        except OSError:
+            size = 0
+        cur.execute("UPDATE clips SET filepath=?, file_size=?, original_path=?, post_fx=? WHERE id=?",
+                    (final, int(size), original or "", FX.dump(new_layers), int(clip_id)))
+        conn.commit()
+        conn.close()
+        FX.remember(final, new_layers)
+        return True
+    except Exception:
+        log_crash("clips_adopt failed:\n" + traceback.format_exc())
         return False

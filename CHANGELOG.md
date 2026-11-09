@@ -7,6 +7,692 @@ Version numbering restarted at **1.0.0** for the public release.
 
 ---
 
+## 1.3.0: captions & AI dub each get their own AI, fluent YouTube captions
+
+- **Settings → AI Providers → Which AI does what now has three rows.** Ideas,
+  Captions and AI dub each keep their own provider + model, with a Test button
+  that makes a real call before a job depends on it. Captions may use any
+  saved provider; the picked model translates every line. AI dub works with
+  Google Gemini only — routers sell Gemini's chat models, not its voices.
+- **Captions: "Gemini listens to the audio" switch** (on by default). On,
+  Gemini hears the video and writes the lines itself; off, YouTube's captions
+  are fetched and Gemini makes them fluent / translates them. The card draws
+  the flow and the quota trade-off, and is disabled with a note when the pick
+  isn't Google's own Gemini.
+- **Listening follows the model that can hear.** A text-only pick (DeepSeek,
+  Claude, Llama…) gets YouTube's captions first — no audio upload, no wasted
+  503s. When audio is needed, the app borrows a hearing Gemini (same provider
+  first), and a listener that fails mid-job hands the same slice to the next.
+- **Fluent auto captions.** Raw speech-recognition lines (no punctuation,
+  misheard words) are detected: kept as-is they get a cheap polish pass;
+  translated / dubbed, the model is told they are raw speech so sentences
+  flow across lines.
+- **Caption looks, one size.** Every look and language renders at the same
+  real text size (Persian was ~35 % smaller), boxes are spaced by the font's
+  own cell so lines never touch, Glass / Spotlight get rounded boxes, and
+  Persian / Arabic / Hebrew get word-by-word Spotlight and Bold Pop.
+  Overlapping word stamps from YouTube's ASR are clamped
+  (`cues.clamp_words`, `styles._no_overlap`).
+- **No wasted tokens.** A quota / bad-key / no-network reply stops the job at
+  once; finished translation batches are cached for Resume. Gemini behind an
+  OpenAI-compatible router gets a minimal reasoning effort instead of thinking
+  at high on every batch; GLM / Qwen3 get thinking turned off for caption
+  work. A reply that isn't JSON (a `<think>` block, prose, a cut-off answer)
+  is read properly and retried once, then named in a sentence instead of
+  "Expecting value: line 1 column 1 (char 0)".
+- **AI dub:** raw-caption hint in the script adaptation and compact JSON in
+  the performance read / line tightening (fewer input tokens).
+- **Extension: Play / Show in folder open the copy you picked.** The panel
+  sends its captions / dub choices and the app opens the matching file
+  (plain, captions, dub, or both); nothing picked means the plain download.
+  Every produced file is remembered (`post_variants.json`) so a later
+  download of the same video can't lose which copy holds what.
+- **Extension: solid dropdowns.** An open Audio-track list no longer paints
+  under the rows below; the entrance fill is backwards-only, the open row
+  lifts, both lists get one opaque surface and a themed scrollbar.
+- **Extension: friendly errors.** Provider replies become a short title /
+  detail / hint card (daily limit, bad key, network) with "Retry in app"; the
+  raw reply stays in the crash log.
+- **Greenlight parts:** hovering a part opens its reason smoothly with a
+  glint on the bar and a turning chevron.
+- **The launch splash is untouched on purpose** — this build keeps the
+  original BrandSplash already in the source; none of the update bundle's
+  splash / loading changes were applied.
+
+---
+
+## 1.2.0: Voice Studio — captions & AI dub, memory diet, new extension
+
+- **Voice Studio:** inline `CaptionDubDeck` in the download / cut sheet, one
+  job–one progress bar (`PostSteps`), and rows move onto the produced file
+  with a badge (`PostFxBadge` + `downloads_adopt`); the plain original stays
+  on disk.
+- **Captions:** YouTube tracks only by default (no AI needed), the 2026
+  looks, and no overlapping lines (`cues.clamp_words`,
+  `styles._no_overlap`).
+- **AI dub:** tight sync, no ffmpeg process per line, fatal Gemini errors
+  stop the job cleanly (`GeminiFatal`, `listen_json` guard), and the memory
+  diet (`mem_trim.py`) keeps long jobs light.
+- **Extension 1.4.1:** captions / dub picks straight from the YouTube panel,
+  queued when the file isn't ready yet.
+- `tools/check_voice_studio.py` covers styles, dub and quota / sync drills.
+- **The launch splash is untouched on purpose:** the original 1.1.0
+  BrandSplash (no dockTarget, no title-bar mark hand-off).
+
+---
+
+## Unreleased: v1.4.12 "Fluent from YouTube, one caption size"
+
+- **Captions: only Google's own Gemini listens.** A model on a custom
+  provider (a Gemini model bought through a router included) now gets
+  YouTube's captions first, like GLM / DeepSeek; router Gemini was sent the
+  audio and wrote wrong captions. Listening falls back to the built-in
+  Gemini profile, routers only when nothing else exists
+  (`gemini_media.pick_hears`, `listen_candidates`).
+- **YouTube's auto captions come out fluent.** Raw speech-recognition lines
+  (no punctuation, misheard words) are detected (`cues.looks_raw_asr`):
+  kept in the spoken language they get a cheap "polish" pass (punctuation,
+  casing, mishearings, no translation); translated or dubbed, the prompt
+  tells the model they are raw speech so sentences flow across lines.
+  Cached per file like every other step.
+- **Caption looks** (`styles.py`): one text size in every look and language
+  (sized on the font's real em, Persian was ~35 % smaller); box rows spaced
+  by the font's real cell so two lines never touch (app and extension);
+  Glass and Spotlight get truly rounded boxes; Spotlight and Bold Pop go
+  word by word in Persian / Arabic / Hebrew too; Shorts keep YouTube-look
+  captions above the player buttons.
+- **Dub:** raw-caption hint in the script adaptation; compact JSON in the
+  performance read and the line tightening (fewer input tokens).
+
+## Unreleased: v1.4.13 "Gemini listens, or reads"
+
+- **Settings → Which AI does what → Captions: "Gemini listens to the audio"**
+  switch (on by default = old behaviour). Off: a YouTube video's captions
+  are fetched and Gemini makes them fluent / translates them, like a custom
+  model. Local files and videos with no captions are still heard. The card
+  shows the flow (audio → Gemini → captions vs YouTube captions → Gemini →
+  captions) and the trade-off; disabled with a note when the pick isn't
+  Google's own Gemini. Stored as `captions_listen` (profiles state);
+  `gemini_media.captions_listen()`, `pick_hears(..., honor_switch)`. The dub
+  is not affected. Voice Studio deck + extension notes follow it.
+- **Extension: dropdowns are solid and on top.** The `.body.land` entrance
+  (fill-mode both) left every row a stacking context, so the ladder painted
+  over the open Audio-track list. Fill is backwards-only now, an open
+  dropdown lifts its row, both lists get one opaque surface, a wider
+  track list (full names) and a slim themed scrollbar.
+
+## Unreleased: "Lumen" launch splash (v15)
+
+- **Launch splash v15** (`components/BrandSplash.qml`), same public API and
+  ~900 ms intro, more product presence than v13/v14 without the v12 clutter:
+  - the mark sits in a 132 px glass lens: soft fill, specular rim (bright
+    top, accent-tinted bottom), contact shadow / floor glow
+  - an orbit ring 18 px outside the lens IS the progress: the track draws
+    round, an accent arc fills clockwise with a glowing head, and a comet
+    beam circles it on a render-thread RotationAnimator (keeps moving while
+    the GUI thread compiles the shell)
+  - backdrop: spotlit dot grid fading to the edges, three-light aurora
+    drifting on X and Y, grain + vignette kept
+  - wordmark is a 30 px product lockup ("YouTube" regular, "Hunter" bold,
+    tight tracking that settles as it lands)
+  - status line (live dot, crossfading copy, tabular percent) is always
+    shown now; `showPercent` defaults to true
+  - lock-in: orbit brightens, one ripple leaves it, the lens dissolves
+    forward while the mark flies home into the title-bar logo
+  - decorative loops pause when the app isn't in front (`Tokens.appActive`);
+    screen-reader role/name added
+
+## Unreleased: "Monolith Studio" launch splash (v14)
+
+- **Launch splash v14** (`components/BrandSplash.qml`), same public API and
+  intro timing as v13, finish pass only:
+  - a second hue-shifted counter light; both lights drift slowly on
+    render-thread loops (live aurora, not a flat gradient)
+  - contact shadow (light) / floor glow (dark) under the mark
+  - two-weight lockup: "YOUTUBE" light, "HUNTER" demibold
+  - spark points ride both ends of the hairline, then merge into the lock-in
+  - a short accent bloom behind the mark when the line locks in
+  - slow start: breathing live dot, status copy crossfades, mark floats 2 px
+  - version shown in a hairline glass capsule
+
+## Unreleased: v1.4.11 "YouTube first, Gemini voices"
+
+- **Captions: a model that can't hear gets YouTube's words first.** "AI
+  listens" with a text-only pick (GLM, DeepSeek, Claude, Llama...) on a
+  YouTube-linked file now fetches YouTube's own captions and the pick
+  translates them, no audio upload. A model that CAN hear is only borrowed
+  when YouTube has no captions, or for a local file (`jobs.acquire_cues`,
+  `gemini_media.pick_hears`). Settings' captions note says so.
+- **"Expecting value: line 1 column 1 (char 0)" is gone.** That was a caption
+  batch whose reply wasn't JSON (a reasoning model's `<think>` block, prose,
+  a cut-off answer) hitting a bare `json.loads`. The reader now strips think
+  blocks and finds the JSON anywhere in the reply (`translate._json`,
+  `NotJSON`); a batch that still can't be read is retried once with a
+  stricter prompt and more room, then fails with a sentence naming the
+  model. The listener and the Gemini HTTP layer got the same treatment.
+- **GLM / Qwen3 think less on caption work.** The internal "none" effort now
+  sends `thinking: {type: disabled}` (GLM) / `enable_thinking: false`
+  (Qwen3) / `reasoning.enabled: false` (OpenRouter); a router that rejects
+  it gets the usual one plain retry.
+- **AI dub: Google Gemini only.** The v1.4.10 custom-router bridge is
+  removed: routers sell Gemini's chat models but not its TTS models, so the
+  voices failed with "Access refused · gemini-3.8-flash-tts" after the
+  listening and script were already paid for. The dub route lists Google
+  Gemini only; an old route pinned to a router falls back to it.
+
+## Unreleased: "Monolith" launch splash (v13)
+
+- **Launch splash v13** (`components/BrandSplash.qml`), same public API.
+  Minimal pass over v12 "Corona": the conic corona, 72-tick bezel, comet
+  arc, diamond-ring flash, ripples and cursor tilt are gone. What's left:
+  one slow key light above the mark, a 64 px mark that rises and assembles
+  (no neon trace), "YOUTUBE HUNTER" in wide-tracked monochrome caps with a
+  tracking pull, and a single 1 px centre-out hairline for progress. A
+  glint runs the line and a quiet status line fades in only when the start
+  is slow (>1 s). Intro is ~900 ms (was ~1100), ~3 infinite animators
+  (was ~7). Title-bar hand-off unchanged.
+
+## Unreleased: v1.4.10 "ears and brain" (captions on any model, dub on routers)
+
+- **Captions: the picked model translates, a model that can HEAR listens.**
+  Picking a text-only model for Captions (DeepSeek, Claude, Llama, Qwen...)
+  on an OpenAI-compatible router used to send it the audio anyway; the
+  router answered 503 / "no available channel" and the job said
+  *"Provider is busy, Resume to continue"* forever. New
+  `app/core/ai/hearing.py` knows which model names take audio
+  (`can_hear`, `known_deaf`) and `gemini_media.listen_candidates()` picks
+  the ears, best first: the pick itself if it hears, else a hearing model
+  of the SAME provider (a router selling DeepSeek usually sells Gemini
+  Flash too: same key), else any Gemini key, else any other provider with
+  a hearing model. Flash beats Pro and Lite (as accurate, faster, cheaper).
+  The pick still translates every line. No probe call, no wasted upload.
+- **Fallback chain mid-job.** If a listener turns out not to hear, the next
+  one takes over from the same slice (paid slices stay cached). A router's
+  5xx / "busy" / "no channel" reply for a model that isn't known to hear is
+  now read as "can't hear", never as "busy".
+- **No ears at all:** a YouTube-linked file uses YouTube's own captions and
+  the picked model translates them; other files get one clear message
+  ("deepseek-chat can't hear audio, and none of your providers has a model
+  that can...") before anything is uploaded.
+- **Settings → Which AI does what** shows who listens under the Captions
+  row ("deepseek-chat can't hear audio, so Apinex · gemini-3.8-flash
+  listens and deepseek-chat translates"), judged on unsaved edits. Test
+  names the listener too.
+- **AI dub on custom providers.** The dub row now lists custom
+  (OpenAI-compatible) providers as well, with a note that only Gemini
+  models work. Its model list shows only the provider's Gemini models, a
+  non-Gemini pin is swapped for the best one, listening goes through the
+  router's chat endpoint and voices through its Gemini-native endpoint
+  (`/v1beta`, key sent as `x-goog-api-key` and `Bearer`). Test now says one
+  word for real, so "text works, voices don't" shows up in Settings, not
+  halfway through a dub. A router that can't voice gets a plain message
+  pointing at a free Gemini key.
+
+## Unreleased: captions, every YouTube track + no overlap + the 2026 looks
+
+- **v1.4.9: Captions listen on YOUR pick.** "AI listens" used to ignore
+  Settings → Which AI does what → Captions whenever that pick wasn't
+  Gemini-shaped and quietly ran on the built-in Gemini profile and its model
+  instead (so a Captions pick of *Apinex · gemini-3.8-flash* failed on the
+  free-tier quota of *gemini-3.6-flash*). Now listening and translating run
+  on the same provider + model: Gemini-shaped profiles as before,
+  OpenAI-compatible routers through an `input_audio` part (16 kHz mono MP3).
+  A pick that can't hear says so by name instead of switching provider.
+  Only a route left on Default still borrows a Gemini profile.
+- **Captions: no wasted tokens.** A quota / rate-limit / bad-key / no-network
+  answer stops the job at once (the brief included): the batches still
+  waiting are never sent and the retry pass is skipped (a 300-line job that
+  hit the daily limit went from 9 doomed calls to 1). Every finished
+  translation batch is cached, so Resume only pays for what didn't land.
+  Gemini behind an OpenAI-compatible router now gets `reasoning_effort`
+  (minimal on 3.x Flash, low on Pro, none on 2.5 Flash) instead of thinking
+  at its default high level on every batch and audio slice. Listening runs
+  at temperature 0.2 with no reasoning; compact JSON line listings.
+- **Errors, short.** New `app/core/ai/friendly.py` turns a provider reply
+  into title / detail / hint ("Daily limit reached · gemini-3.6-flash ·
+  resets in 10h 40m"). The job card, toasts, desktop notice and the YouTube
+  panel show that; the raw reply stays in the crash log. The panel's Saved
+  screen shows it as one quiet amber card with a "Retry in app" action.
+- **v1.4.9: launch screen v12 "Corona", the premium pass.** v11's
+  skeleton (mark, halo, name) with one cinematic idea: a solar eclipse.
+  Two big conic-gradient discs (accent / hot pink / tertiary) turn in
+  opposite directions behind the mark and one static background-coloured
+  radial mask carves them into a soft, liquid ring of light that brightens
+  with progress. A 72-tick watch bezel (every 6th longer) lights up
+  clockwise with the progress (ticks bind to an int, not per frame), the
+  arc gets a comet tail, the status line gets a tabular percent, the
+  wordmark is 40 px and a specular hairline runs along the window's top
+  edge. At 100 %: eclipse "diamond ring" (hot point + anamorphic streak)
+  at 12 o'clock, corona flare, two ripples, then the corona collapses into
+  the mark and it flies home as before. Same API and ~1.1 s intro, still
+  no layers or shaders (both spins are RotationAnimators, ~7 infinite
+  animators). New optional switches: `corona: false` (v11 look) and
+  `showPercent: false`.
+- **v1.4.9: launch screen v11 "Halo", the minimal pass.** The splash is
+  three things now: the bare mark (still draws itself), one hairline ring
+  around it that IS the progress bar (2 px accent arc + soft glow + bright
+  head, closes and ripples once at "Ready"), and the wordmark with one
+  light band and a wide-tracked status line that crossfades per step. The
+  dot field, glass tile, prism edge, light trail, reticle, signal chips,
+  histogram, rail, percent, decode scramble, lens flare, skip hint and
+  version pill are gone (~20 infinite animators down to ~5). Same API,
+  same ~1.1 s intro, same fly-home into the title-bar logo, click / Esc
+  still skip, cursor tilt kept (gyroscope, max 7 deg).
+- **v1.4.7: the list shows the version you made.** Captions / an AI dub
+  started from the globe on a finished download or clip now move that row
+  onto the new file (`_post_adopt.py`, `post_fx.py`, new `original_path` /
+  `post_fx` columns on `downloads` and `clips`). The plain file stays on
+  disk and in the folder. Steps stack: a dub on a captioned row gives one
+  file with both; redoing a step it already has starts from the original.
+  A dub stacked on captions reuses the original's cache (no second bill).
+- **Captions / dub badge** (`components/PostFxBadge.qml`): a dark-glass
+  capsule on the thumbnail (Downloads list + grid, Cutter clips) with the
+  caption and dub language, a tooltip, and a small landing animation when
+  a row turns into its new version.
+- **Caption looks, no stroke:** only Bold Pop keeps a hard outline. Clean,
+  Cinema, Spotlight and Punch sit on a soft blurred shade layer; Neon and
+  Aura lose their thin edge. Spotlight's spoken word now sits on a solid
+  accent box with softened corners on its own layer (crisp letters), and
+  the words are a normal space apart (were three). YouTube: each line is
+  its own box with a small gap, no more two lines crowding into one block.
+- **Dub:** keeps soft subtitle tracks of its source (same container).
+  Checked end to end with stubbed voices: plain, burn, keep-subtitles and
+  replace mixes all build, lines land on their cues, loudness -16 LUFS.
+
+- **v1.4.8: Play opens what you picked.** The panel's Play / Show in folder
+  now send the captions / dub picks; the app opens the copy that matches
+  (plain, captions, dub or both), and plain when nothing is picked. Every
+  adopted file is also remembered in `post_variants.json`, so a later
+  download of the same video can't make it forget what a copy holds.
+- **Panel hugs its loader.** A resized panel no longer stretches to its
+  saved height with a blank well under the format scan; the height glides
+  open when the list lands, and the rows fade up into place.
+- **Which AI does what: captions + AI dub.** Their own provider / model
+  rows with a Test button (a real JSON translation call). Captions: any
+  provider. Dub: Gemini profiles only, auto-picks the first Gemini key.
+- **Greenlight parts:** hovering a part now opens its reason smoothly
+  (height + fade + slide, short dwell so sweeping the list doesn't flap),
+  the bar thickens with a glint and a chevron turns.
+
+- **Launch screen v10 "Lock-On".** The splash gets one signature beat: the
+  hunter locks on. Four viewfinder brackets fly in a quarter-turn off, settle
+  around the glass, drift a few px while the app loads, tighten with progress
+  and snap onto the mark at 100 % with a hot flash. At lock-on the signal
+  chips are pulled into the mark, a soft light band glides across "Hunter"
+  (after the intro and again at lock-on), the status line is a mono readout
+  that decodes out of scrambled glyphs, and the percent reads as a bold
+  number with a dim "%". Copy: "Syncing your library", "Scanning for
+  outliers", "Locking on", "Target locked". Same API, same timeline, still no
+  layers or shaders; `BrandSplash.lockOn: false` switches it off.
+
+- **Launch screen v9 "Calm".** The restraint pass on the v8 splash: one light
+  (prism edge + one slower trail; radar sweep, outer trail and motes removed),
+  one slower sonar ping, a bigger tighter wordmark (40 px), softer tile
+  overshoot, a smaller slower bar wave, quieter chips, a shorter flare and a
+  static sparkle. 12 fewer infinite animators while booting. Same API and
+  timeline; `BrandSplash.calm: false` restores v8 for an A/B.
+- **Every auto-generated track YouTube has.** A video with several audio
+  tracks (YouTube auto-dubbing) carries one ASR track per language, shown in
+  the player as "French (auto-generated)", "German (auto-generated)"...
+  Only the spoken language's was listed; now each one is
+  (`sources._asr_keys`, keys `auto:<lang>-orig`), labelled the YouTube way.
+  `youtube_cues_in` also takes them before any machine translation (kind
+  `"auto"`), and the deck counts them as "no AI needed" (`auto_langs`).
+  YouTube's machine auto-translate stays hidden, as in v1.4.1.
+- **Fix: captions drawn on top of each other** ("WE'350,000"). The last
+  word of each YouTube ASR event kept the event's full duration, seconds past
+  the next line's start, so Bold Pop showed two word groups at once and
+  libass drew them in the same place. Word stamps are now clamped to their
+  line and kept in order (`cues.clamp_words`, applied in `parse_json3`,
+  `normalize`, `resegment`). As a safety net, `styles._no_overlap` clips every
+  event at the next one of its own layer + style.
+- **Four new looks:** Lyric (live-lyrics `\kf` sweep on a soft halo),
+  Spotlight (the spoken word rides a rounded accent pill), Punch (one huge
+  word at a time; numbers land in the accent), Aura (soft accent bloom,
+  rises in with a tracking pull). Joined scripts (Persian, Arabic...) get
+  whole-phrase variants so their letters never break apart.
+- **Refreshed:** Bold Pop dims the words still to come and rises in; Boxed is
+  now "Glass" (frosted slate, more air); Neon has three layers (bloom, glow,
+  core). Style tiles in the app and the extension show the new looks.
+
+## Unreleased: "Prism" launch splash (v8)
+
+- **Launch splash v8** (`components/BrandSplash.qml`), same API as v7 plus
+  `parallax` (default `true`):
+  - **3D parallax**: the glass tile tilts toward the cursor (perspective
+    `Rotation`, sprung), a specular glare slides across the glass, the dot
+    field / aurora drift the other way and the signal chips float forward;
+    the tilt eases flat before the mark flies home;
+  - **prism edge**: a holographic light runs clockwise around the tile's
+    edge (4 conical rings crossfaded by OpacityAnimators);
+  - **count-up chips**: "+384%", "2.1M", "92" roll up from zero as each chip
+    lands, in fixed-width slots so the pills never jitter;
+  - **lens flare** at "found it" (bloom + anamorphic streak) and a **dock
+    ping** ring on the title-bar logo when the mark lands;
+  - sparkle on the version pill; status copy "Waking the hunter" >
+    "Syncing your workspace" > "Calibrating the radar" > "Locking on
+    target" > "Target acquired".
+- Perf: every new loop is an Animator (render thread). Only the parallax
+  springs and the 1.1 s chip count-up touch the GUI thread.
+
+## 1.4.5 (unreleased): lean fit & fail fast (dub / captions)
+
+- **Dub: no more ffmpeg per line.** The TTS lead-in / tail silence is now
+  stripped in memory (`wave` + `array`, 20 ms RMS windows, -50 dBFS, 10 ms
+  kept each side); ffmpeg only runs for a take that isn't 24 kHz mono s16.
+  A line that needs no speed-up and no trim is used as the clean take
+  itself, a trim-only line is cut + faded in memory, and only real
+  `atempo` speed-ups spawn ffmpeg. Measured on an 18-line test: 37 ffmpeg
+  processes before, 1 (the final mix) after; 400 takes prep in ~0.7 s.
+- **Fail fast on fatal Gemini errors.** New `gemini_media.GeminiFatal`
+  (a `RuntimeError`, so every existing handler still shows it): 401, 403,
+  TLS failures, no network (DNS / refused / unreachable) and connections
+  that kept dropping after their retries. The performance read no longer
+  swallows them slice after slice, and the voice recording stops the whole
+  pool on the first one (was: every line tried twice, 36 refused calls for
+  18 lines). Per-slice glitches still fall back to a plain dub, and are now
+  written to crash.log instead of vanishing.
+- **listen_json memory guard.** Empty slices are refused, anything that
+  isn't light 16 kHz mono Opus / MP3 (or is over the inline budget) is
+  re-encoded to 16 kHz mono Opus before Base64, raw bytes are released
+  before the request is built, and a slice that's still > 14 MB is refused
+  with a clear message. `render.extract_audio` also treats an encode that
+  wrote an empty file as failed (and falls back to MP3).
+- Untouched on purpose: model keys, voice casting table, TTS endpoints and
+  request shapes, `dub_media()` / `tts()` / `jobs.py` contracts, and the
+  RTL mark / Vazirmatn fallback / `_JOINING_SCRIPTS` logic in `styles.py`.
+
+## Unreleased: "Radar" launch splash (v7)
+
+- **Launch splash v7** (`components/BrandSplash.qml`), same API
+  (`ready` / `introDone` / `done` / `radius` / `dockTarget` / `finished()`)
+  plus `showSignals` (default `true`):
+  - **dot field**: a fine 22 px dot grid (`splash_dots_dark.png` /
+    `splash_dots_light.png`) drifts slowly upward behind the mark and fades
+    out radially through one mask Shape;
+  - **radar sweep**: a soft conical wedge spins behind the glass tile, and
+    two sonar pings ripple out of it once the intro lands;
+  - **signal chips**: three glass pills pop in around the mark like contacts
+    on a scope, then bob gently (`showSignals: false` hides them);
+  - wordmark 30 > 34 px with tighter tracking; status steps now read
+    "Warming up" > "Loading your workspace" > "Calibrating the radar" >
+    "Locking on" > "Ready"; the skip hint shows an **Esc** keycap.
+- Same perf rules: no layers, no ShaderEffect, every new loop runs on the
+  render thread (Rotation / X / Y / Scale / Opacity animators). Timeline and
+  the hand-over into the title-bar logo are unchanged.
+
+## 1.4.2 (unreleased): memory diet
+
+- **Fix: captions / dub after a Download "did nothing".** They did run, and
+  the finished video (`x [id] 1080p.fa.dub.mp4`) was saved, but the YouTube
+  panel's Play / Show in folder looked the quality up on disk first, found
+  the plain `x [id] 1080p.mp4` and opened that. Both now open the captioned /
+  dubbed result (`web_bridge._post_output`). The in-app player's quality
+  menu labels those versions ("1080p · FA AI dub") instead of showing two
+  "1080p" rows, and no longer lists the .srt / voice .wav beside them. A
+  failed or partial run is written to the crash log.
+- **Dub: tight sync.** Measured on a test track: lines used to land 0.6 s
+  late (the silence Gemini TTS puts before every take), and long lines near
+  the end were rewritten to a single word or trimmed, so the dub stopped
+  seconds before the speech did. Now: every take is cleaned (lead / tail
+  silence off, 24 kHz mono s16, so no clip is dropped for its format), the
+  whole timeline is planned at once (a line may lean <= 0.45 s into the next
+  one, then speed up to 1.35x / 1.5x, trim only as a last resort), shorter
+  utterances (<= 9 s) re-anchor to the picture more often, sound labels
+  ([Music], (applause), ♪) are never spoken, failed lines get a second try,
+  the dub stream is cut to the exact video length, and the result notes
+  lines that stayed original or had to be shortened.
+- **AI listens: accurate timestamps.** 2-minute slices (were 5) and every
+  line snapped onto the voice's real start / stop (ffmpeg silencedetect on
+  the speech band). On a test with up to 0.55 s of drift, the error went to 0.
+  Old AI transcripts are re-aligned on the next run.
+- `tools/check_voice_studio.py` has a sync drill for all of the above.
+- **Launch splash v6.2, premium finish.** Same story and timing, cleaner
+  light: a vignette that follows the window corners, a lens gloss on the
+  glass tile, a soft bloom behind the wordmark, a thicker progress rail with
+  a travelling shimmer that flares at 100 %, status steps that slide as they
+  crossfade, and a ripple when the live dot turns solid at "Ready". No new
+  layers or shaders; every loop still runs on the render thread.
+- **Fix: "AI listens" captions failed with `'list' object has no attribute 'get'`.**
+  Gemini sometimes answers the transcription prompt with a bare list of
+  lines (or the object wrapped in a list) instead of `{"lang", "lines"}`.
+  `sources._listen_shape()` now reads every shape it sends (also other key
+  names: segments / subtitles / start / end / text); stray non-object lines
+  are skipped. Caption jobs that failed this way can be resumed. Affects the
+  app and the extension alike (same engine). `translate._json` also accepts
+  a bare JSON list.
+- **Fix: an AI dub picked for a full download did nothing.** The dub takes
+  its words from YouTube's captions; on a video with none (most Shorts) it
+  failed after the download, and the panel still just said "Saved". Now a
+  dub falls back to the AI listening to the file (it needs Gemini anyway),
+  and if captions / dub still don't finish, the panel's Saved screen says
+  why (`/v1/status` → `postError`, from `_post_production.last_error()`).
+- **Extension 1.4.1: caption size + place.** The Captions box has *Size*
+  (Small / Medium / Large) and *Place* (Bottom / Middle / Top), sent as
+  `captions.size` / `captions.position` (the app already validated both).
+  They're greyed out with a hint when the output is Track / .srt and no dub
+  draws them on the picture. Remembered with the other picks.
+- **Extension 1.4.0: the download panel is yours to place**
+  (`browser-extension/content.js`, `panel.css`):
+  - drag the header to move it. It docks to window edges and snaps back
+    home (top right, under YouTube's bar). It's stored relative to the nearest
+    edges, so it stays put when the browser window resizes;
+  - resize from both sides, the bottom edge or the free bottom corner
+    (a corner bracket shows on hover). Download and Cut keep separate widths;
+    a taller panel gives the extra room to the scrolling body;
+  - padlock locks position and size (it wiggles if you try to drag a locked panel);
+  - minimise folds it to a slim header with the live percent and a hairline
+    progress bar; tap to expand. Double-click the header to reset;
+  - saved in `chrome.storage.local` under `yth.panelGeo`; respects
+    reduced motion.
+- **Launch splash v6.1 polish** (`components/BrandSplash.qml`), same API,
+  same perf rules (no layers, loops on the render thread):
+  - gradient glass rim on the tile: light on the top-left edge, accent
+    pooling bottom-right (one CurveRenderer Shape, replaces the flat border);
+  - 8 light motes drift up through the trails around the mark;
+  - continuous progress rail with a glowing head under the histogram, so
+    progress glides instead of stepping in 24 jumps;
+  - pulsing live dot before the status line, solid at "Ready";
+  - tighter wordmark, tracking pull on the tagline, words recede to 0.96
+    while they fade on exit.
+- **Much lower RAM, same speed.** Details and switches in
+  `docs/CHANGES-v1.4.2-memory.md`.
+  - Support window (QtWebEngine) is built on the first click and released
+    2 min after closing, instead of running Chromium from launch.
+  - Pages: 3 pre-built after start-up (was all 14), landing + 5 most recent
+    kept, the rest freed after 3 min hidden. Cutter and AI Chat stay.
+  - PO Token helper starts on the first token request and stops after
+    10 min idle. yt-dlp is warmed when Downloads / Cutter opens or the
+    extension connects, not at every launch.
+  - Thumbnail and icon caches have byte budgets (true LRU).
+  - New `mem_trim.py`: QML/Python GC and cache trims while the window is in
+    the background, working-set trim when minimised. `YH_MEM=1` logs it.
+
+## 1.4.1 (unreleased): YouTube-only caption languages, language picker, leaner AI
+
+- **Launch splash v6 "Outlier".** The loading bar is now a channel's view
+  histogram: 24 slim bars breathing in a wave, lit left to right in the
+  accent with a white-hot playhead bar. At 100 % the rest dim and one bar
+  spikes with a glow (the outlier), then the mark flies home to the title
+  bar as before. The 26-segment comet and orbit track are replaced by two
+  counter-rotating light trails (one conical-gradient Shape each), and the
+  glass tile floats a few px. Every loop is a render-thread Animator; no
+  layers or shader effects. (`components/BrandSplash.qml`)
+- **YouTube captions list only what YouTube has.** The Language list under
+  *YouTube* shows the video's uploaded tracks and its auto-generated track,
+  nothing else. YouTube's machine auto-translate (~100 languages) is gone
+  from the list; every other language lives under *AI listens*.
+  (`sources.youtube_tracks`; app deck and panel both follow.)
+- **Panel language picker.** The native `<select>` (Windows drew it as a
+  white/blue system menu) is now a glass sheet: sections, a code glyph per
+  language, native + English name, Uploaded / Auto / Free / AI badges,
+  type-to-search on long lists, full keyboard (arrows, Enter, Esc, type on a
+  row to search). YouTube's shortcuts never fire while searching.
+- **Leaner translation tokens.** Caption / dub translation runs with an
+  internal effort "none": Gemini 2.5 Flash thinking budget 0 (was 512 per
+  batch), Pro at its 128 floor. When every batch fails (bad key, provider
+  down, quota) the job stops instead of re-sending the whole transcript
+  10 lines at a time; a failed batch is retried once as one batch, and
+  retrying stops at the first failure.
+
+## 1.4.0 (unreleased): captions & dub inside the download / cut, lean tokens
+
+- **Launch screen v5 "Hand-off".** The app icon is the loader: the mark sits
+  in a liquid-glass tile with a comet orbiting it, over a slow aurora, with one
+  slim progress capsule. When the shell is ready the glass dissolves and the
+  mark swoops into its real spot in the title bar. Intro ~1.1 s (was ~1.45 s);
+  the whole exit and all ambient motion run on the render thread (Animators),
+  so it stays smooth while the first page paints. (`BrandSplash.qml`,
+  `TitleBar.brandMark`, `Main.qml dockTarget`.)
+
+- **One job, one bar.** A download or a cut with captions / an AI dub picked
+  is no longer "finished" when its file lands. The same progress keeps going
+  as step 2 (`✓ Download · ◐ Captions 42% · ○ AI dub`) on the Downloads row,
+  the grid cards, the Cutter dock, the title-bar capsule, the desktop live
+  card and the YouTube panel. Play / Open unlock only when everything is
+  done, and the row then points at the FINISHED video. One "ready" notice.
+  Stop on a finishing row stops the captions / dub; the plain file is kept.
+  (`vm/_post_production.py`, `VoiceStudio.start_pipeline`, `PostSteps.qml`.)
+- **Captions + dub = one video, one encode.** The captions job writes its
+  lines only and the dub burns them in its own encode. Same language and the
+  captions would need AI: the dub's adapted lines become the captions, so
+  the transcript is translated once, not twice.
+- **YouTube captions never involve an AI.** The deck's Language list on
+  *YouTube* shows only what YouTube itself has for that video (uploaded,
+  auto, YouTube's free translate). Every other language: *AI listens*.
+- **YouTube look** (`styles.py` `youtube`, default for YouTube captions):
+  white on YouTube's 75 % box, auto captions paint on word by word.
+- **Lean tokens:** translation runs with reasoning turned down (was the
+  user's global effort: up to 12-24k hidden tokens per batch on Gemini 2.5),
+  no brief for short clips, smaller cached brief shared by captions + dub,
+  40-line batches, smarter retries; one yt-dlp extraction per video.
+- **Fix:** the Captions / AI dub switch poked out of its tile.
+- **Extension 1.3.0:** a Captions & AI dub section in both tabs (YouTube /
+  AI listens, language, look, output; dub language, voices, original
+  audio), sticky picks, and the capsule follows the post steps with the
+  same chips. Bridge: `GET /v1/captions`, `post` on `/v1/download` and
+  `/v1/cut`, `phase` / `steps` on both status endpoints.
+
+## 1.3.4 (unreleased): "Premiere" launch splash
+
+- **Launch splash v4** (`components/BrandSplash.qml`), same API
+  (`ready` / `introDone` / `done` / `radius` / `finished()`):
+  - the loader moved into the logo: the mark sits under a glass lens inside
+    a 72-tick chronograph bezel, and the bezel *is* the progress bar. Ticks
+    light clockwise behind a glowing bead; at 100 % the bezel flashes;
+  - matte finish: one radial backdrop (accent-lit centre, soft vignette)
+    plus a 3 % film grain tile (`components/splash_grain.png`, 160 px);
+  - a hairline "horizon" opens under the bezel, like a stage edge;
+  - wordmark in widely tracked caps cascades in letter by letter; status
+    line ("Starting up" > "Loading your workspace" > "Preparing pages" >
+    "Final touches" > "Ready") crossfades instead of jumping;
+  - exit is an **iris**: the cover is a single Shape with an OddEven hole
+    that grows from the mark to the farthest corner, an accent hairline
+    riding its edge, while the stage pushes forward through the lens.
+- **Same perf rules as v3**: no offscreen layers or shader effects of its
+  own, looping motion on the render thread, the viewfinder, REC/timecode
+  and scrub bar are gone. Intro ~1.45 s, hand-over ~1.06 s, fail-safe 6 s.
+
+## 1.3.3 (unreleased): captions & AI dub inline, YouTube captions without AI
+
+- **Captions & AI dub are chosen right in the download box and the Video
+  Cutter** (new `components/CaptionDubDeck.qml`, one component for both).
+  Two lanes, *Captions* and *AI dub*, each with a switch and a one-line
+  summary; the open lane shows its settings underneath:
+  - Captions: words from YouTube (track picker) / My file / AI listens,
+    language, five look tiles (live miniature in the target script),
+    size + place, output Burn in / Track / .srt;
+  - AI dub: language, Auto-cast / One voice (+ voice), what happens to the
+    original audio (Ducked / Low bed / Replace), Studio / Fast, burn the
+    dub's lines in.
+  Choices are queued and run by themselves when the download / cut is
+  ready. "All options" still opens the full Voice Studio sheet (progress,
+  bilingual, offset, 30 s dub preview). Closing the download box without
+  downloading drops what was picked for that video.
+- **Fix: styling YouTube's own captions always wanted an AI.** The Cutter's
+  quick switch defaulted to "translate into Persian" and the sheet to
+  "translate", so every caption job needed a provider. Language now
+  defaults to **Original · no AI**. Picking a language first uses YouTube's
+  own track in it: an uploaded track always (human quality, no AI), and
+  YouTube's free auto-translate when you choose *YouTube · free*. The AI is
+  asked only when YouTube has nothing in that language, and the deck says
+  which of the three will happen before anything runs. Engine:
+  `sources.youtube_cues_in()`, `jobs.youtube_native()`, `translate_via`
+  option; `youtube_tracks()` now reports `uploaded` / `translatable`.
+- **Lighter:** the AI-readiness re-check is deferred until after the page /
+  dialog entrance and only notifies when the answer changes; YouTube tracks
+  are read once per video per session on a worker thread
+  (`VoiceStudio.loadTracks / tracksFor / tracksRev`). The deck has no
+  layers, shader effects or running timers.
+
+## 1.3.2 (unreleased): "Viewfinder" splash, lighter and quicker
+
+- **Launch splash v3** (`components/BrandSplash.qml`), same API
+  (`ready` / `introDone` / `done` / `radius` / `finished()`):
+  - a camera viewfinder hunts for the mark: four brackets drift in, snap on
+    with a small overshoot and turn accent ("LOCK"); REC dot + running
+    timecode above the frame;
+  - progress is a YouTube-style chaptered scrub bar (played, buffered,
+    playhead that swells at 100 %); status steps through the launch;
+  - exit: the brackets fly out to the window corners while the cover
+    dissolves, like zooming through the lens into the app;
+  - new tagline: "Find the outliers. Make the next one."
+- **Much lighter**: removed the Canvas dot grid, the second aurora blob, the
+  vignette Shape, both 4x MSAA layers, the MultiEffect halo on the mark and
+  the full-window exit blur. The halo is one gradient GlowBlob breathing on
+  the render thread (OpacityAnimator); the orbit is one CurveRenderer Shape
+  on a RotationAnimator. No offscreen layers of its own.
+- **Quicker**: intro ~1.5 s (was ~2.3 s), hand-over ~0.85 s; fail-safe 6 s.
+
+## 1.3.1 (unreleased): lean AI dub, guided Voice Studio
+
+- **AI dub uses far less Gemini quota and finishes sooner.** One app-wide
+  request gate (no more 429 retry storms across threads and jobs), a used-up
+  daily quota stops the job at once with **Resume** instead of hanging on
+  "Recording voices", thinking off for the listening pass, shorter replies,
+  long lines tightened in one batched call before any voice is recorded,
+  fewer / longer TTS lines, and every paid step cached per file so a re-run
+  or a settings change only pays for what's new. Details in
+  [`docs/VOICE-STUDIO.md`](docs/VOICE-STUDIO.md).
+- **No more "done" dubs that are silent.** A dub with too many unvoiced lines
+  is reported as failed (resumable), and finished jobs say how long they took.
+- **Voice Studio redesigned as a guided flow**: activity first, a clear
+  Captions / AI dub choice, three numbered steps, the transcript source folded
+  into one line, one action.
+- **Cutter: captions & AI dub switches right in the inspector**, under Clip
+  length. Switch on, press Cut, it runs on the clip by itself.
+
+## 1.3 (unreleased): "Lock-On 2026" launch splash
+
+- **Launch splash redesigned** (`components/BrandSplash.qml`). Same ~2.3 s
+  timeline and same API (`ready` / `done` / `finished()`), new finish:
+  - radial dot-grid backdrop, two slow aurora blooms (accent + tertiary) and
+    a soft vignette;
+  - frosted glass lens behind the mark, with a light catching its top edge;
+  - the orbit arc is now a comet with a fading tail and glowing head, spun on
+    the render thread (`RotationAnimator`); dotted outer ring counter-rotates;
+  - double light-ring burst when the play triangle lands;
+  - tagline in tracked caps, version moved into a small glass pill;
+  - real progress bar (status + %): fills with the intro, creeps toward 94 %
+    if the shell is late, snaps to 100 % ("Ready") on hand-over;
+  - exit is a focus pull: the cover blurs and pushes forward as it dissolves;
+  - "Click to skip" hint, and Esc / Space / Enter now skip as well as a click.
+
+---
+
+## 1.2 (unreleased): "Eclipse Glass" theme switch
+
+- **Theme switch redesigned.** Glass orb, recessed track, and a real eclipse:
+  the shadow disc slides over the sun to make the crescent. Ghost-moon hint by
+  day, stars at night, liquid stretch on press.
+- **Theme transition redesigned.** The orb rises in the centre and eclipses,
+  a diamond-ring flash / corona marks totality, an orbiting comet shows the
+  palette loading, and the new theme floods out from under the orb. Same
+  render-thread-only motion rules, same API. Details:
+  [`docs/CHANGES-v1.2-eclipse-glass.md`](docs/CHANGES-v1.2-eclipse-glass.md).
+
+---
+
 ## 1.1.0: downloads stop feedback, API-only Niche Finder, smoother grid
 
 - **Updates follow the project to `lolpirez/Youtube-hunter`.** The updater now

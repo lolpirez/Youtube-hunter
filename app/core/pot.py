@@ -359,9 +359,45 @@ def stop():
 atexit.register(stop)
 
 
+# v1.4.2 (memory): the helper is an embedded-V8 server, ~60-120 MB of its
+# own (Task Manager counts it under the app). It is started lazily by the first
+# token request and now also STOPS itself after a quiet spell, so a session
+# that downloaded one video an hour ago is not still paying for it. The next
+# token request simply starts it again (BotGuard spin-up, ~1-2 s).
+_IDLE_STOP_S = float(os.environ.get("YH_POT_IDLE_S", "600") or 600)
+_last_used = 0.0
+_idle_watch = None
+
+
+def _touch():
+    """Mark the helper as in use and make sure the idle watcher runs."""
+    global _last_used, _idle_watch
+    _last_used = time.monotonic()
+    if _IDLE_STOP_S <= 0:
+        return
+    if _idle_watch is not None and _idle_watch.is_alive():
+        return
+
+    def _watch():
+        global _idle_watch
+        while True:
+            time.sleep(30)
+            if not is_running():
+                break
+            if time.monotonic() - _last_used >= _IDLE_STOP_S:
+                stop()
+                break
+        _idle_watch = None
+
+    _idle_watch = threading.Thread(target=_watch, daemon=True, name="pot-idle")
+    _idle_watch.start()
+
+
 def fetch_token(content_binding, proxy="", bypass_cache=False):
     """(po_token, expires_at_epoch_or_None) from the local server, or ("", None)."""
     port = ensure_server()
+    if port:
+        _touch()
     if not port or not content_binding:
         return "", None
     body = {"content_binding": content_binding, "bypass_cache": bool(bypass_cache)}

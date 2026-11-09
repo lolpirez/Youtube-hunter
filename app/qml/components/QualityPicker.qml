@@ -75,6 +75,13 @@ Dialog {
 
     readonly property var rows: QualityProbe.options
 
+    // v1.3.3: closing without downloading drops the captions / dub picked
+    // for it, so they never ride along with a later, unrelated download.
+    onRejected: {
+        VoiceStudio.clearQueued("captions", root.videoId, "")
+        VoiceStudio.clearQueued("dub", root.videoId, "")
+    }
+
     function openFor(vid, title, thumb) {
         videoId = vid
         videoTitle = title
@@ -989,6 +996,32 @@ Dialog {
                                                   trackDeck.mapToItem(bodyCol, 0, 0).y - 8)
                 })
             }
+
+            // ═══ captions & AI dub, inline (v1.3.3) ═══
+            // Chosen right here (look, language, dub), applied by itself once
+            // this download finishes. The full sheet is one link away.
+            C.CaptionDubDeck {
+                id: capDeck
+                objectName: "captionsAsk"
+                Layout.fillWidth: true
+                Layout.leftMargin: Tokens.space5
+                Layout.rightMargin: Tokens.space5
+                Layout.topMargin: Tokens.space5
+                Layout.bottomMargin: Tokens.space2
+                visible: !QualityProbe.busy && root.rows.length > 0
+                videoId: root.videoId
+                title: root.videoTitle
+                audioOnly: root.selectedIsAudio
+                runsAfterText: I18n.tr("runs after the download")
+                onOpenStudio: (tab) => studio.openQueued({ path: "", title: root.videoTitle,
+                                                         videoId: root.videoId, clipStart: 0, clipEnd: 0, tab: tab })
+                onSettingsRequested: { root.reject(); App.goto(10) }
+                // a lane opening its settings: keep them in view
+                onAnyOnChanged: if (anyOn) Qt.callLater(function() {
+                    bodyFlick.contentY = Math.min(Math.max(0, bodyFlick.contentHeight - bodyFlick.height),
+                                                  capDeck.mapToItem(bodyCol, 0, 0).y - 8)
+                })
+            }
         }
     }
 
@@ -1056,4 +1089,7 @@ Dialog {
     // Plays a saved quality without leaving the picker: it opens over the
     // dialog, and closing it lands back on the ladder.
     C.VideoPlayer { id: savedPlayer; objectName: "pickerPlayer" }
+
+    // v1.3: captions, translation and AI dub, queued for the download ahead.
+    C.VoiceStudioSheet { id: studio; objectName: "voiceStudio" }
 }

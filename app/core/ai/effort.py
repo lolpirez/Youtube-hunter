@@ -31,6 +31,10 @@ import re
 
 EFFORT_LEVELS = ("auto", "low", "medium", "high", "max")
 EFFORT_DEFAULT = "auto"
+# v1.4.1: internal only (never in Settings): "none" = as little hidden
+# reasoning as the model allows. Used by bulk pattern work like caption /
+# dub translation, where thinking tokens buy nothing but a bigger bill.
+_INTERNAL_LEVELS = ("none",)
 
 EFFORT_LABELS = {
     "auto": "Auto",
@@ -50,7 +54,7 @@ EFFORT_HINTS = {
 
 def norm_effort(value):
     v = str(value or "").strip().lower()
-    return v if v in EFFORT_LEVELS else EFFORT_DEFAULT
+    return v if (v in EFFORT_LEVELS or v in _INTERNAL_LEVELS) else EFFORT_DEFAULT
 
 
 # ── layer 1: the instruction ───────────────────────────────────────────────
@@ -105,7 +109,7 @@ def gemini_thinking_kind(model):
     return ""
 
 
-_OPENAI_EFFORT = {"low": "low", "medium": "medium", "high": "high", "max": "high"}
+_OPENAI_EFFORT = {"none": "low", "low": "low", "medium": "medium", "high": "high", "max": "high"}
 _CLAUDE_BUDGET = {"low": 1024, "medium": 4000, "high": 10000, "max": 24000}
 _GEMINI_BUDGET = {"low": 512, "medium": 4096, "high": 12288, "max": 24576}
 
@@ -115,7 +119,44 @@ def apply_openai(body, model, effort, host=""):
     """Mutates an OpenAI-shaped body. Returns True if a native knob was added
     (so the caller knows a plain retry is worth trying on a 400)."""
     e = norm_effort(effort)
-    if e == "auto" or not is_openai_reasoning(model):
+    if e == "auto":
+        return False
+    kind = gemini_thinking_kind(model)
+    if kind and not is_openai_reasoning(model):
+        # v1.4.9: a Gemini model behind an OpenAI-compatible router. Sent
+        # nothing, Gemini 3 thinks at its DEFAULT (high) level on every call:
+        # thousands of hidden output tokens per caption batch / audio slice.
+        # Google's OpenAI layer maps reasoning_effort onto thinking: Gemini 3
+        # Flash takes "minimal", Pro's floor is "low"; 2.5 Flash takes "none".
+        # A router that rejects the field gets one plain retry (caller).
+        pro = "pro" in _base(model)
+        if e == "none":
+            val = ("low" if pro else "minimal") if kind == "level" else ("low" if pro else "none")
+        else:
+            val = {"low": "low", "medium": "medium", "high": "high", "max": "high"}.get(e, "low")
+        if "openrouter" in str(host or "").lower():
+            body["reasoning"] = {"effort": "low" if val in ("minimal", "none") else val}
+        else:
+            body["reasoning_effort"] = val
+        return True
+    if e == "none" and not is_openai_reasoning(model):
+        # v1.4.11: "none" is internal (caption batches, transcription). GLM
+        # 4.5+/5.x and Qwen3 think by default; on a router their reply came
+        # back as a thinking block or a cut-off answer instead of the JSON
+        # the batch asked for. Switch it off; a router that rejects the field
+        # gets one plain retry (caller).
+        b = _base(model)
+        if "openrouter" in str(host or "").lower() and (b.startswith(("glm-", "qwen3"))):
+            body["reasoning"] = {"enabled": False}
+            return True
+        if b.startswith("glm-"):
+            body["thinking"] = {"type": "disabled"}
+            return True
+        if b.startswith("qwen3") and "instruct" not in b:
+            body["enable_thinking"] = False
+            return True
+        return False
+    if not is_openai_reasoning(model):
         return False
     if "openrouter" in str(host or "").lower():
         body["reasoning"] = {"effort": _OPENAI_EFFORT[e]}
@@ -129,7 +170,7 @@ def apply_anthropic(body, model, effort):
     is ADDED on top of what the caller asked for, and temperature has to go
     (thinking only runs at the default)."""
     e = norm_effort(effort)
-    if e == "auto" or not claude_can_think(model):
+    if e in ("auto", "none") or not claude_can_think(model):
         return False
     budget = _CLAUDE_BUDGET[e]
     body["thinking"] = {"type": "enabled", "budget_tokens": budget}
@@ -146,12 +187,18 @@ def apply_gemini(body, model, effort):
         return False
     gc = body.setdefault("generationConfig", {})
     if kind == "level":
-        gc["thinkingConfig"] = {"thinkingLevel": "low" if e == "low" else "high"}
+        gc["thinkingConfig"] = {"thinkingLevel": "low" if e in ("none", "low") else "high"}
     else:
-        budget = _GEMINI_BUDGET[e]
+        if e == "none":
+            # Flash / Flash-Lite can switch thinking off; Pro's floor is 128
+            budget = 128 if "pro" in _base(model) else 0
+        else:
+            budget = _GEMINI_BUDGET[e]
         gc["thinkingConfig"] = {"thinkingBudget": budget}
         # Gemini counts thinking against maxOutputTokens: give it its own room.
-        gc["maxOutputTokens"] = min(65536, int(gc.get("maxOutputTokens") or 0) + budget)
+        # (only when the caller set a cap; never invent a cap of 0 / budget)
+        if budget and gc.get("maxOutputTokens"):
+            gc["maxOutputTokens"] = min(65536, int(gc["maxOutputTokens"]) + budget)
     return True
 
 

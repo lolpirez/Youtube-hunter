@@ -163,6 +163,8 @@ class SettingsVM(QObject):
         self._ai_save_timer.setInterval(450)
         self._ai_save_timer.timeout.connect(self._persist_ai)
         self._aiStatusSig.connect(self._on_ai_status)
+        self._route_test = {}          # v1.4.8: feature -> {"state", "msg"}
+        self.routeTestSig.connect(self._on_route_test)
         self._aiModelsSig.connect(self._on_ai_models)
         app = QCoreApplication.instance()
         if app is not None:
@@ -518,6 +520,13 @@ class SettingsVM(QObject):
     _AI_FEATURES = (
         # feature, title, sub, icon
         ("ideas",   "Idea generation", "AI Ideas and Content Lab blueprints", "nav_ideas"),
+        # v1.4.8: captions translate text (any provider; "AI listens" still
+        # hears the audio with Gemini). The dub listens, adapts and voices
+        # with Gemini, so its row only offers Gemini profiles.
+        # v1.4.10: any model translates; one that can't hear audio gets a
+        # listener borrowed for it (see gemini_media.listen_candidates)
+        ("captions", "Captions", "Writes and translates the lines. Gemini can listen to the audio too", "translate"),
+        ("dub",      "AI dub", "Listening, adapting and voicing. Works with Gemini models only", "volume_up"),
         # "AI Chat" picks its provider, model and effort in its own composer
         # (every saved provider's models are listed there), and "Reports" is
         # gone — neither has a row here any more.
@@ -919,11 +928,33 @@ class SettingsVM(QObject):
         for f, title, sub, icon in self._AI_FEATURES:
             r = self._ai["routes"].get(f, {})
             prof = self._prof(r.get("profile") or "") or self._active()
+            if f in ai_profiles.GEMINI_ONLY:
+                prof = ai_profiles.gemini_for(self._ai, r) or prof
             model = r.get("model") or ""
             pq = self._profile_qml(prof)
+            ts = self._route_test.get(f, {})
+            models = pq["models"]
+            note, warn = "", False
+            if f in ai_profiles.GEMINI_ONLY:
+                from app.core.ai import hearing
+                gm = [m for m in models if hearing.is_gemini(m)]
+                models = gm or models
+                if not ai_profiles.dub_capable(prof) or not self._ready(prof):
+                    warn = True
+                    note = tr("The AI dub runs on Google Gemini only (custom providers don't serve "
+                              "Gemini's voices). Add a Gemini key in AI Providers, free from Google AI Studio.")
+            elif f == "captions":
+                note = self._listen_note()
+                warn = "can't hear audio, and none" in note
+                lis = self._captions_listen_info()
             out.append({
                 "feature": f, "title": tr(title), "sub": tr(sub), "icon": icon,
-                "profile": r.get("profile") or "",
+                # v1.4.11: a dub route left pinned to a custom router (allowed
+                # in v1.4.10) shows as Auto (Gemini), which is what runs now
+                "profile": (r.get("profile") or "")
+                           if (f not in ai_profiles.GEMINI_ONLY
+                               or ai_profiles.dub_capable(self._prof(r.get("profile") or "")))
+                           else "",
                 "model": model,
                 "effort": r.get("effort") or "auto",
                 "effortIndex": EFFORT_LEVELS.index(r.get("effort") or "auto")
@@ -932,10 +963,53 @@ class SettingsVM(QObject):
                 "resolvedName": prof["name"],
                 "resolvedModel": ai_profiles.effective_model(prof, model),
                 "resolvedGlyph": pq["glyph"],
-                "ready": self._ready(prof),
-                "models": pq["models"],
+                "ready": self._ready(prof) and (f not in ai_profiles.GEMINI_ONLY
+                                                or ai_profiles.dub_capable(prof)),
+                "models": models,
+                "note": note,
+                "noteWarn": warn,
+                "showEffort": f == "ideas",
+                "choices": self._route_choices(f),
+                "testState": int(ts.get("state", 0)),
+                "testMsg": ts.get("msg", ""),
+                # v1.4.13: the "Gemini listens to the audio" switch (captions)
+                "hasListen": f == "captions",
+                "listenAudio": bool(self._ai.get("captions_listen", True)),
+                "listenCapable": bool(lis.get("capable")) if f == "captions" else False,
+                "listenBrain": lis.get("brain", "") if f == "captions" else "",
             })
         return out
+
+    def _captions_listen_info(self):
+        """Can the Captions pick listen itself (Google's own Gemini with a
+        key), judged on the UNSAVED edits, and its short model name."""
+        try:
+            from app.core.ai import hearing
+            from app.core.captions import gemini_media as G
+            cfg = ai_profiles.write_state({}, copy.deepcopy(self._ai))
+            r = ai_profiles.resolve("captions", cfg)
+            return {"capable": G.pick_hears("captions", cfg, honor_switch=False),
+                    "brain": hearing.short(r.get("model")) or r.get("profile_name") or ""}
+        except Exception:              # noqa: BLE001
+            return {"capable": False, "brain": ""}
+
+    @Slot(bool)
+    def setCaptionsListen(self, on):
+        """v1.4.13: Settings → Captions → "Gemini listens to the audio"."""
+        on = bool(on)
+        if bool(self._ai.get("captions_listen", True)) == on:
+            return
+        self._ai["captions_listen"] = on
+        self._ai_touched()
+
+    def _listen_note(self):
+        """Who listens for Captions, judged on the UNSAVED edits."""
+        try:
+            from app.core.captions import gemini_media as G
+            cfg = ai_profiles.write_state({}, copy.deepcopy(self._ai))
+            return G.listen_note("captions", cfg)
+        except Exception:              # noqa: BLE001
+            return ""
 
     @Property("QVariantList", notify=aiDataChanged)
     def aiRouteChoices(self):
@@ -947,10 +1021,98 @@ class SettingsVM(QObject):
                         "glyph": self._profile_qml(p)["glyph"], "ready": self._ready(p)})
         return out
 
+    def _route_choices(self, feature):
+        if feature not in ai_profiles.GEMINI_ONLY:
+            return self.aiRouteChoices
+        out = [{"id": "", "label": tr("Auto (Gemini)"), "glyph": "gemini", "ready": True}]
+        for p in self._ai["profiles"]:
+            # v1.4.11: Google Gemini only, custom routers can't voice
+            if ai_profiles.dub_capable(p):
+                out.append({"id": p["id"], "label": p["name"],
+                            "glyph": self._profile_qml(p)["glyph"], "ready": self._ready(p)})
+        return out
+
+    # v1.4.8: "Test" on a routing row: one real call through exactly the
+    # client that feature would build (unsaved edits included)
+    routeTestSig = Signal(str, int, str)
+
+    @Slot(str, int, str)
+    def _on_route_test(self, feature, state, msg):
+        self._route_test[feature] = {"state": int(state), "msg": msg}
+        self.aiDataChanged.emit()
+
+    @Slot(str)
+    def testAiRoute(self, feature):
+        if feature not in ai_profiles.FEATURES:
+            return
+        cfg = ai_profiles.write_state({}, copy.deepcopy(self._ai))
+        self._on_route_test(feature, 1, tr("Testing …"))
+
+        def worker():
+            import time as _t
+            try:
+                r = ai_profiles.resolve(feature, cfg)
+                if feature in ai_profiles.GEMINI_ONLY:
+                    from app.core.ai import hearing
+                    if r["provider"] != "gemini" or not (r.get("api_key") or "").strip():
+                        raise RuntimeError(tr("Add a Google Gemini key in AI Providers first."))
+                    if not hearing.is_gemini(r["model"]):
+                        raise RuntimeError(tr("The dub only works with Gemini models; {m} isn't one.")
+                                           .replace("{m}", r["model"] or "?"))
+                if not ai_profiles.is_ready(r):
+                    raise RuntimeError(tr("{p} is not set up").replace("{p}", r["profile_name"]))
+                c = ai_profiles.client_from(r)
+                try:
+                    c.effort = "none"
+                except Exception:      # noqa: BLE001
+                    pass
+                t0 = _t.monotonic()
+                txt = c.generate('Translate "Good morning" to French. Reply with JSON only: {"t": "..."}',
+                                 timeout=40, max_output_tokens=200)
+                from app.core.captions.translate import _json
+                data = _json(txt)
+                if not isinstance(data, dict) or not str(data.get("t") or "").strip():
+                    raise RuntimeError(tr("The model answered, but not in the JSON shape captions need."))
+                msg = tr("Works: {n} · {m} ({s}s)").format(n=r["profile_name"], m=r["model"],
+                                                         s=f"{_t.monotonic() - t0:.1f}")
+                if feature == "dub":
+                    # say one word for real, so a key without TTS access is
+                    # caught here and not halfway through a dub
+                    import os as _os
+                    import tempfile as _tf
+                    from app.core.captions import gemini_media as G
+                    probe = _os.path.join(_tf.gettempdir(), "yh_tts_probe.wav")
+                    try:
+                        G.tts(G.credentials(cfg, feature="dub"), "Hi.", probe, timeout=60)
+                        msg += " · " + tr("voices work too")
+                    except Exception as te:          # noqa: BLE001
+                        self.routeTestSig.emit(feature, 3, tr("Text works, voices don't: {e}").format(e=te))
+                        return
+                    finally:
+                        try:
+                            _os.remove(probe)
+                        except OSError:
+                            pass
+                elif feature == "captions":
+                    from app.core.captions import gemini_media as G
+                    ear = G.listen_label("captions", cfg)
+                    if ear:
+                        msg += " · " + tr("listens with {l}").replace("{l}", ear)
+                self.routeTestSig.emit(feature, 2, msg)
+            except Exception as e:     # noqa: BLE001
+                log_crash("qml route test:\n" + traceback.format_exc())
+                self.routeTestSig.emit(feature, 3, tr("Failed: {e}").format(e=e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
     @Slot(str, str, str)
     def setAiRoute(self, feature, field, value):
         if feature not in ai_profiles.FEATURES or field not in ("profile", "model", "effort"):
             return
+        if (field == "profile" and value and feature in ai_profiles.GEMINI_ONLY
+                and not ai_profiles.dub_capable(self._prof(value))):
+            return                    # the dub only runs on Google Gemini
+        self._route_test.pop(feature, None)
         r = self._ai["routes"][feature]
         value = (value or "").strip()
         if field == "effort":

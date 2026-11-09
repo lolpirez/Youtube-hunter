@@ -20,6 +20,13 @@
 //    painted onto YouTube's own progress bar, and dragging a handle scrubs the
 //    real player, so you choose the cut by the frame you see.
 //
+// 4. v1.5 — the panel is the user's to place. Drag the header to move it
+//    (it docks to window edges and back to its home spot), drag an edge or
+//    the free bottom corner to resize, lock it so nothing moves by accident,
+//    or minimise it to a slim header that keeps showing the percent. Double-
+//    click the header to send it home. Position, size and lock are remembered
+//    (chrome.storage, "yth.panelGeo"); minimise is per open.
+//
 // Everything is rendered inside shadow roots, so YouTube's CSS can't reach in
 // and ours can't leak out.
 
@@ -54,6 +61,13 @@
       button: "Hunter",
       buttonTip: "Download with YouTube Hunter",
       close: "Close",
+      moveTip: "Drag to move · double-click to send it home",
+      lockOn: "Lock position and size",
+      lockOff: "Unlock position and size",
+      lockedTip: "Locked · unlock to move or resize",
+      minimise: "Minimise",
+      expand: "Expand",
+      resizeTip: "Drag to resize",
       connecting: "Connecting to YouTube Hunter…",
       offTitle: "YouTube Hunter isn't running",
       offBody: "Start it and your download begins right here. It opens minimised, so you stay on YouTube.",
@@ -89,6 +103,7 @@
       play: "Play",
       playTip: "Open the saved file in your player",
       playFail: "Couldn't find that file. It may have been moved or deleted.",
+      playPlainNote: "No copy of this quality has those captions / dub yet, so the closest one is playing.",
       fmtVideo: "Video format",
       fmtAudio: "Audio format",
       audioTrack: "Audio track",
@@ -138,6 +153,68 @@
       dlPaused: "Paused",
       dlResuming: "Resuming…",
       dlFinishing: "Finishing up…",
+      // v1.4 — captions & AI dub
+      postHead: "Captions & AI dub",
+      postOff: "Optional",
+      postOn: "Runs after, in the same bar",
+      postCap: "Captions",
+      postDub: "AI dub",
+      postWords: "Words",
+      postYt: "YouTube",
+      postAi: "AI listens",
+      postLang: "Language",
+      postLook: "Look",
+      postOut: "Output",
+      postBurn: "Burn in",
+      postSize: "Size",
+      postSizeS: "Small",
+      postSizeM: "Medium",
+      postSizeL: "Large",
+      postPlace: "Place",
+      postPlaceBottom: "Bottom",
+      postPlaceMiddle: "Middle",
+      postPlaceTop: "Top",
+      postSizeNote: "Size and place apply when the captions are burned in or dubbed over.",
+      postFailed: "Saved, but captions / dub didn't finish:",
+      postFailedHint: "The plain video is saved. Open YouTube Hunter to retry it.",
+      postFailSaved: "Video saved",
+      postFailRetry: "Retry in app",
+      postTrack: "Track",
+      postInto: "Dub into",
+      postVoices: "Voices",
+      postAuto: "Auto-cast",
+      postOne: "One voice",
+      postBg: "Original",
+      postDuck: "Ducked",
+      postBed: "Low bed",
+      postReplace: "Replace",
+      postAsSpoken: "Original · as spoken",
+      // v1.4.1 — the language picker
+      lpSearch: "Search {n} languages",
+      lpNone: "No language matches",
+      lpKeep: "No translation",
+      lpAi: "Translate with AI",
+      lpOnYt: "On YouTube for this video",
+      lpDubInto: "Dub into",
+      lpFree: "Free",
+      lpAuto: "Auto",
+      lpUploaded: "Uploaded",
+      lpSpoken: "Original",
+      lpAiTag: "AI",
+      postReading: "Reading YouTube's captions…",
+      postNoYt: "No captions on YouTube for this video. Switch to AI listens.",
+      postYtNote: "YouTube's own captions, as YouTube shows them. No AI, no cost.",
+      postYtTrNote: "YouTube's free translation. No AI.",
+      postAiNote: "Your Captions AI listens and writes the lines, and translates them too.",
+      postAiNoteBy: "{who} listens and writes the lines, and translates them too.",
+      postAiNoteYt: "Uses YouTube's own captions; the AI makes them fluent and translates them. No captions? It listens instead.",
+      postNeedListen: "Pick a provider that can hear audio for Captions in the app (Settings → Which AI does what).",
+      postNeedGemini: "Needs a Google Gemini key in the app (Settings → AI Providers).",
+      postNeedAi: "Translating needs an AI provider in the app.",
+      postOnePass: "Dub + captions in one pass: one video at the end.",
+      postNoPlay: "Play unlocks when captions & dub are done.",
+      postOld: "Update the YouTube Hunter app to add captions & dub from here.",
+      postStop: "Stop captions & dub",
       pause: "Pause",
       resume: "Resume",
       speed: "speed",
@@ -963,6 +1040,11 @@
           <header class="head">
             <span class="brand">${markSVG(22, false)}<span class="name">YouTube Hunter</span></span>
             <span class="link" title=""><i></i></span>
+            <span class="mstat" aria-live="polite"></span>
+            <span class="hbtns">
+              <button class="hb" type="button" data-geo="lock" aria-pressed="false"></button>
+              <button class="hb" type="button" data-geo="min" aria-pressed="false"></button>
+            </span>
             <button class="x" type="button"></button>
           </header>
           <nav class="tabs" role="tablist">
@@ -973,6 +1055,11 @@
           <div class="video"></div>
           <div class="body"></div>
           <footer class="foot"></footer>
+          <i class="rz" data-rz="w" aria-hidden="true"></i>
+          <i class="rz" data-rz="e" aria-hidden="true"></i>
+          <i class="rz" data-rz="s" aria-hidden="true"></i>
+          <i class="rz" data-rz="sw" aria-hidden="true"></i>
+          <i class="rz" data-rz="se" aria-hidden="true"></i>
         </section>`;
       document.documentElement.appendChild(host);
       // v1.2: the panel is built on the first click, long after the stylesheet
@@ -981,14 +1068,291 @@
       panelStyleEl = root.querySelector("style");
       if (PANEL_CSS) panelStyleEl.textContent = PANEL_CSS;
       root.querySelector(".x").addEventListener("click", () => close());
+      // v1.5: move / resize / lock / minimise
+      const head = root.querySelector(".head");
+      head.addEventListener("pointerdown", onHeadDown);
+      head.addEventListener("dblclick", onHeadDbl);
+      root.querySelectorAll(".rz").forEach((z) => z.addEventListener("pointerdown", onRzDown));
+      root.querySelector('[data-geo="lock"]').addEventListener("click", () => setLocked(!geo.locked));
+      root.querySelector('[data-geo="min"]').addEventListener("click", () => setMin(!minimized));
+      window.addEventListener("resize", () => { if (isOpen()) applyGeo(); }, { passive: true });
       // v3.48: the body scrolls under a fixed footer; fade the edge that has
       // more content behind it, so "there's more below" is visible
       root.querySelector(".body").addEventListener("scroll", edgeFade, { passive: true });
       window.addEventListener("resize", edgeFade, { passive: true });
       document.addEventListener("keydown", onGlobalKey, true);
       root.addEventListener("click", onClick);
+      root.addEventListener("change", (e) => { const el = e.target.closest && e.target.closest("[data-pset]"); if (el) Post.onChange(el); });
       root.addEventListener("keydown", onDdKey);
+      // v1.4.1: the language picker's search field
+      root.addEventListener("input", (e) => {
+        const el = e.target;
+        if (el && el.classList && el.classList.contains("lpin")) lpFilter(el.closest(".dd"), el.value);
+      });
+      const lpSwallow = (e) => { const el = e.target; if (el && el.classList && el.classList.contains("lpin")) e.stopPropagation(); };
+      root.addEventListener("keyup", lpSwallow);
+      root.addEventListener("keypress", lpSwallow);
       retheme();
+    }
+
+    // ── v1.5: move / resize / lock / minimise ───────────────────────────
+    // The position is stored as an offset from the NEAREST window edges
+    // (ax: l|r, ay: t|b), so a panel parked bottom-left stays bottom-left when
+    // the browser window is resized, and a right-docked panel keeps its right
+    // edge still when the Cut tab makes it wider. No stored position = the
+    // stylesheet's home spot (top 68 / right 20).
+    const GEO_KEY = "yth.panelGeo";
+    const GEO_M = 8;                  // never closer than this to a window edge
+    const GEO_SNAP = 28;              // released this close to an edge → docks to it
+    const GEO_DOCK = 16;              // ...at this margin
+    const GEO_HOME = { x: 20, y: 68 };
+    const GEO_MIN_W = 320, GEO_MAX_W = 720, GEO_MIN_H = 240;
+    let geo = { pos: null, w: {}, h: null, locked: false };
+    let minimized = false;
+    try {
+      chrome.storage.local.get(GEO_KEY).then((x) => {
+        const g = x && x[GEO_KEY];
+        if (g && typeof g === "object") {
+          geo = { pos: g.pos || null, w: g.w || {}, h: g.h || null, locked: !!g.locked };
+          if (root) { paintGeoButtons(); if (isOpen()) applyGeo(); }
+        }
+      }).catch(() => {});
+    } catch (_) {}
+    function saveGeo() { try { chrome.storage.local.set({ [GEO_KEY]: geo }); } catch (_) {} }
+    const clampN = (v, a, b) => Math.max(a, Math.min(b, v));
+    const viewW = () => document.documentElement.clientWidth || innerWidth;
+
+    // v1.4.8: a loader is on screen (the panel should hug it)
+    function bodyLoading() {
+      return !!(root && root.querySelector(".body > .scan, .body > .hsw, .body > .wake"));
+    }
+
+    // v1.4.8: smooth height. Measure the panel, let `mutate` swap its content,
+    // measure again, then glide between the two (Web Animations, compositor
+    // friendly, no layout thrash after the first frame). Loader → content also
+    // fades the new content up a few px, so the list "lands" instead of popping.
+    let hAnim = null;
+    const reduceMotion = () => { try { return matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (_) { return false; } };
+    function smoothHeight(mutate) {
+      const sec = root && root.querySelector(".panel");
+      const can = sec && isOpen() && !minimized && !sec.hasAttribute("data-drag")
+        && !sec.hasAttribute("data-resizing") && !reduceMotion() && typeof sec.animate === "function";
+      if (!can) { mutate(); return; }
+      // an animation still running: start from where it is right now
+      const from = sec.getBoundingClientRect().height;
+      if (hAnim) { try { hAnim.cancel(); } catch (_) {} hAnim = null; }
+      const wasLoading = bodyLoading();
+      mutate();
+      const to = sec.getBoundingClientRect().height;
+      const landed = wasLoading && !bodyLoading();
+      if (landed) {
+        const b = sec.querySelector(".body");
+        if (b) { b.classList.remove("land"); void b.offsetWidth; b.classList.add("land"); }
+      }
+      if (!from || !to || Math.abs(to - from) < 2) return;
+      const grow = to > from;
+      sec.setAttribute("data-hanim", "");
+      hAnim = sec.animate([{ height: from + "px" }, { height: to + "px" }], {
+        duration: Math.round(Math.min(520, Math.max(240, Math.abs(to - from) * 0.9))),
+        // grows with a soft settle, shrinks a little quicker
+        easing: grow ? "cubic-bezier(.2, .9, .25, 1)" : "cubic-bezier(.4, 0, .2, 1)",
+      });
+      const done = () => { sec.removeAttribute("data-hanim"); hAnim = null; edgeFade(); };
+      hAnim.onfinish = done;
+      hAnim.oncancel = () => sec.removeAttribute("data-hanim");
+    }
+
+    function applyGeo() {
+      if (!root) return;
+      const sec = root.querySelector(".panel"), st = sec.style;
+      const vw = viewW(), vh = innerHeight;
+      const w = geo.w && geo.w[mode];
+      if (w && !minimized) st.width = Math.round(clampN(w, GEO_MIN_W, Math.min(GEO_MAX_W, vw - 2 * GEO_M))) + "px";
+      else st.removeProperty("width");
+      const p = geo.pos;
+      const ax = p ? p.ax : "r", ay = p ? p.ay : "t";
+      sec.setAttribute("data-ax", ax);
+      sec.toggleAttribute("data-moved", !!p);
+      st.transformOrigin = (ay === "b" ? "bottom " : "top ") + (ax === "l" ? "left" : "right");
+      const pw = sec.offsetWidth || w || 356;
+      const x = p ? clampN(p.x, GEO_M, Math.max(GEO_M, vw - GEO_M - pw)) : GEO_HOME.x;
+      const y = p ? clampN(p.y, GEO_M, Math.max(GEO_M, vh - 60)) : GEO_HOME.y;
+      if (p) {
+        st.left = ax === "l" ? x + "px" : "auto";
+        st.right = ax === "r" ? x + "px" : "auto";
+        st.top = ay === "t" ? y + "px" : "auto";
+        st.bottom = ay === "b" ? y + "px" : "auto";
+      } else {
+        ["left", "right", "top", "bottom"].forEach((k) => st.removeProperty(k));
+      }
+      const maxH = Math.max(120, vh - y - GEO_M);
+      st.maxHeight = maxH + "px";
+      // v1.4.8: while a loader is up (handshake, wake, format scan) the panel
+      // hugs it instead of stretching to the saved height with a blank well
+      // under it; the saved height comes back, animated, with the content
+      if (geo.h && !minimized && !bodyLoading()) {
+        st.height = Math.round(clampN(geo.h, Math.min(GEO_MIN_H, maxH), maxH)) + "px";
+        sec.setAttribute("data-sized", "");
+      } else {
+        st.removeProperty("height");
+        sec.removeAttribute("data-sized");
+      }
+    }
+
+    // turn a box on screen (px) into an edge-anchored position
+    function placeBox(l, tp, w, h) {
+      const vw = viewW(), vh = innerHeight;
+      const ax = l + w / 2 > vw / 2 ? "r" : "l";
+      const ay = vh - (tp + h) < tp ? "b" : "t";
+      geo.pos = { ax, ay, x: ax === "l" ? l : vw - (l + w), y: ay === "t" ? tp : vh - (tp + h) };
+      applyGeo();
+    }
+
+    // on release: dock to edges that are close, and back home when near it
+    function snapGeo() {
+      const p = geo.pos;
+      if (!p) return;
+      if (p.x < GEO_SNAP) p.x = GEO_DOCK;
+      if (p.y < GEO_SNAP) p.y = GEO_DOCK;
+      // just under YouTube's top bar
+      if (p.ay === "t" && p.y > 52 && p.y < 84) p.y = GEO_HOME.y;
+      if (p.ax === "r" && p.ay === "t" && Math.abs(p.x - GEO_HOME.x) < 24 && Math.abs(p.y - GEO_HOME.y) < 24) geo.pos = null;
+      applyGeo();
+    }
+
+    function onHeadDown(e) {
+      if (e.button !== 0 || (e.target.closest && e.target.closest("button, a, input"))) return;
+      const sec = root.querySelector(".panel"), head = e.currentTarget;
+      const r = sec.getBoundingClientRect();
+      const sx = e.clientX, sy = e.clientY;
+      let moved = false;
+      try { head.setPointerCapture(e.pointerId); } catch (_) {}
+      const move = (ev) => {
+        const dx = ev.clientX - sx, dy = ev.clientY - sy;
+        if (!moved && Math.hypot(dx, dy) < 4) return;
+        if (!moved) {
+          moved = true;
+          if (geo.locked) { nudgeLock(); return; }
+          ddClose(false);
+          sec.setAttribute("data-drag", "");
+        }
+        if (geo.locked) return;
+        const vw = viewW(), vh = innerHeight;
+        const l = clampN(r.left + dx, GEO_M, vw - GEO_M - r.width);
+        const tp = clampN(r.top + dy, GEO_M, vh - 60);
+        placeBox(l, tp, r.width, r.height);
+      };
+      const up = () => {
+        head.removeEventListener("pointermove", move);
+        head.removeEventListener("pointerup", up);
+        head.removeEventListener("pointercancel", up);
+        if (sec.hasAttribute("data-drag")) {
+          sec.removeAttribute("data-drag");
+          snapGeo();
+          saveGeo();
+        } else if (!moved && minimized) setMin(false);   // a tap on the slim header opens it
+      };
+      head.addEventListener("pointermove", move);
+      head.addEventListener("pointerup", up);
+      head.addEventListener("pointercancel", up);
+    }
+
+    function onHeadDbl(e) {
+      if (e.target.closest && e.target.closest("button, a, input")) return;
+      if (geo.locked) { nudgeLock(); return; }
+      geo.pos = null; geo.w = {}; geo.h = null;
+      saveGeo();
+      applyGeo();
+      const sec = root.querySelector(".panel");
+      sec.classList.remove("arrive"); void sec.offsetWidth; sec.classList.add("arrive");
+      edgeFade();
+    }
+
+    function onRzDown(e) {
+      if (e.button !== 0 || geo.locked || minimized) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const z = e.currentTarget, dir = z.getAttribute("data-rz");
+      const sec = root.querySelector(".panel");
+      const r = sec.getBoundingClientRect();
+      const sx = e.clientX, sy = e.clientY;
+      const vw = viewW(), vh = innerHeight;
+      try { z.setPointerCapture(e.pointerId); } catch (_) {}
+      ddClose(false);
+      sec.setAttribute("data-resizing", dir);
+      const move = (ev) => {
+        const dx = ev.clientX - sx, dy = ev.clientY - sy;
+        let l = r.left, w = r.width, h = r.height;
+        if (dir.includes("e")) w = clampN(r.width + dx, GEO_MIN_W, Math.min(GEO_MAX_W, vw - GEO_M - r.left));
+        if (dir.includes("w")) { w = clampN(r.width - dx, GEO_MIN_W, Math.min(GEO_MAX_W, r.right - GEO_M)); l = r.right - w; }
+        if (dir.includes("s")) { h = clampN(r.height + dy, GEO_MIN_H, vh - r.top - GEO_M); geo.h = h; }
+        geo.w = Object.assign({}, geo.w, { [mode]: w });
+        placeBox(l, r.top, w, h);
+        edgeFade();
+      };
+      const up = () => {
+        z.removeEventListener("pointermove", move);
+        z.removeEventListener("pointerup", up);
+        z.removeEventListener("pointercancel", up);
+        sec.removeAttribute("data-resizing");
+        saveGeo();
+        edgeFade();
+      };
+      z.addEventListener("pointermove", move);
+      z.addEventListener("pointerup", up);
+      z.addEventListener("pointercancel", up);
+    }
+
+    const LOCK_SVG = (on) => `<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6.5" rx="1.8" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="${on ? "M5.5 7V5.2a2.5 2.5 0 0 1 5 0V7" : "M5.5 7V5.2a2.5 2.5 0 0 1 4.9-.7"}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>`;
+    const MIN_SVG = (min) => `<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="${min ? "M4.5 6.5L8 10l3.5-3.5" : "M4.5 9.5L8 6l3.5 3.5"}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    let geoPainted = "";
+    function paintGeoButtons() {
+      if (!root) return;
+      // retheme() runs on every YouTube DOM mutation: skip when nothing changed
+      const sig = geo.locked + "|" + minimized + "|" + lang;
+      if (sig === geoPainted) return;
+      geoPainted = sig;
+      const sec = root.querySelector(".panel");
+      sec.toggleAttribute("data-locked", !!geo.locked);
+      sec.toggleAttribute("data-min", minimized);
+      const lk = root.querySelector('[data-geo="lock"]'), mn = root.querySelector('[data-geo="min"]');
+      // only re-draw an icon when its state flips (retheme runs every render)
+      if (lk.dataset.on !== String(!!geo.locked)) { lk.dataset.on = String(!!geo.locked); lk.innerHTML = LOCK_SVG(geo.locked); }
+      lk.setAttribute("aria-pressed", geo.locked ? "true" : "false");
+      lk.title = geo.locked ? t("lockOff") : t("lockOn");
+      lk.setAttribute("aria-label", lk.title);
+      if (mn.dataset.on !== String(minimized)) { mn.dataset.on = String(minimized); mn.innerHTML = MIN_SVG(minimized); }
+      mn.setAttribute("aria-pressed", minimized ? "true" : "false");
+      mn.title = minimized ? t("expand") : t("minimise");
+      mn.setAttribute("aria-label", mn.title);
+      root.querySelector(".head").title = geo.locked ? t("lockedTip") : t("moveTip");
+      root.querySelectorAll(".rz").forEach((z) => { z.title = t("resizeTip"); });
+    }
+    function setLocked(v) {
+      geo.locked = !!v;
+      saveGeo();
+      paintGeoButtons();
+    }
+    function nudgeLock() {
+      const lk = root && root.querySelector('[data-geo="lock"]');
+      if (!lk) return;
+      lk.classList.remove("nudge"); void lk.offsetWidth; lk.classList.add("nudge");
+    }
+    function setMin(v) {
+      minimized = !!v;
+      if (minimized) ddClose(false);
+      paintGeoButtons();
+      applyGeo();
+      if (!minimized) edgeFade();
+    }
+    // the slim header's readout: live percent, a tick when done
+    function miniStat(pct) {
+      if (!root) return;
+      const el = root.querySelector(".mstat"), sec = root.querySelector(".panel");
+      const run = pct != null && pct >= 0;
+      el.textContent = run ? Math.round(pct) + "%" : (state.phase === "done" ? "\u2713" : "");
+      sec.toggleAttribute("data-mrun", run);
+      if (run) sec.style.setProperty("--mp", String(pct / 100));
     }
 
     function retheme() {
@@ -1007,6 +1371,7 @@
       sec.setAttribute("dir", lang === "fa" ? "rtl" : "ltr");
       sec.setAttribute("lang", lang);
       root.querySelector(".x").setAttribute("aria-label", t("close"));
+      paintGeoButtons();
       root.querySelector(".x").innerHTML =
         '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
       const tabs = root.querySelectorAll(".tabs button");
@@ -1058,6 +1423,8 @@
       const sec = root.querySelector(".panel");
       const fresh = sec.hidden;
       sec.hidden = false;
+      if (fresh && minimized) { minimized = false; paintGeoButtons(); }
+      applyGeo();
       if (fresh) {
         sec.classList.remove("arrive");
         void sec.offsetWidth;
@@ -1156,6 +1523,7 @@
         b.setAttribute("aria-selected", on ? "true" : "false");
         b.tabIndex = on ? 0 : -1;
       });
+      if (isOpen()) applyGeo();
       if (!quiet) {
         render();
         if (mode === "cut") Cut.onShow(); else Cut.onHide(true);
@@ -1351,6 +1719,31 @@
       render();
     }
 
+    // v1.4.8: the captions / dub version Play should open. On the Saved
+    // screen: the picks that download was started with. Anywhere else: the
+    // panel's captions / dub switches as they are now (both off = plain).
+    function wantFor(row) {
+      const w = state.dlWant;
+      if (w && row && state.video && w.vid === state.video.id && w.key === rid(row)
+          && state.phase === "done") {
+        return { captions: w.captions, dub: w.dub, capLang: w.capLang, dubLang: w.dubLang };
+      }
+      return Post.want(!!(row && row.isAudio));
+    }
+
+    // v1.4.8: a short note that floats over the footer and leaves by itself
+    let noteTimer = 0;
+    function flashNote(text) {
+      const sec = root && root.querySelector(".panel");
+      if (!sec || !text) return;
+      let n = sec.querySelector(".pnote");
+      if (!n) { n = document.createElement("div"); n.className = "pnote"; n.setAttribute("role", "status"); sec.appendChild(n); }
+      n.textContent = text;
+      n.classList.remove("on"); void n.offsetWidth; n.classList.add("on");
+      clearTimeout(noteTimer);
+      noteTimer = setTimeout(() => n.classList.remove("on"), 4200);
+    }
+
     async function play(id) {
       const row = state.rows.find((r) => rid(r) === id) || curRow();
       if (!row || !state.video) return;
@@ -1358,7 +1751,13 @@
         call("/v1/reveal", { method: "POST", body: { v: state.video.id } });
         return;
       }
-      const r = await call("/v1/play", { method: "POST", body: { v: state.video.id, id: rid(row) } });
+      const want = wantFor(row);
+      const r = await call("/v1/play", { method: "POST", body: { v: state.video.id, id: rid(row), want } });
+      if (r.reachable && r.data && r.data.ok && r.data.exact === false && (want.captions || want.dub)) {
+        // asked for captions / dub, but no such copy of this quality exists yet
+        state.message = t("playPlainNote");
+        flashNote(state.message);
+      }
       if (r.reachable && r.data && !r.data.ok) {
         // gone from disk: forget it, so the row offers Download again
         state.saved = state.saved.filter((k) => k !== rid(row));
@@ -1424,6 +1823,8 @@
       state.phase = "sending";
       state.parked = null;
       state.dlKey = rid(row);
+      // v1.4.8: Play on the Saved screen opens exactly this (plain / captions / dub / both)
+      state.dlWant = Object.assign({ key: rid(row), vid: state.video.id }, Post.want(!!row.isAudio));
       state.result = null;
       state.live = { pct: 0, text: t("sending") };
       shownPct = 0; speeds = []; ctlWant = ""; ctlAt = 0;
@@ -1436,7 +1837,9 @@
         body: { v: state.video.id, key: row.key, title: meta.title, channel: meta.channel,
                 inPage: true,
                 // v3.45: the format + dub picked in this panel
-                vf: state.vf || undefined, af: state.af || undefined, lang: state.lang || "" },
+                vf: state.vf || undefined, af: state.af || undefined, lang: state.lang || "",
+                // v1.4: captions / dub to run on the finished file
+                post: Post.spec(!!row.isAudio) || undefined },
         timeout: 20000,
       });
       if (!res.reachable) { Live.set("dl", null); state.phase = "offline"; render(); return; }
@@ -1585,6 +1988,7 @@
         return;
       }
       if (act === "ddpick") { pickTrack(el.getAttribute("data-val") || ""); return; }
+      if (act.charAt(0) === "p" && Post.onAct(act, el)) return;
       if (act === "tab") {
         setMode(el.getAttribute("data-mode"));
       } else if (act === "pick") {
@@ -1633,7 +2037,8 @@
       else if (act === "retry") {
         state.phase = "connecting"; state.message = ""; render(); connect();
       } else if (act === "reveal") {
-        call("/v1/reveal", { method: "POST", body: { v: state.video.id, id: state.key || undefined } });
+        const rrow = state.rows.find((r) => rid(r) === state.key) || curRow();
+        call("/v1/reveal", { method: "POST", body: { v: state.video.id, id: state.key || undefined, want: wantFor(rrow) } });
       } else if (act === "app") {
         call("/v1/show", { method: "POST", body: { page: 8 } });
       } else Cut.onAct(act, el);
@@ -1683,10 +2088,16 @@
 
     function render() {
       if (!host) return;
+      smoothHeight(renderNow);
+    }
+
+    function renderNow() {
+      if (!host) return;
       retheme();
       const sec = root.querySelector(".panel");
       sec.setAttribute("data-phase", state.phase);
       sec.toggleAttribute("data-live", isLive());
+      miniStat(null);
       // v1.2: while the browser asks to open the app, the page dims softly so
       // the prompt and this card are the only two things in focus
       root.querySelector(".veil").classList.toggle("on", state.phase === "waking" && isOpen());
@@ -1726,6 +2137,7 @@
         foot.innerHTML = Cut.footHTML();
         Cut.bind(body);
         Cut.paint();
+        applyGeo();
         edgeFade();
         syncLive();
         loaderTick();
@@ -1734,6 +2146,7 @@
       if (mode === "cut" && state.phase === "reading") {
         body.innerHTML = Cut.skeletonHTML();
         foot.innerHTML = "";
+        applyGeo();
         edgeFade();
         syncLive();
         loaderTick();
@@ -1744,6 +2157,7 @@
       const ladder = root.querySelector(".ladder");
       if (ladder) ladder.addEventListener("keydown", onLadderKey);
       paintProgress();
+      applyGeo();
       edgeFade();
       syncLive();
       loaderTick();
@@ -1972,12 +2386,45 @@
       const body = root.querySelector(".body");
       const br = body ? body.getBoundingClientRect() : { top: 0, bottom: innerHeight };
       const tr = btn.getBoundingClientRect();
-      const mh = Math.min(menu.scrollHeight || 0, 260);
+      const cap = parseFloat(getComputedStyle(menu).maxHeight) || 260;
+      const mh = Math.min(menu.scrollHeight || 0, cap);
+      lpFilter(dd, "");
       dd.classList.toggle("up", tr.bottom + mh + 10 > br.bottom && tr.top - mh - 10 > br.top);
       dd.setAttribute("data-open", "1");
       btn.setAttribute("aria-expanded", "true");
       const on = menu.querySelector(".ddo.on") || menu.querySelector(".ddo");
-      if (on) { on.focus({ preventScroll: true }); on.scrollIntoView({ block: "nearest" }); }
+      const q = menu.querySelector(".lpin");
+      if (on) { on.focus({ preventScroll: true }); ddReveal(menu, on); }
+      if (q) q.focus({ preventScroll: true });
+    }
+    // scroll an option into view inside its own menu only (never the page)
+    function ddReveal(menu, el) {
+      const head = menu.querySelector(".lpq");
+      const top = el.offsetTop - (head ? head.offsetHeight + 6 : 4), bot = el.offsetTop + el.offsetHeight + 4;
+      if (top < menu.scrollTop) menu.scrollTop = top;
+      else if (bot > menu.scrollTop + menu.clientHeight) menu.scrollTop = bot - menu.clientHeight;
+    }
+    // v1.4.1: type-to-search in the language picker (accents ignored)
+    function lpFilter(dd, raw) {
+      const menu = dd && dd.querySelector(".lpm");
+      if (!menu) return;
+      const q = String(raw || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+      const inp = menu.querySelector(".lpin");
+      if (inp && inp.value !== raw) inp.value = raw || "";
+      let shown = 0;
+      menu.querySelectorAll(".lpsec").forEach((sec) => {
+        let n = 0;
+        sec.querySelectorAll(".lpo").forEach((o) => {
+          const hit = !q || (o.getAttribute("data-q") || "").includes(q);
+          o.hidden = !hit;
+          if (hit) n++;
+        });
+        sec.hidden = n === 0;
+        shown += n;
+      });
+      menu.toggleAttribute("data-q", !!q);
+      const none = menu.querySelector(".lpnone");
+      if (none) { none.hidden = shown > 0; const b = none.querySelector("b"); if (b) b.textContent = "“" + (raw || "") + "”"; }
     }
     function pickTrack(v) {
       ddClose(false);
@@ -1990,16 +2437,28 @@
       const dd = path.find((n) => n && n.classList && n.classList.contains("dd"));
       if (!dd) return;
       const open = dd.getAttribute("data-open") === "1";
-      const opts = [...dd.querySelectorAll(".ddo")];
+      const opts = [...dd.querySelectorAll(".ddo")].filter((o) => !o.hidden);
       const i = opts.indexOf(root.activeElement);
+      const inp = dd.querySelector(".lpin");
+      const inSearch = inp && root.activeElement === inp;
+      if (inp && open) e.stopPropagation();        // YouTube's shortcuts stay out of the search
+      if (inSearch && e.key === "Enter") {
+        e.preventDefault();
+        const first = opts[0];
+        if (first) first.click();
+        return;
+      }
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault(); e.stopPropagation();
         if (!open) { ddOpen(dd); return; }
+        if (inp && e.key === "ArrowUp" && i <= 0) { inp.focus({ preventScroll: true }); return; }
         const n = e.key === "ArrowDown" ? Math.min(opts.length - 1, i + 1) : Math.max(0, i - 1);
-        opts[n] && opts[n].focus({ preventScroll: true });
-        opts[n] && opts[n].scrollIntoView({ block: "nearest" });
+        if (opts[n]) { opts[n].focus({ preventScroll: true }); ddReveal(dd.querySelector(".ddm"), opts[n]); }
+      } else if (inp && open && !inSearch && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        // start typing on a focused row: the letters go to the search field
+        inp.focus({ preventScroll: true });
       } else if (e.key === "Home" || e.key === "End") {
-        if (!open) return;
+        if (!open || inSearch) return;
         e.preventDefault();
         const o = e.key === "Home" ? opts[0] : opts[opts.length - 1];
         o && o.focus({ preventScroll: true });
@@ -2058,6 +2517,8 @@
       if (state.message && state.phase === "pick") html += `<p class="note warn">${esc(state.message)}</p>`;
       else if (state.phase === "pick" && isSaved(curRow())) html += `<p class="note again">${esc(t("savedHere"))}</p>`;
       if (state.phase === "done") html += `<p class="note again">${esc(t("againQuality"))}</p>`;
+      // v1.4: captions & AI dub, run right after the download
+      if (state.probed !== undefined) html += Post.html(!canPick(), !!(curRow() && curRow().isAudio));
       return html;
     }
 
@@ -2107,7 +2568,7 @@
           return `<div class="done">
               <span class="tick"><svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><path d="M5 11.5l4 4 8-9" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
               <span><b>${esc(t("done"))}${s.size ? " · " + esc(bytes(s.size)) : ""}</b><small>${esc(t("doneBody"))}</small></span>
-            </div>
+            </div>${s.postError ? postFailHTML(s) : ""}
             <div class="row2">
               <button class="primary play" type="button" data-act="play" data-key="${esc(state.key || "")}" title="${esc(t("playTip"))}">${ICON_PLAY_BIG}<span>${esc(t("play"))}</span></button>
               <button class="ghost" type="button" data-act="reveal"><span>${esc(t("showFolder"))}</span></button>
@@ -2119,6 +2580,30 @@
         default:
           return "";
       }
+    }
+
+    // v1.4.9: captions / dub didn't finish. One quiet card: what happened,
+    // which model and when it clears, the one thing to do. The provider's
+    // raw reply stays in the app's log, never here.
+    function postFailHTML(s) {
+      const i = s.postErrorInfo || {};
+      let title = i.title ? (i.step ? `${i.step} · ${i.title}` : i.title) : "";
+      let detail = i.detail || "";
+      if (!title) {                       // an older app: only the raw line
+        const raw = String(s.postError || "").replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
+        title = t("postFailed").replace(/:$/, "");
+        detail = raw.length > 120 ? raw.slice(0, 119).trimEnd() + "…" : raw;
+      }
+      const hint = i.hint || t("postFailedHint");
+      return `<div class="pfail" role="status">
+          <span class="pf-ico" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M7 3.6v4.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="7" cy="10.5" r="1.05" fill="currentColor"/></svg></span>
+          <span class="pf-body">
+            <b>${esc(title)}</b>
+            ${detail ? `<span class="pf-detail">${esc(detail)}</span>` : ""}
+            <small>${esc(hint)}</small>
+          </span>
+          <button class="pf-act" type="button" data-act="app">${esc(t("postFailRetry"))}</button>
+        </div>`;
     }
 
     // ── v3.44: the live capsule ─────────────────────────────────────────
@@ -2145,6 +2630,7 @@
             <span class="st"><b class="vsz">—</b><small class="vtot">${esc(t("sizeSoFar"))}</small></span>
             <span class="st"><b class="veta">—</b><small>${esc(t("left"))}</small></span>
           </div>
+          <div class="psteps" hidden></div>
           <p class="keep">${esc(t("keepGoing"))}</p>
         </div>`;
     }
@@ -2180,9 +2666,13 @@
       const ph = state.phase;
       const dlc = root.querySelector(".dlc");
       if (dlc) {
-        const post = !!s.post;
+        const studio = s.phase === "post";      // v1.4: captions / dub on the file
+        const post = !!s.post && !studio;
         const indeterminate = ph === "sending" || ph === "resuming"
-          || post || (ph === "running" && !(s.done > 0) && pct <= 0);
+          || post || (ph === "running" && !studio && !(s.done > 0) && pct <= 0);
+        dlc.toggleAttribute("data-post", studio);
+        const ps = dlc.querySelector(".psteps");
+        if (ps) { ps.hidden = !studio; if (studio) ps.innerHTML = Post.stepsHTML(s.steps); }
         dlc.setAttribute("data-st", ph);
         dlc.toggleAttribute("data-ind", indeterminate);
         const cap = dlc.querySelector(".cap");
@@ -2193,6 +2683,7 @@
           : ph === "pausing" ? t("dlPausing")
           : ph === "paused" ? t("dlPaused")
           : ph === "resuming" ? t("dlResuming")
+          : studio ? (s.text || t("dlFinishing"))
           : post ? t("dlFinishing")
           : indeterminate ? t("dlStarting")
           : t("dlDownloading");
@@ -2205,9 +2696,9 @@
           btn.setAttribute("aria-label", playing ? t("pause") : t("resume"));
           btn.title = playing ? t("pause") : t("resume");
           btn.disabled = ph === "sending" || ph === "pausing" || ph === "resuming"
-            || (ph === "running" && (post || s.canPause === false));
+            || (ph === "running" && (post || studio || s.canPause === false));
         }
-        const live = ph === "running" && !post;
+        const live = ph === "running" && !post && !studio;
         dlc.querySelector(".vsp").textContent = live && s.speed > 0 ? bytes(s.speed) + "/s" : "—";
         dlc.querySelector(".vsz").textContent = s.done > 0 ? bytes(s.done) : (pct > 0 ? pct + "%" : "—");
         dlc.querySelector(".vtot").textContent = s.total > 0 ? t("ofTotal").replace("{t}", bytes(s.total)) : t("sizeSoFar");
@@ -2215,11 +2706,12 @@
           : (live && !indeterminate ? t("etaWait") : "—");
         dlc.querySelector(".veta").classList.toggle("soft", !(live && s.eta > 0));
         dlc.querySelector(".spark path").setAttribute("d", live ? sparkPath() : "");
-        dlc.querySelector(".keep").textContent = ph === "paused" ? t("pausedNote") : t("keepGoing");
+        dlc.querySelector(".keep").textContent = ph === "paused" ? t("pausedNote") : studio ? t("postNoPlay") : t("keepGoing");
       }
       const fill = root.querySelector(".rung.on .fill");
       if (fill) fill.style.width = pct + "%";
       root.querySelector(".panel").style.setProperty("--pct", pct / 100);
+      miniStat(pct);
     }
 
     // the finish: the filled rung flashes once, a ring pulses off the tick
@@ -2230,6 +2722,246 @@
       void sec.offsetWidth;
       sec.classList.add("landed");
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  v1.4 — Captions & AI dub (Download and Cut tabs)
+    // ═══════════════════════════════════════════════════════════════════
+    //
+    // One compact section, the same in both tabs: two switches (Captions /
+    // AI dub) and, for the one that is on, only the choices that matter.
+    // YouTube = the video's own captions in the languages YouTube itself has
+    // (never an AI); every other language lives under "AI listens". The
+    // picks are sticky (chrome.storage), and the app runs them right after
+    // the file lands, inside the SAME capsule: the bar keeps going through
+    // "Captions" and "AI dub", and Play only unlocks when everything is done.
+    const Post = (() => {
+      const KEY = "yth.post";
+      let p = { cap: false, dub: false, src: "youtube", track: 0, lang: "", style: "youtube",
+                out: "burn", size: "m", pos: "bottom", dubLang: "fa", voices: "auto", bg: "duck", open: false };
+      let opts = {};                 // per video: /v1/captions answer
+      let api = null;                // the app answers /v1/captions (null = unknown)
+      try { chrome.storage.local.get(KEY, (r) => { if (r && r[KEY]) p = Object.assign(p, r[KEY], { track: 0 }); }); } catch (_) {}
+      const save = () => { try { chrome.storage.local.set({ [KEY]: Object.assign({}, p, { track: 0 }) }); } catch (_) {} };
+      const vid = () => (state.video && state.video.id) || "";
+      const o = () => opts[vid()] || null;
+
+      async function load() {
+        const v = vid();
+        if (!v || opts[v]) return;
+        opts[v] = { loading: true, youtube: [] };
+        const r = await call("/v1/captions?v=" + encodeURIComponent(v), { timeout: 20000 });
+        if (r.status === 404) { api = false; opts[v] = { off: true, youtube: [] }; rerender(); return; }
+        api = !!(r.data && r.data.ok);
+        opts[v] = (r.data && r.data.ok) ? r.data : { youtube: [], error: "" };
+        if (!o().youtube.length && p.src === "youtube" && p.cap) p.src = "ai";
+        rerender();
+      }
+      function rerender() {
+        if (!root || !isOpen()) return;
+        const box = root.querySelector(".post");
+        if (!box) return;
+        const locked = box.hasAttribute("data-locked");
+        box.outerHTML = html(locked, box.getAttribute("data-audio") === "1");
+      }
+
+      const seg = (act, items, cur, locked) => `<span class="seg pseg">${items.map(([k, label]) =>
+        `<button type="button" class="fchip${k === cur ? " on" : ""}" role="radio" aria-checked="${k === cur}"
+          data-act="${act}" data-val="${esc(k)}"${locked ? " disabled" : ""}>${esc(label)}</button>`).join("")}</span>`;
+      const sel = (name, items, cur, locked) => `<select class="psel" data-pset="${name}"${locked ? " disabled" : ""}>${
+        items.map(([k, label]) => `<option value="${esc(String(k))}"${String(k) === String(cur) ? " selected" : ""}>${esc(label)}</option>`).join("")}</select>`;
+      const row = (label, inner) => `<div class="prow"><span class="pl">${esc(label)}</span><span class="pv">${inner}</span></div>`;
+
+      // ── v1.4.1: the language picker ─────────────────────────────────
+      // Replaces the native <select> (Windows drew its open list as a white /
+      // blue system menu over the dark panel). A floating glass sheet:
+      // sections, a code glyph per language, native + English name, a
+      // YouTube kind badge, type-to-search on long lists, full keyboard.
+      // It rides on the shared .dd open / close / arrow-key machinery.
+      const lpItem = (v, code, nat, en, kind) => ({ v: String(v), code: String(code || ""), nat: String(nat || code || ""),
+                                                    en: nat && en && en !== nat ? String(en) : "", kind: kind || "" });
+      const ICON_WAVE = '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 6v2M4.5 4v6M7 2v10M9.5 4.5v5M12 6v2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+      const ICON_FIND = '<svg class="lpqi" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="6.2" cy="6.2" r="4.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9.4 9.4L12.5 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+      const lpCode = (x) => (String(x.code).split(/[-_]/)[0].toUpperCase().slice(0, 3)) || "··";
+      const lpBadge = (x, trigger) => {
+        if (x.kind === "orig") return `<span class="ddk k-orig">${esc(t("lpFree"))}</span>`;
+        if (x.kind === "auto") return `<span class="ddk k-auto">${esc(t("lpAuto"))}</span>`;
+        if (x.kind === "uploaded") return `<span class="ddk k-up">${esc(t("lpUploaded"))}</span>`;
+        if (x.kind === "ai" && trigger) return `<span class="ddk k-ai">${esc(t("lpAiTag"))}</span>`;
+        return "";
+      };
+      const lpFace = (x, trigger) => `<span class="lpc${x.wave ? " wave" : ""}" data-k="${esc(x.kind || "lang")}">${x.wave ? ICON_WAVE : esc(lpCode(x))}</span>
+          <span class="lptx"><b>${esc(x.nat)}</b>${x.en ? `<small>${esc(x.en)}</small>` : ""}</span>${lpBadge(x, trigger)}`;
+      const lpHay = (x) => [x.code, x.nat, x.en].join(" ").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+      function lp(name, sections, cur, locked, label) {
+        const all = [].concat(...sections.map((sec) => sec.items));
+        const pick = all.find((x) => x.v === String(cur)) || all[0] || lpItem("", "", "—", "");
+        // the trigger says when the pick will cost an AI call
+        const face = name === "lang" && pick.v ? Object.assign({}, pick, { kind: "ai" })
+                   : pick.wave ? Object.assign({}, pick, { nat: t("lpSpoken") }) : pick;
+        const searchable = sections.some((sec) => sec.search) && all.length >= 8;
+        let i = 0;
+        const body = sections.map((sec) => `<div class="lpsec">
+            <div class="lph" aria-hidden="true">${esc(sec.head)}<i>${sec.items.length}</i></div>
+            ${sec.items.map((x) => {
+              const on = x.v === pick.v;
+              return `<button type="button" class="ddo lpo${on ? " on" : ""}" role="option" aria-selected="${on}"
+                  style="--i:${Math.min(i++, 9)}" data-act="ppick" data-pset="${esc(name)}" data-val="${esc(x.v)}"
+                  data-q="${esc(lpHay(x))}">${lpFace(x, false)}${ICON_TICK}</button>`;
+            }).join("")}</div>`).join("");
+        return `<div class="dd lp" data-open="0" data-name="${esc(name)}">
+            <button type="button" class="ddbtn lpbtn" data-act="ddtoggle" aria-haspopup="listbox" aria-expanded="false"
+                aria-label="${esc(label)}: ${esc(pick.nat)}"${locked ? " disabled" : ""}>${lpFace(face, true)}${ICON_CHEV}</button>
+            <div class="ddm lpm" role="listbox" aria-label="${esc(label)}">
+              ${searchable ? `<label class="lpq">${ICON_FIND}<input type="text" class="lpin" spellcheck="false" autocomplete="off"
+                  placeholder="${esc(t("lpSearch").replace("{n}", String(all.length)))}" aria-label="${esc(t("lpSearch").replace("{n}", String(all.length)))}"><kbd>↵</kbd></label>` : ""}
+              ${body}
+              <p class="lpnone" hidden>${esc(t("lpNone"))} <b></b></p>
+            </div>
+          </div>`;
+      }
+
+      function html(locked, audio) {
+        load();
+        const d = o() || { loading: true, youtube: [] };
+        if (d.off || api === false) {
+          return `<div class="post" data-audio="${audio ? 1 : 0}"${locked ? " data-locked" : ""}><p class="note">${esc(t("postOld"))}</p></div>`;
+        }
+        const any = p.cap || p.dub;
+        const yt = d.youtube || [];
+        // v1.4.1: {code, native, name}; an older app sends only "native · name"
+        const aiLangs = (d.languages || []).map((l) => {
+          const parts = String(l.label || "").split(" · ");
+          return lpItem(l.code, l.code, l.native || parts[0] || l.code, l.name || parts[1] || "");
+        });
+        let h = `<div class="post${any ? " on" : ""}" data-audio="${audio ? 1 : 0}"${locked ? " data-locked" : ""}>
+          <div class="phead"><span class="pt">${esc(t("postHead"))}</span>
+            <span class="ppill${any ? " on" : ""}"><i></i>${esc(any ? t("postOn") : t("postOff"))}</span></div>
+          <div class="plane">
+            <button type="button" class="ptile${p.cap ? " on" : ""}" data-act="pcap" aria-pressed="${p.cap}"${locked ? " disabled" : ""}>
+              <span class="pic"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="3" width="13" height="10" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4.5 9.5h3M9 9.5h2.5M4.5 7h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
+              <span class="pn">${esc(t("postCap"))}</span><span class="psw"><i></i></span></button>
+            <button type="button" class="ptile${p.dub ? " on" : ""}" data-act="pdub" aria-pressed="${p.dub}"${locked ? " disabled" : ""}>
+              <span class="pic"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 6h2.2L8.5 3v10L5.2 10H3z" fill="currentColor"/><path d="M11 5.5a3.5 3.5 0 010 5M12.8 3.8a6 6 0 010 8.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span>
+              <span class="pn">${esc(t("postDub"))}</span><span class="psw"><i></i></span></button>
+          </div>`;
+        if (p.cap) {
+          h += `<div class="pbox">`;
+          h += row(t("postWords"), seg("psrc", [["youtube", t("postYt")], ["ai", t("postAi")]], p.src, locked));
+          if (p.src === "youtube") {
+            if (d.loading) h += row(t("postLang"), `<span class="pmuted"><span class="spin"></span>${esc(t("postReading"))}</span>`);
+            else if (!yt.length) h += `<p class="note warn">${esc(t("postNoYt"))}</p>`;
+            else {
+              h += row(t("postLang"), lp("track", [{ head: t("lpOnYt"), items: yt.map((x, i) => lpItem(String(i), x.lang, x.native || String(x.label || "").split(" · ")[0], x.name || "", x.kind)) }],
+                String(Math.min(p.track, yt.length - 1)), locked, t("postLang")));
+              const pick = yt[Math.min(p.track, yt.length - 1)] || {};
+              h += `<p class="note ok">${esc(pick.kind === "translated" ? t("postYtTrNote") : t("postYtNote"))}</p>`;
+            }
+          } else {
+            h += row(t("postLang"), lp("lang", [
+              { head: t("lpKeep"), items: [{ v: "", code: "", nat: t("postAsSpoken"), en: "", kind: "orig", wave: true }] },
+              { head: t("lpAi"), items: aiLangs, search: true }], p.lang, locked, t("postLang")));
+            // v1.4.9: "AI listens" runs on the Captions pick, not on Gemini
+            const canListen = d.listen !== undefined ? !!d.listen : !!d.gemini;
+            // v1.4.13: "Gemini listens" switched off in Settings (or a pick that
+            // doesn't hear): YouTube's words, made fluent by the AI
+            const aiNote = d.listenAudio === false ? t("postAiNoteYt")
+              : d.listenLabel ? t("postAiNoteBy").replace("{who}", d.listenLabel) : t("postAiNote");
+            h += `<p class="note${canListen ? "" : " warn"}">${esc(!canListen ? t("postNeedListen") : (p.lang && !d.ai ? t("postNeedAi") : aiNote))}</p>`;
+          }
+          if (!audio) {
+            h += row(t("postLook"), `<span class="plooks">${(d.styles || [{ key: "youtube", name: "YouTube" }]).map((st) =>
+              `<button type="button" class="plook${st.key === p.style ? " on" : ""}" data-act="pstyle" data-val="${esc(st.key)}" data-k="${esc(st.key)}"${locked ? " disabled" : ""}><b>Aa</b><small>${esc(st.name)}</small></button>`).join("")}</span>`);
+            h += row(t("postOut"), seg("pout", [["burn", t("postBurn")], ["soft", t("postTrack")], ["srt", ".srt"]], p.out, locked));
+            // v1.4.3: caption size + place (only matter when drawn onto the picture)
+            const drawn = p.out === "burn" || p.dub;
+            h += row(t("postSize"), seg("psize", [["s", t("postSizeS")], ["m", t("postSizeM")], ["l", t("postSizeL")]], p.size, locked || !drawn));
+            h += row(t("postPlace"), seg("ppos", [["bottom", t("postPlaceBottom")], ["middle", t("postPlaceMiddle")], ["top", t("postPlaceTop")]], p.pos, locked || !drawn));
+            if (!drawn) h += `<p class="note">${esc(t("postSizeNote"))}</p>`;
+          }
+          h += `</div>`;
+        }
+        if (p.dub) {
+          h += `<div class="pbox">`;
+          h += row(t("postInto"), lp("dubLang", [{ head: t("lpDubInto"), search: true,
+            items: aiLangs.length ? aiLangs : [lpItem("fa", "fa", "فارسی", "Persian"), lpItem("en", "en", "English", "English")] }],
+            p.dubLang, locked, t("postInto")));
+          h += row(t("postVoices"), seg("pvoices", [["auto", t("postAuto")], ["single", t("postOne")]], p.voices, locked));
+          h += row(t("postBg"), seg("pbg", [["duck", t("postDuck")], ["bed", t("postBed")], ["replace", t("postReplace")]], p.bg, locked));
+          if (!d.gemini) h += `<p class="note warn">${esc(t("postNeedGemini"))}</p>`;
+          h += `</div>`;
+        }
+        if (p.cap && p.dub && !audio) h += `<p class="note">${esc(t("postOnePass"))}</p>`;
+        return h + `</div>`;
+      }
+
+      function onAct(act, el) {
+        const v = el.getAttribute("data-val");
+        if (act === "pcap") p.cap = !p.cap;
+        else if (act === "pdub") p.dub = !p.dub;
+        else if (act === "psrc") { p.src = v; if (p.style === "youtube" || p.style === "pop") p.style = v === "youtube" ? "youtube" : "pop"; }
+        else if (act === "pstyle") p.style = v;
+        else if (act === "pout") p.out = v;
+        else if (act === "psize") p.size = ["s", "m", "l"].includes(v) ? v : "m";
+        else if (act === "ppos") p.pos = ["bottom", "middle", "top"].includes(v) ? v : "bottom";
+        else if (act === "pvoices") p.voices = v;
+        else if (act === "pbg") p.bg = v;
+        else if (act === "ppick") {
+          const k = el.getAttribute("data-pset");
+          if (k === "track") p.track = parseInt(v, 10) || 0;
+          else if (k === "lang" || k === "dubLang") p[k] = v || "";
+          else return false;
+          save(); rerender();
+          // keep the keyboard where it was: on the (new) trigger
+          const b = root && root.querySelector(`.post .lp[data-name="${k}"] .ddbtn`);
+          if (b) b.focus({ preventScroll: true });
+          return true;
+        }
+        else return false;
+        save(); rerender(); return true;
+      }
+      function onChange(el) {
+        const k = el.getAttribute("data-pset");
+        if (!k) return false;
+        if (k === "track") p.track = parseInt(el.value, 10) || 0;
+        else p[k] = el.value;
+        save(); rerender(); return true;
+      }
+      // what the app gets: null = nothing picked
+      function spec(audio) {
+        if (!(p.cap || p.dub) || api === false) return null;
+        const d = o() || {};
+        const out = {};
+        if (p.cap) {
+          if (p.src === "youtube") {
+            const yt = d.youtube || [];
+            const pick = yt[Math.min(p.track, yt.length - 1)];
+            if (pick) out.captions = { source: "youtube", track: pick.key, style: p.style, output: audio ? "srt" : p.out };
+          } else out.captions = { source: "ai", target: p.lang || "", style: p.style, output: audio ? "srt" : p.out };
+          if (out.captions) { out.captions.size = p.size || "m"; out.captions.position = p.pos || "bottom"; }
+        }
+        if (p.dub) out.dub = { target: p.dubLang || "fa", voices: p.voices, bg: p.bg };
+        return Object.keys(out).length ? out : null;
+      }
+      function stepsHTML(steps) {
+        if (!Array.isArray(steps) || !steps.length) return "";
+        return steps.map((x) => {
+          const st = x.state || "queued";
+          const pct = st === "running" ? " " + Math.round((Number(x.pct) || 0) * 100) + "%" : "";
+          return `<span class="pstep" data-s="${esc(st)}"><i></i>${esc(x.label || "")}${pct}</span>`;
+        }).join('<span class="psep"></span>');
+      }
+      // v1.4.8: what Play / Show in folder should open, from the same picks
+      // a download would use. Nothing picked = the plain video.
+      function want(audio) {
+        const sp = spec(audio);
+        const w = { captions: false, dub: false, capLang: "", dubLang: "" };
+        if (sp && sp.captions && sp.captions.output !== "srt") { w.captions = true; w.capLang = sp.captions.target || ""; }
+        if (sp && sp.dub) { w.dub = true; w.dubLang = sp.dub.target || ""; }
+        return w;
+      }
+      return { html, onAct, onChange, spec, want, stepsHTML, active: () => p.cap || p.dub };
+    })();
 
     // ═══════════════════════════════════════════════════════════════════
     //  v3.43c — the Cut tab
@@ -2566,6 +3298,7 @@
               <span class="seg">${(state.formats && state.formats.video || [{key:"mp4",label:"MP4"},{key:"mkv",label:"MKV"},{key:"webm",label:"WEBM"}]).map((f) => `<button type="button" class="fchip${c.vfmt === f.key ? " on" : ""}" role="radio" aria-checked="${c.vfmt === f.key}" data-act="cutfmt" data-val="${esc(f.key)}" ${locked ? "disabled" : ""}>${esc(f.label)}</button>`).join("")}</span>
             </div>`}
             ${trackHTML()}
+            ${Post.html(locked, !!c.audioOnly)}
             <p class="note kf"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 7.2v4M8 4.9v.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><span>${esc(c.audioOnly ? t("audioCutNote") : t("keyframe"))}</span></p>
             ${c.phase === "error" ? `<div class="off err"><b>${esc(t("cutFailed"))}</b><p>${esc(c.message)}</p></div>` : ""}
           </div>`;
@@ -2619,6 +3352,7 @@
                   <span class="st"><b class="vsz">—</b><small class="vtot">${esc(t("sizeSoFar"))}</small></span>
                   <span class="st"><b class="veta soft">—</b><small>${esc(t("left"))}</small></span>
                 </div>
+                <div class="psteps" hidden></div>
                 <p class="keep">${esc(t("cutKeep"))}</p>
               </div>`;
           case "done": {
@@ -2735,10 +3469,22 @@
           dlc.querySelector(".cap").setAttribute("aria-valuenow", String(pct));
           dlc.querySelector(".capfill").style.setProperty("--p", String(pct / 100));
           dlc.querySelector(".capnum b").textContent = String(pct);
+          miniStat(pct);
           dlc.querySelector(".capst").textContent =
             s.text || (c.phase === "sending" ? t("cutSending") : t("cutting"));
+          const studio = s.phase === "post";    // v1.4
+          dlc.toggleAttribute("data-post", studio);
+          if (studio) dlc.removeAttribute("data-ind");
+          const ps = dlc.querySelector(".psteps");
+          if (ps) { ps.hidden = !studio; if (studio) ps.innerHTML = Post.stepsHTML(s.steps); }
+          const kp = dlc.querySelector(".keep");
+          if (kp) kp.textContent = studio ? t("postNoPlay") : t("cutKeep");
           const sb = dlc.querySelector(".capbtn");
-          if (sb) sb.disabled = c.phase === "sending";
+          if (sb) {
+            sb.disabled = c.phase === "sending";
+            sb.title = studio ? t("postStop") : t("cutStop");
+            sb.setAttribute("aria-label", sb.title);
+          }
           // v3.49: speed · size · time left, exactly like the Download capsule.
           // The app sends them since 1.1.2; an older app only sends pct +
           // written, so the same numbers are derived here from the polls.
@@ -3031,7 +3777,8 @@
           method: "POST",
           body: { v: state.video.id, cap: parseInt(c.cap, 10) || 0, start: c.start, end: c.end,
                   title: meta.title, channel: meta.channel,
-                  format: c.audioOnly ? c.afmt : c.vfmt, audioOnly: !!c.audioOnly, lang: state.lang || "" },
+                  format: c.audioOnly ? c.afmt : c.vfmt, audioOnly: !!c.audioOnly, lang: state.lang || "",
+                  post: Post.spec(!!c.audioOnly) || undefined },
           timeout: 15000,
         });
         if (!res.reachable) { state.phase = "offline"; c.phase = "edit"; render(); return; }

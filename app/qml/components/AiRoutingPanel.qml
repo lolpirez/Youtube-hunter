@@ -110,14 +110,16 @@ ColumnLayout {
                         C.Dropdown {
                             Layout.fillWidth: true
                             implicitHeight: 44
-                            model: root.choiceLabels
-                            icons: root.choiceIcons
+                            // v1.4.8: each row offers its own list (the dub: Gemini only)
+                            readonly property var opts: row.r.choices || root.choices
+                            model: opts.map(function (c) { return c.label })
+                            icons: opts.map(function (c) { return c.glyph })
                             currentIndex: {
-                                for (var i = 0; i < root.choices.length; i++)
-                                    if (root.choices[i].id === (row.r.profile || "")) return i
+                                for (var i = 0; i < opts.length; i++)
+                                    if (opts[i].id === (row.r.profile || "")) return i
                                 return 0
                             }
-                            onActivated: Settings.setAiRoute(row.r.feature, "profile", (root.choices[currentIndex] || {}).id || "")
+                            onActivated: Settings.setAiRoute(row.r.feature, "profile", (opts[currentIndex] || {}).id || "")
                         }
                     }
                     ColumnLayout {
@@ -152,6 +154,7 @@ ColumnLayout {
                         }
                     }
                     ColumnLayout {
+                        visible: row.r.showEffort !== false
                         Layout.fillWidth: true
                         Layout.preferredWidth: 3
                         spacing: 6
@@ -163,6 +166,218 @@ ColumnLayout {
                             value: row.r.effort || "auto"
                             onPicked: (v) => Settings.setAiRoute(row.r.feature, "effort", v)
                         }
+                    }
+                }
+
+                // v1.4.13: where Captions get their words. One switch with a
+                // live "flow" so the choice is seen, not just read:
+                //   on : video audio → Gemini hears it → captions
+                //   off: YouTube's captions → Gemini makes them fluent → captions
+                Rectangle {
+                    id: lis
+                    visible: row.r.hasListen === true
+                    readonly property bool can: row.r.listenCapable === true
+                    readonly property bool on: can && row.r.listenAudio !== false
+                    Layout.fillWidth: true
+                    radius: Tokens.radiusMd
+                    color: lis.on ? U.withAlpha(Theme.primary, Theme.isDark ? 0.07 : 0.045)
+                                  : U.withAlpha(Theme.on_surface, Theme.isDark ? 0.035 : 0.025)
+                    border.width: 1
+                    border.color: lis.on ? U.withAlpha(Theme.primary, 0.28) : Theme.border
+                    implicitHeight: lisCol.implicitHeight + Tokens.space3 * 2
+                    Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durMed } }
+                    Behavior on border.color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: Tokens.durMed } }
+
+                    ColumnLayout {
+                        id: lisCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: Tokens.space3
+                        spacing: Tokens.space3
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Tokens.space3
+                            Rectangle {
+                                Layout.preferredWidth: 30; Layout.preferredHeight: 30
+                                Layout.alignment: Qt.AlignTop
+                                radius: 9
+                                color: lis.on ? U.withAlpha(Theme.primary, Theme.isDark ? 0.18 : 0.12)
+                                              : U.withAlpha(Theme.on_surface, Theme.isDark ? 0.08 : 0.06)
+                                C.IconGlyph {
+                                    anchors.centerIn: parent
+                                    name: lis.on ? "volume_up" : "youtube"
+                                    size: 15
+                                    glyphColor: lis.on ? Theme.primary : Theme.on_surface_var
+                                }
+                            }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 2
+                                C.AppText {
+                                    text: I18n.tr("Gemini listens to the audio")
+                                    weight: Tokens.weightDemiBold
+                                    color: Theme.text_strong
+                                }
+                                C.AppText {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.Wrap
+                                    font.pixelSize: Tokens.fontCaption
+                                    color: Theme.on_surface_var
+                                    text: !lis.can
+                                          ? I18n.tr("Only Google's own Gemini can listen. {m} always starts from YouTube's captions and makes them fluent.")
+                                                .replace("{m}", row.r.listenBrain || I18n.tr("This model"))
+                                          : lis.on
+                                            ? I18n.tr("On: Gemini hears the video and writes every line itself, like a human transcriber.")
+                                            : I18n.tr("Off: the app takes YouTube's own captions, Gemini rewrites them fluently and translates them.")
+                                }
+                            }
+                            C.AppSwitch {
+                                Layout.alignment: Qt.AlignTop
+                                enabled: lis.can
+                                opacity: lis.can ? 1 : 0.45
+                                checked: lis.on
+                                onToggled: Settings.setCaptionsListen(checked)
+                            }
+                        }
+
+                        // the flow: three steps, the first two swap with the switch
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 6
+                            Repeater {
+                                model: lis.on
+                                       ? [ { icon: "volume_up", label: I18n.tr("Video audio") },
+                                           { icon: "gemini",    label: I18n.tr("Gemini listens") },
+                                           { icon: "subject",   label: I18n.tr("Captions") } ]
+                                       : [ { icon: "youtube",   label: I18n.tr("YouTube's captions") },
+                                           { icon: "gemini",    label: I18n.tr("Gemini makes them fluent") },
+                                           { icon: "subject",   label: I18n.tr("Captions") } ]
+                                delegate: Row {
+                                    required property var modelData
+                                    required property int index
+                                    spacing: 6
+                                    Rectangle {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        height: 26
+                                        width: stepRow.implicitWidth + 18
+                                        radius: Tokens.radiusPill
+                                        color: index === 2 ? U.withAlpha(Theme.primary, Theme.isDark ? 0.16 : 0.10)
+                                                           : U.withAlpha(Theme.on_surface, Theme.isDark ? 0.06 : 0.045)
+                                        border.width: 1
+                                        border.color: index === 2 ? U.withAlpha(Theme.primary, 0.3) : Theme.border
+                                        Row {
+                                            id: stepRow
+                                            anchors.centerIn: parent
+                                            spacing: 6
+                                            C.IconGlyph {
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                name: modelData.icon
+                                                size: 13
+                                                glyphColor: index === 2 ? Theme.primary : Theme.on_surface_var
+                                            }
+                                            C.AppText {
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                text: modelData.label
+                                                font.pixelSize: Tokens.fontCaption
+                                                weight: Tokens.weightMedium
+                                                color: Theme.text_strong
+                                            }
+                                        }
+                                    }
+                                    C.IconGlyph {
+                                        visible: index < 2
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        name: "arrow_forward"
+                                        size: 13
+                                        glyphColor: Theme.on_surface_var
+                                    }
+                                }
+                            }
+                        }
+
+                        // the trade-off, in one line, so nobody has to guess
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: Tokens.space2
+                            C.IconGlyph {
+                                Layout.alignment: Qt.AlignTop
+                                name: lis.on ? "verified" : "bolt"
+                                size: 13
+                                glyphColor: Theme.on_surface_var
+                            }
+                            C.AppText {
+                                Layout.fillWidth: true
+                                wrapMode: Text.Wrap
+                                font.pixelSize: Tokens.fontCaption
+                                color: Theme.on_surface_var
+                                text: lis.on
+                                      ? I18n.tr("Best words and timing, works on any video. Uses more Gemini quota, since the audio is uploaded.")
+                                      : I18n.tr("Faster and lighter on quota; quality follows YouTube's captions. Local files and videos with no captions are still heard by Gemini.")
+                            }
+                        }
+                    }
+                }
+
+                // v1.4.10: who actually listens (captions) / the Gemini-only
+                // rule (dub: Google Gemini only), in one quiet line
+                Rectangle {
+                    visible: !!row.r.note
+                    Layout.fillWidth: true
+                    radius: Tokens.radiusMd
+                    color: row.r.noteWarn ? U.withAlpha(Theme.warn, 0.10) : U.withAlpha(Theme.tertiary, Theme.isDark ? 0.10 : 0.07)
+                    border.width: 1
+                    border.color: row.r.noteWarn ? U.withAlpha(Theme.warn, 0.35) : U.withAlpha(Theme.tertiary, 0.22)
+                    implicitHeight: noteRow.implicitHeight + Tokens.space2 * 2
+                    RowLayout {
+                        id: noteRow
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: Tokens.space3
+                        anchors.rightMargin: Tokens.space3
+                        spacing: Tokens.space2
+                        C.IconGlyph {
+                            Layout.alignment: Qt.AlignTop
+                            name: row.r.noteWarn ? "warning" : "info"
+                            size: 14
+                            glyphColor: row.r.noteWarn ? Theme.warn : Theme.tertiary
+                        }
+                        C.AppText {
+                            Layout.fillWidth: true
+                            text: row.r.note || ""
+                            wrapMode: Text.Wrap
+                            font.pixelSize: Tokens.fontCaption
+                            color: Theme.on_surface
+                        }
+                    }
+                }
+
+                // v1.4.8: check the pick for real before relying on it
+                RowLayout {
+                    visible: row.r.feature !== "ideas"
+                    Layout.fillWidth: true
+                    spacing: Tokens.space3
+                    C.ActionButton {
+                        compact: true
+                        variant: "ghost"
+                        iconName: "verified"
+                        status: row.r.testState || 0
+                        busyText: I18n.tr("Testing …")
+                        text: I18n.tr("Test")
+                        enabled: row.r.testState !== 1
+                        onClicked: Settings.testAiRoute(row.r.feature)
+                    }
+                    C.AppText {
+                        Layout.fillWidth: true
+                        text: row.r.testMsg || ""
+                        wrapMode: Text.Wrap
+                        font.pixelSize: Tokens.fontCaption
+                        color: row.r.testState === 3 ? Theme.warn
+                             : row.r.testState === 2 ? Theme.secondary_container : Theme.on_surface_var
+                        opacity: text ? 1 : 0
+                        Behavior on opacity { NumberAnimation { duration: 180 } }
                     }
                 }
             }

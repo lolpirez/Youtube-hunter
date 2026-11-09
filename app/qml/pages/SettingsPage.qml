@@ -2618,7 +2618,7 @@ Item {
                                     Layout.topMargin: Tokens.space3
                                     icon: "route"
                                     title: I18n.tr("Which AI does what")
-                                    detail: I18n.tr("Pin idea generation to one provider and model. AI Chat picks its own model and effort in the chat.")
+                                    detail: I18n.tr("Pin ideas, captions and the AI dub to their own provider and model, then Test each one. Any model translates captions (a Gemini model listens for the ones that can't hear audio). The dub works with Gemini models only. AI Chat picks its own model in the chat.")
                                 }
                                 C.AiRoutingPanel { Layout.fillWidth: true }
 

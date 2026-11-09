@@ -247,6 +247,7 @@ Window {
                         onCurrentIndexChanged: {
                             _heldIndex = currentIndex
                             pageEnter.restart()
+                            _noteShown(currentIndex)
                         }
                         // v3.39.8: a page's FIRST visit is built asynchronously (in
                         // per-frame slices) instead of freezing the click for the
@@ -322,6 +323,8 @@ Window {
                         function _bgBuild(i) {
                             if (i < 0 || i >= pageStack.children.length || _isBuilt(i) || _anyLoading())
                                 return false
+                            if (_shownAt[String(i)] === undefined)
+                                _shownAt[String(i)] = Date.now()   // idle clock starts at build
                             _bgIndex = i
                             _markBuilt(i)
                             if (pageStack.children[i].status !== Loader.Loading) {
@@ -370,10 +373,97 @@ Window {
                             // the row under the pointer goes first
                             if (_hoverIndex >= 0 && _bgBuild(_hoverIndex))
                                 return
-                            for (let n = 0; n < _warmOrder.length; ++n)
-                                if (_bgBuild(_warmOrder[n]))
+                            // v1.4.2: only the first App.pageWarmCount pages of
+                            // the queue (-1 = all, the old behaviour). The rest
+                            // are built on hover / press, which starts them a
+                            // beat before the click lands. A page freed by the
+                            // idle policy below is never re-warmed behind your
+                            // back either: it comes back when you go to it.
+                            const lim = App.pageWarmCount < 0 ? _warmOrder.length
+                                                              : Math.min(_warmOrder.length, App.pageWarmCount)
+                            for (let n = 0; n < lim; ++n)
+                                if (!_evicted[String(_warmOrder[n])] && _bgBuild(_warmOrder[n]))
                                     return
-                            // every page is built: nothing left to do
+                            // the warm set is built: nothing left to do
+                        }
+
+                        // ── v1.4.2: idle page eviction (memory) ──────────────────
+                        // Every page used to be built and then KEPT for the whole
+                        // session: 14 pages, ~2 MB of QML, each holding its whole
+                        // item tree, delegates, JS objects and decoded images
+                        // while hidden. That was the largest single block of the
+                        // app's RAM. Now only the landing page + the
+                        // App.pageKeepAlive most recently used pages stay built;
+                        // a page beyond that which has been hidden for
+                        // App.pageIdleSec is freed, ONE per tick, never while
+                        // anything animates or builds. Its data lives in its
+                        // ViewModel (Python), so coming back rebuilds the view
+                        // around the same results / history / settings.
+                        // Never freed: the landing page, the page on screen,
+                        // Video Cutter (live media players) and AI Chat (a
+                        // half-typed message lives in the page).
+                        readonly property var _neverEvict: ({"0": true, "12": true, "13": true})
+                        property var _shownAt: ({})      // page -> ms it was last on screen
+                        property var _mru: []            // most recently shown first
+                        property var _evicted: ({})      // freed by the policy, not re-warmed
+                        function _noteShown(i) {
+                            const now = Date.now()
+                            const prev = _mru.length ? _mru[0] : -1
+                            if (prev >= 0 && prev !== i)
+                                _shownAt[String(prev)] = now   // it just went hidden
+                            _shownAt[String(i)] = now
+                            const next = [i]
+                            for (let n = 0; n < _mru.length; ++n)
+                                if (_mru[n] !== i) next.push(_mru[n])
+                            _mru = next
+                            if (_evicted[String(i)]) {
+                                const e = {}
+                                for (const k in _evicted) if (k !== String(i)) e[k] = true
+                                _evicted = e
+                            }
+                        }
+                        function _evictOne() {
+                            if (App.pageKeepAlive <= 0 || tour.running || _anyLoading()
+                                    || pageEnter.running)
+                                return
+                            const now = Date.now()
+                            // rank every built page: visited ones by recency, then
+                            // pages that were only pre-built (never shown)
+                            const ranked = []
+                            for (let n = 0; n < _mru.length; ++n)
+                                if (_isBuilt(_mru[n])) ranked.push(_mru[n])
+                            for (const k in builtPages) {
+                                const i = Number(k)
+                                if (ranked.indexOf(i) < 0) ranked.push(i)
+                            }
+                            let kept = 0
+                            let victim = -1
+                            for (let n = 0; n < ranked.length; ++n) {
+                                const i = ranked[n]
+                                const k = String(i)
+                                if (_neverEvict[k] || i === App.currentPage || i === pageStack.currentIndex
+                                        || i === _bgIndex)
+                                    continue
+                                if (kept < App.pageKeepAlive) { kept += 1; continue }
+                                const since = _shownAt[k] !== undefined ? _shownAt[k] : 0
+                                if (now - since >= App.pageIdleSec * 1000)
+                                    victim = i          // the LEAST recent one wins
+                            }
+                            if (victim < 0)
+                                return
+                            const ev = {}
+                            for (const k in _evicted) ev[k] = true
+                            ev[String(victim)] = true
+                            _evicted = ev
+                            _unmarkBuilt(victim)        // Loader.active -> false: page freed
+                            App.trimMemorySoon()
+                        }
+                        Timer {
+                            id: evictTimer
+                            interval: 30000
+                            repeat: true
+                            running: App.pageKeepAlive > 0
+                            onTriggered: pageStack._evictOne()
                         }
                         function _pageSettled(st) {
                             if (st !== Loader.Ready && st !== Loader.Error)
@@ -1107,30 +1197,67 @@ Window {
     // the app (QtWebEngine), framed by a quiet card. The address comes from
     // App.donateUrl — DONATE_URL in app/constants.py, or `donate_url` in
     // config.json.
-    // Only built when there is a page to open. `App.donateUrl` is empty in the
-    // published build, and main_qml.py only initialises QtWebEngine when it is
-    // not — so a build with no donation address never loads Chromium at all
-    // (~260 MB of resident memory saved; the Donate pill is hidden anyway).
-    // With an address this is the same eager card as before: ready before the
-    // first click, so opening it is instant.
+    // v1.4.2 (memory): built on the FIRST click, freed again after it has been
+    // closed for a while. It used to be built at start-up whenever a donation
+    // address was configured (the shipped build has one), and a Popup's
+    // content exists from construction, so the WebEngineView, Chromium's
+    // renderer + GPU processes and the profile were all alive from the first
+    // second of every session (~250 MB counted against the app in Task
+    // Manager) for a window most sessions never open. The card has its own
+    // "Heartline" loader, so the first open simply shows that while the page
+    // spins up. Closing it keeps the page (and a half-filled form) for
+    // `donateIdle.interval`; after that Chromium's processes are released.
     Loader {
         id: donateLoader
-        active: App.donateUrl !== ""
+        active: false
+        asynchronous: true
         // `source`, not `sourceComponent`: a sourceComponent is COMPILED as soon
         // as it is declared, which pulls in DonateOverlay.qml and its
-        // `import QtWebEngine` even while the loader is inactive — the whole
-        // point of this being a loader was lost (measured: the Chromium DLLs
-        // were still in the process). `source` is only read when active.
+        // `import QtWebEngine` even while the loader is inactive. `source` is
+        // only read when active.
         source: "components/DonateOverlay.qml"
+        property bool _presentOnLoad: false
+        onLoaded: {
+            if (_presentOnLoad && item) {
+                _presentOnLoad = false
+                item.present()
+            }
+        }
+        onStatusChanged: {
+            // no QtWebEngine in this build: the browser is the honest fallback
+            if (status === Loader.Error) {
+                active = false
+                if (_presentOnLoad) {
+                    _presentOnLoad = false
+                    App.openDonateExternal()
+                }
+            }
+        }
     }
     Connections {
         target: App
         function onDonateRequested() {
-            // `active` is already true whenever the pill can be clicked; the
-            // guard covers a build where the card failed to build (no
-            // QtWebEngine) — then the browser is the honest fallback.
-            if (donateLoader.item) donateLoader.item.present()
-            else App.openDonateExternal()
+            if (!App.donateUrl) { App.openDonateExternal(); return }
+            donateIdle.stop()
+            if (donateLoader.item) { donateLoader.item.present(); return }
+            donateLoader._presentOnLoad = true
+            donateLoader.active = true
+        }
+    }
+    Connections {
+        target: donateLoader.item
+        ignoreUnknownSignals: true
+        function onClosed() { donateIdle.restart() }
+        function onOpened() { donateIdle.stop() }
+    }
+    Timer {
+        id: donateIdle
+        interval: 120000          // 2 min closed -> release Chromium
+        repeat: false
+        onTriggered: {
+            if (donateLoader.item && donateLoader.item.opened) return
+            donateLoader.active = false
+            App.trimMemorySoon()
         }
     }
 

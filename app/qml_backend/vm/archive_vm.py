@@ -67,6 +67,7 @@ from app.qml_backend.vm.niche_vm import (_age_short, _channel_card_fields,
                                          _thumb_id)
 from app.qml_backend.vm.quality_probe import default_quality_rows
 from app.qml_backend.desktop_notifier import announce, announce_download
+from app.qml_backend.vm import _post_production as post
 
 # Detail-view sort menu: reuses the Niche Finder's own sort vocabulary
 # (NICHE_SORTS_UI) so a saved section sorts exactly like a live search — the
@@ -1531,6 +1532,29 @@ class ArchiveVM(QObject):
         downloads_apply_channel_meta(video_id, dict(meta or {}))
 
     @Slot(str, bool, str, str)
+    def _on_post_tick(self, video_id, summary):
+        """The card's bar follows the captions / dub (no shared-store write:
+        the post-production module owns the live entry now)."""
+        entry = dict(self._downloads.get(video_id) or {})
+        entry.update({"state": "running",
+                      "pct": int(round(float(summary.get("pct") or 0) * 100)),
+                      "text": summary.get("stage") or tr("Finishing"),
+                      "speed": 0.0, "eta": 0, "post": True})
+        self._downloads[video_id] = entry
+        self.downloadsChanged.emit()
+
+    def _on_post_done(self, video_id, state, final, summary):
+        entry = dict(self._downloads.get(video_id) or {})
+        entry.update({"state": "done", "pct": 100, "text": tr("Open"),
+                      "speed": 0.0, "eta": 0, "post": False})
+        self._downloads[video_id] = entry
+        self.downloadsChanged.emit()
+        if final and os.path.isfile(final):
+            self._downloaded.add(video_id)
+            self._sync_page_downloaded()
+        text, kind = post.finish_text(state, summary)
+        self.toast.emit(text.replace("{f}", os.path.basename(final or "")), kind)
+
     def _on_dl_done(self, video_id, ok, message, filepath):
         entry = self._downloads.get(video_id) or {}
         was_cancelling = bool(entry.get("cancelling"))
@@ -1552,6 +1576,15 @@ class ArchiveVM(QObject):
                                tr("Stopped"), cancelling=False,
                                speed=0.0, eta=0)
             self.toast.emit(tr("Download stopped."), "info")
+            return
+        # v1.4: captions / dub queued for this video run first; the card
+        # keeps its progress bar until they are done
+        if ok and filepath and post.begin(
+                video_id, filepath,
+                on_update=lambda sm, v=video_id: self._on_post_tick(v, sm),
+                on_finish=lambda st, f, sm, v=video_id: self._on_post_done(v, st, f, sm)):
+            self._on_post_tick(video_id, {"pct": 0, "stage": tr("Starting captions & dub…")})
+            self.toast.emit(tr("Downloaded. Now adding captions & dub…"), "info")
             return
         # v1.1: DB first (see the stopped branch above)
         downloads_upsert(video_id, status="done" if ok else "error",

@@ -11,7 +11,7 @@
 
 [Install](docs/INSTALL.md) · [Browser extension](docs/EXTENSION.md) · [Build from source](#build-from-source) · [Changelog](CHANGELOG.md)
 
-![Version](https://img.shields.io/badge/version-1.1.0-22c55e?style=flat-square)
+![Version](https://img.shields.io/badge/version-1.2.0-22c55e?style=flat-square)
 ![Platform](https://img.shields.io/badge/Windows-10%201809%2B%20%7C%2011%20(x64)-0ea5e9?style=flat-square)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776ab?style=flat-square&logo=python&logoColor=white)
 ![Qt](https://img.shields.io/badge/Qt%20Quick-6.12-41cd52?style=flat-square&logo=qt&logoColor=white)
@@ -31,7 +31,7 @@ It is a native Windows application (Python + Qt Quick/QML). Everything runs on y
 
 ## Download & install
 
-1. Open the **[latest release](../../releases/latest)** and download **`YouTubeHunter-Setup-1.1.0-x64.exe`**.
+1. Open the **[latest release](../../releases/latest)** and download **`YouTubeHunter-Setup-1.2.0-x64.exe`**.
 2. Run it. It installs **per user** in `%LOCALAPPDATA%\Programs\YouTube Hunter` — no administrator prompt, no UAC, nothing written to `Program Files`.
 3. Launch **YouTube Hunter** from the Start menu or the desktop shortcut.
 
@@ -196,6 +196,8 @@ installer.iss             Inno Setup script (bundles the app, the extension, the
 
 ## Version
 
+**1.2.0** — Captions, AI translation and AI dubbing are built in: choose a look, a language and voices for any finished download or clip — or set them before you download or cut and they run by themselves when the file is ready. Rows flip to the finished file with a captions/dub badge, the extension can run captions too, and the new memory policy keeps a long session lean. The launch screen is unchanged from 1.1.0.
+
 **1.1.0** — Downloads show “Stopping…” / “Pausing…” the moment you press stop, from any grid, with an amber bar and a spinner in place of the stop button. Niche Finder drops the Smart source (Official API is the default, Web scrape stays free), and repeat searches are served from a 6-hour per-page cache so re-running a hunt no longer spends quota. Updates now come from this repository, and the app only offers releases that actually carry an installer.
 
 ## License
@@ -221,7 +223,7 @@ YouTube Hunter یک فضای کار دسکتاپ برای افرادی است ک
 
 ## دانلود و نصب
 
-1. **[آخرین نسخه](../../releases/latest)** را باز کنید و **`YouTubeHunter-Setup-1.1.0-x64.exe`** را دانلود کنید.
+1. **[آخرین نسخه](../../releases/latest)** را باز کنید و **`YouTubeHunter-Setup-1.2.0-x64.exe`** را دانلود کنید.
 2. آن را اجرا کنید. نصب **برای هر کاربر** در `%LOCALAPPDATA%\Programs\YouTube Hunter` انجام می‌شود — بدون درخواست مدیر، بدون UAC و بدون نوشتن چیزی در `Program Files`.
 3. **YouTube Hunter** را از منوی Start یا میانبر دسکتاپ اجرا کنید.
 
@@ -389,6 +391,8 @@ installer.iss             Inno Setup script (bundles the app, the extension, the
 - [`CHANGELOG.md`](CHANGELOG.md) — یادداشت‌های انتشار
 
 ## نسخه
+
+**1.2.0** — کپشن، ترجمه هوشمند و دوبله با هوش مصنوعی داخل برنامه است: ظاهر، زبان و صدا را برای هر دانلود یا کلیپ انتخاب کنید — یا قبل از دانلود/کات تنظیم کنید تا بعد از آماده شدن فایل خودکار اجرا شوند. ردیف به فایل نهایی با نشان کپشن/دوبله تبدیل می‌شود، افزونه هم کپشن می‌سازد و سیاست جدید حافظه برنامه را سبک نگه می‌دارد. صفحه لودینگ همان 1.1.0 است.
 
 **1.1.0** — دانلودها همان لحظه که توقف را می‌زنید «Stopping…» / «Pausing…» را نشان می‌دهند؛ از هر گریدی، با نوار کهربایی و اسپینر به‌جای دکمه توقف. Niche Finder منبع Smart را حذف می‌کند (Official API پیش‌فرض است و Web scrape رایگان می‌ماند) و جست‌وجوهای تکراری از کش شش‌ساعتهٔ هر صفحه سرو می‌شوند تا اجرای دوبارهٔ یک هانت quota مصرف نکند. به‌روزرسانی‌ها حالا از همین ریپو می‌آیند و برنامه فقط ریلیزهایی را پیشنهاد می‌دهد که واقعاً نصب‌ساز دارند.
 

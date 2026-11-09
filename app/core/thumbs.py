@@ -21,9 +21,22 @@ try:
 except Exception:
     pass
 
-_THUMB_MEM_CACHE = {}
+# v1.4.2 (memory): a true LRU with a BYTE budget. It used to be "600
+# entries, drop the oldest half when full", so the RAM it held depended on
+# which variant was cached: 600 x hq720/maxres (100-250 KB each) is 60-150 MB
+# of JPEG bytes sitting in the Python heap, all of it ALSO on disk one layer
+# down. The disk layer is served from the OS file cache at memory speed, so
+# a few dozen MB of hot entries buys the same grid speed. YH_THUMB_MEM_MB
+# overrides the budget.
+from collections import OrderedDict as _OrderedDict
+_THUMB_MEM_CACHE = _OrderedDict()
 _THUMB_MEM_CACHE_LOCK = threading.Lock()
-_THUMB_MEM_CACHE_MAX = 600   # plenty for a session's worth of grids/cards
+try:
+    _THUMB_MEM_BUDGET = int(float(os.environ.get("YH_THUMB_MEM_MB", "24")) * 1024 * 1024)
+except ValueError:
+    _THUMB_MEM_BUDGET = 24 * 1024 * 1024
+_THUMB_MEM_BYTES = 0
+_THUMB_MEM_ITEM_MAX = 1024 * 1024   # a single >1 MB image is served, not kept
 
 
 def _thumb_cache_path(url):
@@ -130,8 +143,7 @@ def get_cached_image_bytes(url, timeout=12):
     ONE network fetch instead of downloading it twice."""
     if not url:
         return None
-    with _THUMB_MEM_CACHE_LOCK:
-        raw = _THUMB_MEM_CACHE.get(url)
+    raw = _thumb_mem_get(url)
     if raw:
         return raw
     with _INFLIGHT_LOCK:
@@ -141,8 +153,7 @@ def get_cached_image_bytes(url, timeout=12):
             ev = _INFLIGHT[url] = threading.Event()
     if not owner:
         ev.wait(timeout + 2)
-        with _THUMB_MEM_CACHE_LOCK:
-            raw = _THUMB_MEM_CACHE.get(url)
+        raw = _thumb_mem_get(url)
         return raw if raw else _get_cached_image_bytes(url, timeout)
     try:
         return _get_cached_image_bytes(url, timeout)
@@ -239,8 +250,7 @@ def _get_cached_image_bytes(url, timeout=12):
     if not url:
         return None
 
-    with _THUMB_MEM_CACHE_LOCK:
-        raw = _THUMB_MEM_CACHE.get(url)
+    raw = _thumb_mem_get(url)
     if raw:
         return raw
 
@@ -266,15 +276,39 @@ def _get_cached_image_bytes(url, timeout=12):
     return raw
 
 
-def _thumb_mem_cache_put(url, raw):
+def _thumb_mem_get(url):
+    """LRU read: a hit becomes the most recently used entry."""
     with _THUMB_MEM_CACHE_LOCK:
-        if len(_THUMB_MEM_CACHE) >= _THUMB_MEM_CACHE_MAX:
-            # Cheap unbounded-growth guard: drop the oldest half. Dict
-            # preserves insertion order in Python 3.7+, so this evicts the
-            # least-recently-added entries first.
-            for k in list(_THUMB_MEM_CACHE.keys())[:_THUMB_MEM_CACHE_MAX // 2]:
-                _THUMB_MEM_CACHE.pop(k, None)
+        raw = _THUMB_MEM_CACHE.get(url)
+        if raw is not None:
+            _THUMB_MEM_CACHE.move_to_end(url)
+        return raw
+
+
+def _thumb_mem_cache_put(url, raw):
+    global _THUMB_MEM_BYTES
+    if not raw or len(raw) > _THUMB_MEM_ITEM_MAX or _THUMB_MEM_BUDGET <= 0:
+        return
+    with _THUMB_MEM_CACHE_LOCK:
+        old = _THUMB_MEM_CACHE.pop(url, None)
+        if old is not None:
+            _THUMB_MEM_BYTES -= len(old)
         _THUMB_MEM_CACHE[url] = raw
+        _THUMB_MEM_BYTES += len(raw)
+        while _THUMB_MEM_BYTES > _THUMB_MEM_BUDGET and len(_THUMB_MEM_CACHE) > 1:
+            _k, v = _THUMB_MEM_CACHE.popitem(last=False)
+            _THUMB_MEM_BYTES -= len(v)
+
+
+def trim_thumb_mem_cache(keep_fraction=0.0):
+    """Drop the in-memory layer down to `keep_fraction` of its budget (the
+    disk layer is untouched). Called when the app goes to the background."""
+    global _THUMB_MEM_BYTES
+    target = int(_THUMB_MEM_BUDGET * max(0.0, min(1.0, keep_fraction)))
+    with _THUMB_MEM_CACHE_LOCK:
+        while _THUMB_MEM_CACHE and _THUMB_MEM_BYTES > target:
+            _k, v = _THUMB_MEM_CACHE.popitem(last=False)
+            _THUMB_MEM_BYTES -= len(v)
 
 
 def _thumb_extension_for(url, raw):

@@ -29,6 +29,14 @@ _TEXT_CACHE = {}
 # once; now only the least recently used ones go.
 _IMG_CACHE = OrderedDict()
 _IMG_CACHE_MAX = 6144
+# v1.4.2 (memory): a BYTE budget on top of the entry cap. Hover fades ask for
+# a new colour every frame, so the cache filled with thousands of near-
+# identical tints; at 2x DPI a 48 px empty-state icon is 36 KB, and 6144 of
+# those plus the other theme's pre-warm was tens of MB that QML's own
+# pixmap cache was ALSO holding. Re-rendering an evicted icon from its mask
+# is one fillRect, so a tighter budget costs nothing visible.
+_IMG_CACHE_BUDGET = 10 * 1024 * 1024
+_img_bytes = 0
 # Every (id, w, h) QML has asked for, most recent last. The theme pre-warm
 # reads this to know which icons the NEXT palette will need.
 _SEEN = OrderedDict()
@@ -56,6 +64,8 @@ def _svg_text(path):
 # is what made a theme switch with many built pages stutter.
 _MASK_CACHE = OrderedDict()
 _MASK_CACHE_MAX = 2048
+_MASK_CACHE_BUDGET = 4 * 1024 * 1024
+_mask_bytes = 0
 
 
 def _mask(name, fill, w, h):
@@ -77,9 +87,13 @@ def _mask(name, fill, w, h):
             p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
             renderer.render(p, QRectF(0, 0, w, h))
             p.end()
+    global _mask_bytes
     _MASK_CACHE[key] = img
-    while len(_MASK_CACHE) > _MASK_CACHE_MAX:
-        _MASK_CACHE.popitem(last=False)
+    _mask_bytes += img.sizeInBytes()
+    while len(_MASK_CACHE) > 1 and (len(_MASK_CACHE) > _MASK_CACHE_MAX
+                                    or _mask_bytes > _MASK_CACHE_BUDGET):
+        _k, old = _MASK_CACHE.popitem(last=False)
+        _mask_bytes -= old.sizeInBytes()
     return img
 
 
@@ -107,10 +121,23 @@ def _render(id_, w, h):
     p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
     p.fillRect(img.rect(), color)
     p.end()
+    global _img_bytes
     _IMG_CACHE[key] = img
-    while len(_IMG_CACHE) > _IMG_CACHE_MAX:
-        _IMG_CACHE.popitem(last=False)
+    _img_bytes += img.sizeInBytes()
+    while len(_IMG_CACHE) > 1 and (len(_IMG_CACHE) > _IMG_CACHE_MAX
+                                   or _img_bytes > _IMG_CACHE_BUDGET):
+        _k, old = _IMG_CACHE.popitem(last=False)
+        _img_bytes -= old.sizeInBytes()
     return img
+
+
+def trim_caches():
+    """Background trim: keep the masks (they make any recolour cheap), drop
+    the coloured copies. QML's pixmap cache still holds what is on screen."""
+    global _img_bytes, _last_prewarm
+    _IMG_CACHE.clear()
+    _img_bytes = 0
+    _last_prewarm = None        # the other palette is no longer warm
 
 
 class SvgIconProvider(QQuickImageProvider):
@@ -140,6 +167,7 @@ class SvgIconProvider(QQuickImageProvider):
 # the OTHER palette will ask for, so the swap itself only gets cache hits.
 _PREWARM_SLICE_S = 0.003
 _PREWARM_GAP_MS = 16
+_PREWARM_MAX = 900
 _prewarm_queue = deque()
 _prewarm_gen = 0
 
@@ -190,8 +218,12 @@ def prewarm(color_pairs):
     mapped = {}                              # seen hex → [target hex, …]
     queue = []
     queued = set()
-    # newest first: the icons on screen right now are the ones that matter
-    for (id_, w, h) in reversed(list(_SEEN.keys())):
+    # newest first: the icons on screen right now are the ones that matter.
+    # v1.4.2: only the newest _PREWARM_MAX of them; warming every icon ever
+    # seen in the other palette doubled the cache for icons on pages long gone.
+    for n, (id_, w, h) in enumerate(reversed(list(_SEEN.keys()))):
+        if n >= _PREWARM_MAX:
+            break
         parts = id_.split("/")
         if len(parts) < 3:
             continue

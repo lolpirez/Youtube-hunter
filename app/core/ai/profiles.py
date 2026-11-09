@@ -48,12 +48,58 @@ BUILTIN_KINDS = ("openai", "anthropic", "gemini")
 BUILTIN_NAMES = {"openai": "OpenAI", "anthropic": "Anthropic", "gemini": "Gemini"}
 
 # Features that can be pointed at their own provider / model / effort.
-FEATURES = ("ideas", "chat", "reports")
+FEATURES = ("ideas", "chat", "reports", "captions", "dub")
 
 # The routes Settings edits. "chat" is owned by the AI Chat composer (it picks
 # its own provider / model / effort there), and "reports" is retired with the
 # Reports feature — Settings must never overwrite either from a stale copy.
-SETTINGS_FEATURES = ("ideas",)
+SETTINGS_FEATURES = ("ideas", "captions", "dub")
+
+# v1.4.8: features that can only run on Gemini. The dub LISTENS to the audio,
+# adapts the lines and VOICES them with Gemini TTS, so its route may only
+# point at the Google Gemini profile (v1.4.11: no custom routers, they don't
+# serve the TTS models). Captions translate text, so any provider.
+GEMINI_ONLY = ("dub",)
+
+
+def gemini_capable(p):
+    """True for a profile that speaks Gemini's API (built-in or a router)."""
+    if not p:
+        return False
+    return p.get("kind") == "gemini" or (p.get("kind") == "custom"
+                                         and p.get("api_mode") == "google_genai")
+
+
+def dub_capable(p):
+    """v1.4.11: the dub runs on the built-in Google Gemini profile ONLY.
+
+    v1.4.10 let the dub route point at a custom router that resells Gemini
+    (its chat models listened, its "Gemini-native" endpoint was asked for the
+    voices). In practice routers sell Gemini's CHAT models but not its TTS
+    models: the voices came back "Access refused · gemini-3.8-flash-tts"
+    halfway through a dub, after the listening and the script were already
+    paid for. A dub needs Google's own key, so the route only offers that."""
+    return bool(p) and p.get("kind") == "gemini"
+
+
+def gemini_for(state, route=None):
+    """The Gemini profile a Gemini-only feature runs on: the route's pick when
+    it is a usable Gemini profile, else the first usable Gemini profile (the
+    built-in one first), else the route's pick / built-in Gemini even if it
+    still lacks a key (so the error names the right place). None = no Gemini."""
+    route = route or {}
+    picked = find(state, route.get("profile") or "")
+    # v1.4.11: Google Gemini profiles only (see dub_capable). An older config
+    # that pinned a custom router for the dub quietly falls back to Gemini.
+    if dub_capable(picked) and _usable(picked):
+        return picked
+    cands = [p for p in state["profiles"] if dub_capable(p)]
+    usable = next((p for p in cands if _usable(p)), None)
+    if usable is not None:
+        return usable
+    if dub_capable(picked):
+        return picked
+    return cands[0] if cands else None
 
 _FIELDS = ("id", "kind", "name", "api_key", "model", "base_url", "path",
            "api_mode", "models", "picked")
@@ -227,7 +273,11 @@ def load_state(cfg):
         active = "gemini"
     state = {"profiles": profiles, "active": active,
              "routes": _clean_routes(cfg.get("ai_routes")),
-             "proxy": (cfg.get("ai_proxy") or "").strip()}
+             "proxy": (cfg.get("ai_proxy") or "").strip(),
+             # v1.4.13: Settings → Captions → "Gemini listens to the audio".
+             # Off = YouTube's captions are the words and Gemini only makes
+             # them fluent / translates them, like a custom model.
+             "captions_listen": cfg.get("captions_listen", True) is not False}
     # A config from before `picked` existed: a model a feature was already
     # pinned to (e.g. the chat composer's pick) stays on that profile's list,
     # so upgrading never silently changes which model answers.
@@ -267,6 +317,7 @@ def write_state(cfg, state):
     cfg["ai_active_profile"] = state["active"]
     cfg["ai_routes"] = state["routes"]
     cfg["ai_proxy"] = state.get("proxy", "")
+    cfg["captions_listen"] = state.get("captions_listen", True) is not False
     act = find(state, state["active"]) or state["profiles"][0]
     prov = provider_of(act)
     keys = dict(cfg.get("ai_provider_keys") or {})
@@ -288,6 +339,13 @@ def write_state(cfg, state):
     return cfg
 
 
+def _usable(p):
+    """Configured enough to attempt a call (see is_ready)."""
+    if provider_of(p) == "custom":
+        return bool((p.get("base_url") or "").strip())
+    return bool((p.get("api_key") or "").strip())
+
+
 def resolve(feature=None, cfg=None):
     """Everything a feature needs to build its client, as a flat dict:
     provider, api_key, model, base_url, path, proxy, custom_name, api_mode,
@@ -299,9 +357,22 @@ def resolve(feature=None, cfg=None):
     route = state["routes"].get(feature or "", {}) if feature else {}
     prof = find(state, route.get("profile") or "") or find(state, state["active"]) \
         or state["profiles"][0]
+    gem = gemini_for(state, route) if feature in GEMINI_ONLY else None
+    if gem is not None:
+        # v1.4.8: a Gemini-only feature never lands on another provider
+        prof = gem
+    elif not _usable(prof):
+        # An active profile left blank (a half-filled custom row, a key the
+        # user cleared) used to make every AI feature fail while other
+        # profiles were perfectly configured. Fall back to the first usable one.
+        alt = next((p for p in state["profiles"] if _usable(p)), None)
+        if alt is not None:
+            prof = alt
     prov = provider_of(prof)
     # a pinned model the user has since removed from the provider → its own
     r_model = route.get("model", "") if (route and _route_model_ok(state, route)) else ""
+    if r_model and route.get("profile") and route.get("profile") != prof["id"]:
+        r_model = ""               # the pin belonged to a profile we didn't use
     return {
         "provider": prov,
         "api_key": prof["api_key"],
@@ -312,6 +383,25 @@ def resolve(feature=None, cfg=None):
         "custom_name": prof["name"] if prov == "custom" else "",
         "api_mode": prof["api_mode"],
         "effort": norm_effort(route.get("effort")),
+        "profile_id": prof["id"],
+        "profile_name": prof["name"],
+    }
+
+
+def resolve_profile(state, prof, model=""):
+    """v1.4.10: a resolve()-shaped dict for one profile + model, outside any
+    route (the captions listener borrowing another provider's ears)."""
+    prov = provider_of(prof)
+    return {
+        "provider": prov,
+        "api_key": prof["api_key"],
+        "model": effective_model(prof, model),
+        "base_url": prof["base_url"],
+        "path": prof["path"] or "/chat/completions",
+        "proxy": state["proxy"],
+        "custom_name": prof["name"] if prov == "custom" else "",
+        "api_mode": prof["api_mode"],
+        "effort": "none",
         "profile_id": prof["id"],
         "profile_name": prof["name"],
     }

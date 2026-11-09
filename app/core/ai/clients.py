@@ -375,7 +375,8 @@ def _is_output_cap_message(msg):
 
 def _openai_style_chat(endpoint, api_key, model, prompt, system_instruction,
                         timeout, extra_headers=None, provider_label="AI",
-                        proxy=None, max_tokens=2048, stream=False, effort=None):
+                        proxy=None, max_tokens=2048, stream=False, effort=None,
+                        temperature=None):
     """Shared POST for every OpenAI-`/chat/completions`-shaped API: DeepSeek,
     and any Custom/aggregator endpoint (OpenRouter, Together, etc. all speak
     this same shape with just a different base URL + bearer key).
@@ -416,7 +417,7 @@ def _openai_style_chat(endpoint, api_key, model, prompt, system_instruction,
             else:
                 body["max_tokens"] = cap
         else:
-            body["temperature"] = 0.8
+            body["temperature"] = 0.8 if temperature is None else float(temperature)
             body["max_tokens"] = max_tokens
         applied = _effort.apply_openai(body, model, effort, endpoint) if with_effort else False
         return body, applied
@@ -911,7 +912,7 @@ class AIClient:
     LONG_OUTPUT_TOKENS = 3000
 
     def generate(self, prompt, system_instruction=None, timeout=60,
-                 max_output_tokens=2048, stream=None):
+                 max_output_tokens=2048, stream=None, temperature=None):
         """One completion, routed by wire shape.
 
         `stream` is a transport choice, not a UI one: None (the default) means
@@ -959,6 +960,6 @@ class AIClient:
                 self.endpoint(), self.api_key, model, prompt,
                 system_instruction, timeout, provider_label=self.label,
                 proxy=self.proxy, max_tokens=max_output_tokens, stream=stream,
-                effort=effort)
+                effort=effort, temperature=temperature)
 
         raise RuntimeError(tr("Unknown AI provider: {p}").format(p=self.provider))

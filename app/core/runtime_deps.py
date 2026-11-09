@@ -664,11 +664,16 @@ def prewarm_download_engine():
         import yt_dlp.extractor.youtube  # noqa: F401 — the extractor we use
     except Exception:      # noqa: BLE001 — warm-up only
         pass
-    # Start the optional PO Token helper, when installed, so the first video
-    # doesn't wait for its BotGuard spin-up.
-    try:
-        from app.core import pot
-        if pot.installed():
-            pot.ensure_server()
-    except Exception:      # noqa: BLE001
-        pass
+    # v1.4.2 (memory): the optional PO Token helper is NOT started here any
+    # more. It is a separate ~60-120 MB process, and most sessions never need
+    # a token (tv / android_vr / web_embedded clients work without one). The
+    # first token request starts it (pot.fetch_token -> ensure_server) and it
+    # stops itself again after YH_POT_IDLE_S of silence (default 10 min).
+    # YH_POT_EAGER=1 restores the old eager start.
+    if os.environ.get("YH_POT_EAGER") == "1":
+        try:
+            from app.core import pot
+            if pot.installed():
+                pot.ensure_server()
+        except Exception:      # noqa: BLE001
+            pass

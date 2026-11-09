@@ -89,14 +89,14 @@ Item {
     }
 
     // 0 source · 1 segment · 2 export — drives the header tracker.
-    readonly property int _stage: Cutter.hasResult || Cutter.cutting ? 2
+    readonly property int _stage: Cutter.hasResult || Cutter.cutting || Cutter.postActive ? 2
                                 : Cutter.hasInfo ? 1 : 0
     readonly property bool _playing: previewPlayer.playbackState === MediaPlayer.PlayingState
     readonly property real _posSec: previewPlayer.position / 1000
     readonly property bool _inClip: Cutter.hasInfo && _posSec >= Cutter.startSec
                                     && _posSec <= Cutter.endSec
     readonly property real _clipLen: Math.max(0, Cutter.endSec - Cutter.startSec)
-    readonly property bool _armed: Cutter.hasInfo && !Cutter.cutting
+    readonly property bool _armed: Cutter.hasInfo && !Cutter.cutting && !Cutter.postActive
     readonly property bool _wide: content.width >= 1120
     readonly property bool _hasThumb: (Cutter.thumbId || "") !== ""
     readonly property string _thumbSrc: _hasThumb ? "image://thumbs/" + Cutter.thumbId : ""
@@ -3191,6 +3191,47 @@ Item {
 
                         // (v3.27: the Start / End cards moved under the player)
 
+                        // ── captions & AI dub, right here (v1.3.3 deck) ──
+                        // The same inline deck as the download picker: look,
+                        // language (Original = no AI), YouTube's own tracks, and
+                        // the AI dub. Flip one on, press Cut, it runs on the clip.
+                        InspectorCard {
+                            id: captionsCard
+                            visible: Cutter.hasInfo
+                            label: I18n.tr("Captions & AI dub")
+                            glyph: "translate"
+                            trailing: [
+                                InfoChip {
+                                    glyph: capDeck.anyOn ? "check_circle" : "schedule"
+                                    tint: Theme.primary
+                                    text: capDeck.anyOn ? I18n.tr("runs after the cut") : I18n.tr("optional")
+                                }
+                            ]
+
+                            C.CaptionDubDeck {
+                                id: capDeck
+                                Layout.fillWidth: true
+                                showHeader: false
+                                videoId: Cutter.mode === 0 ? (Cutter.videoId || "") : ""
+                                path: Cutter.mode === 0 ? "" : (Cutter.filePath || "")
+                                title: Cutter.title || ""
+                                clipStart: Cutter.startSec || 0
+                                clipEnd: Cutter.endSec || 0
+                                busy: Cutter.cutting || Cutter.postActive
+                                audioOnly: !!Cutter.audioOnly
+                                runsAfterText: I18n.tr("runs after the cut")
+                                onOpenStudio: (tab) => voiceStudio.openQueued({
+                                    path: capDeck.path,
+                                    title: Cutter.title,
+                                    videoId: capDeck.videoId,
+                                    clipStart: Cutter.startSec || 0,
+                                    clipEnd: Cutter.endSec || 0,
+                                    tab: tab })
+                                onSettingsRequested: App.goto(10)
+                            }
+                        }
+
+
                         // ── quality ──
                         InspectorCard {
                             visible: Cutter.hasInfo
@@ -3572,6 +3613,7 @@ Item {
                                 onPicked: (key) => Cutter.setAudioTrack(key)
                             }
                         }
+
                     }
                 }
 
@@ -3798,6 +3840,13 @@ Item {
                                                 var info = Cutter.clipPlayInfo(clipCard.modelData.id)
                                                 if (info && info.fileUrl) clipPlayer.play(info)
                                             }
+                                            // v1.4.7: captions / dub in this clip's file
+                                            C.PostFxBadge {
+                                                anchors.right: parent.right
+                                                anchors.top: parent.top
+                                                anchors.margins: 4
+                                                fx: clipCard.modelData.fx || ({})
+                                            }
                                         }
                                         ColumnLayout {
                                             Layout.fillWidth: true
@@ -3844,6 +3893,22 @@ Item {
                                                     var info = Cutter.clipPlayInfo(clipCard.modelData.id)
                                                     if (info && info.fileUrl) clipPlayer.play(info)
                                                 }
+                                            }
+                                            // v1.3: captions, translation and AI dub for this clip
+                                            C.IconButton {
+                                                implicitWidth: 32; implicitHeight: 32
+                                                glyphSize: 15
+                                                iconName: "translate"
+                                                accent: Theme.primary
+                                                tip: I18n.tr("Captions & AI dub")
+                                                enabled: clipCard.modelData.exists && !clipCard.modelData.isAudio
+                                                opacity: enabled ? 1 : 0.4
+                                                onClicked: voiceStudio.openFor({
+                                                    path: clipCard.modelData.filepath,
+                                                    title: clipCard.modelData.title,
+                                                    videoId: clipCard.modelData.videoId || "",
+                                                    clipStart: clipCard.modelData.startSec || 0,
+                                                    clipEnd: clipCard.modelData.endSec || 0 })
                                             }
                                             C.IconButton {
                                                 implicitWidth: 32; implicitHeight: 32
@@ -3924,11 +3989,16 @@ Item {
         anchors.bottom: parent.bottom
         anchors.bottomMargin: Tokens.space4
         clip: true
-        border.color: Cutter.cutting ? U.withAlpha(Theme.error, 0.45)
+        border.color: Cutter.postActive ? U.withAlpha(Theme.primary, 0.55)
+                    : Cutter.cutting ? U.withAlpha(Theme.error, 0.45)
                     : _done ? U.withAlpha(Theme.secondary_container, 0.55)
                     : Cutter.canCut ? U.withAlpha(Theme.primary, 0.40) : Theme.border
 
-        readonly property bool _done: Cutter.hasResult && !Cutter.cutting
+        readonly property bool _done: Cutter.hasResult && !Cutter.cutting && !Cutter.postActive
+        // v1.4: cut → captions → dub is ONE job: the bar and the numbers
+        // follow the post steps until the finished clip is really there
+        readonly property bool _busy: Cutter.cutting || Cutter.postActive
+        readonly property int _pct: Cutter.postActive ? Cutter.postPct : Cutter.cutPct
 
         // v3.39.9: once the clip is ready, the whole dock is a drag handle —
         // pull it onto the desktop / a folder / an editor to copy the file.
@@ -3956,14 +4026,14 @@ Item {
         // cut progress along the top edge — kept between the rounded corners
         // and pill-ended, so it never pokes out of the dock as a square slab
         Rectangle {
-            visible: Cutter.cutting
+            visible: dock._busy
             anchors.left: parent.left
             anchors.top: parent.top
             anchors.leftMargin: dock.radius_
             anchors.topMargin: 1
             height: 3
             radius: height / 2
-            width: (parent.width - dock.radius_ * 2) * Math.max(0.02, Cutter.cutPct / 100)
+            width: (parent.width - dock.radius_ * 2) * Math.max(0.02, dock._pct / 100)
             gradient: Gradient {
                 orientation: Gradient.Horizontal
                 GradientStop { position: 0.0; color: Theme.primary }
@@ -3990,6 +4060,7 @@ Item {
                     width: 12; height: 12; radius: 6
                     anchors.verticalCenter: parent.verticalCenter
                     color: Cutter.cutPaused ? Theme.warn
+                           : Cutter.postActive ? Theme.primary
                            : Cutter.cutting ? Theme.error
                            : Cutter.canCut ? Theme.primary : Theme.outline
                     Rectangle {
@@ -3998,9 +4069,9 @@ Item {
                         color: "transparent"
                         border.width: 2
                         border.color: U.withAlpha(parent.color, 0.35)
-                        visible: Cutter.cutting
+                        visible: dock._busy
                         SequentialAnimation on scale {
-                            running: Cutter.cutting && page.visible
+                            running: dock._busy && page.visible
                             loops: Animation.Infinite
                             NumberAnimation { from: 0.6; to: 1.2; duration: 900; easing.type: Easing.OutQuad }
                         }
@@ -4011,20 +4082,23 @@ Item {
                     spacing: 0
                     C.AppText {
                         text: Cutter.cutPaused ? I18n.tr("Paused")
+                              : Cutter.postActive ? I18n.tr("Captions & dub")
                               : Cutter.cutting ? I18n.tr("Cutting…")
                               : I18n.tr("Clip length")
                         weight: Tokens.weightDemiBold
                         font.pixelSize: Tokens.fontMicro
                         color: Cutter.cutPaused ? Theme.warn
+                               : Cutter.postActive ? Theme.primary
                                : Cutter.cutting ? Theme.error
                                : Theme.on_surface_var
                     }
                     C.AppText {
-                        text: Cutter.cutting && Cutter.cutPct > 0 ? Cutter.cutPct + "%" : page._fmt(page._clipLen * 1000)
+                        text: Cutter.postActive ? Cutter.postPct + "%"
+                              : Cutter.cutting && Cutter.cutPct > 0 ? Cutter.cutPct + "%" : page._fmt(page._clipLen * 1000)
                         mono: true
                         weight: Tokens.weightExtraBold
                         font.pixelSize: Tokens.fontTitle + 2
-                        color: Cutter.cutting ? Theme.text_strong : Theme.primary
+                        color: dock._busy ? Theme.text_strong : Theme.primary
                     }
                 }
             }
@@ -4107,8 +4181,14 @@ Item {
 
             Item { Layout.fillWidth: true }
 
+            // v1.4: ✓ Cut · ◐ Captions 42% · ○ AI dub
+            C.PostSteps {
+                visible: Cutter.postActive
+                steps: Cutter.postSteps
+                Layout.alignment: Qt.AlignVCenter
+            }
             C.AppText {
-                visible: Cutter.cutDetail !== ""
+                visible: Cutter.cutDetail !== "" && !Cutter.postActive
                 text: Cutter.cutDetail
                 mono: true
                 weight: Tokens.weightDemiBold
@@ -4122,21 +4202,21 @@ Item {
                 variant: "ghost"
                 iconName: Cutter.cutPaused ? "play_arrow" : "pause"
                 text: Cutter.cutPaused ? I18n.tr("Resume") : I18n.tr("Pause")
-                visible: Cutter.cutting
+                visible: Cutter.cutting && !Cutter.postActive
                 implicitHeight: 52
                 Layout.alignment: Qt.AlignVCenter
                 onClicked: Cutter.cutPaused ? Cutter.resumeCut() : Cutter.pauseCut()
             }
             C.PrimaryButton {
                 variant: "ghost"
-                text: I18n.tr("Cancel")
-                visible: Cutter.cutting
+                text: Cutter.postActive ? I18n.tr("Stop captions") : I18n.tr("Cancel")
+                visible: dock._busy
                 implicitHeight: 52
                 Layout.alignment: Qt.AlignVCenter
-                onClicked: Cutter.cancelCut()
+                onClicked: Cutter.postActive ? Cutter.cancelPost() : Cutter.cancelCut()
             }
             Keycap {
-                visible: !Cutter.cutting && Cutter.canCut && dock.width > 1080
+                visible: !dock._busy && Cutter.canCut && dock.width > 1080
                 k: "Ctrl+Enter"
                 Layout.alignment: Qt.AlignVCenter
             }
@@ -4145,15 +4225,18 @@ Item {
                 iconName: "scissors"
                 text: Cutter.cutPaused
                       ? I18n.tr("Paused")
+                      : Cutter.postActive
+                        ? (Cutter.postStage !== "" ? Cutter.postStage : I18n.tr("Captions & dub…"))
                       : Cutter.cutting
                         ? (Cutter.cutPct > 0 ? I18n.tr("Cutting…") + "  " + Cutter.cutPct + "%" : I18n.tr("Cutting…"))
                         : I18n.tr("Cut & Download")
                 enabled: Cutter.canCut
                 implicitHeight: 52
-                implicitWidth: Math.max(220, contentItem.implicitWidth + Tokens.space6 * 2)
                 Layout.alignment: Qt.AlignVCenter
-                progress: Cutter.cutting ? (Cutter.cutPct > 0 ? Cutter.cutPct / 100 : -1) : -1
-                indeterminate: Cutter.cutting && Cutter.cutPct <= 0
+                progress: Cutter.postActive ? Math.max(0.02, Cutter.postPct / 100)
+                          : Cutter.cutting ? (Cutter.cutPct > 0 ? Cutter.cutPct / 100 : -1) : -1
+                indeterminate: Cutter.cutting && Cutter.cutPct <= 0 && !Cutter.postActive
+                implicitWidth: Math.min(360, Math.max(220, contentItem.implicitWidth + Tokens.space6 * 2))
                 onClicked: page._startCut()
             }
         }
@@ -4188,7 +4271,7 @@ Item {
                     color: Theme.text_strong
                 }
                 C.AppText {
-                    text: Cutter.resultName
+                    text: Cutter.resultNote !== "" ? Cutter.resultName + "  ·  " + Cutter.resultNote : Cutter.resultName
                     mono: true
                     font.pixelSize: Tokens.fontCaption
                     color: Theme.on_surface_var
@@ -4236,7 +4319,7 @@ Item {
         anchors.fill: parent
         // FileDrag.active: ignore a clip dragged out of THIS page (v3.39.9),
         // otherwise letting go over the window would load it as the source.
-        enabled: !Cutter.cutting && !Cutter.probing && !FileDrag.active
+        enabled: !Cutter.cutting && !Cutter.postActive && !Cutter.probing && !FileDrag.active
         onDropped: (drop) => {
             if (!drop.hasUrls || drop.urls.length === 0) return
             if (Cutter.mode !== 1) Cutter.mode = 1
@@ -4303,6 +4386,9 @@ Item {
     }
 
     C.Toast { id: toast; anchors.horizontalCenter: parent.horizontalCenter; y: parent.height - (Cutter.hasInfo ? 150 : 80) }
+
+    // v1.3: Voice Studio (captions · translation · AI dub)
+    C.VoiceStudioSheet { id: voiceStudio; objectName: "voiceStudio" }
 
     // the same in-app player Downloads uses, for finished clips
     // ── v3.16-p4: ask before a clip leaves the history ─────────────────────

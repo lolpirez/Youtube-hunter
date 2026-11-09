@@ -96,7 +96,8 @@ Item {
              : k === "stopped" ? Theme.warn
              : Theme.on_surface_var
     }
-    function _kindLabel(k) {
+    function _kindLabel(k, live) {
+        if (k === "merging" && live && live.post) return I18n.tr("Captions & dub")
         return k === "active" ? I18n.tr("Downloading")
              : k === "merging" ? I18n.tr("Merging")
              : k === "done" ? I18n.tr("Completed")
@@ -127,6 +128,10 @@ Item {
     function _statusLine(row, live, pct) {
         if (page._stopping(live)) return page._stoppingText(live)
         var k = page._kind(row.status)
+        if (k === "merging" && live && live.post) {
+            // v1.4: downloaded, captions / dub running: say which step
+            return (live.text || I18n.tr("Finishing")) + " · " + pct + "%"
+        }
         if (k === "merging") {
             // At 99% the engine is muxing or converting. Its live phase text
             // ("Converting to MP3…") names the long silent step; showing only
@@ -237,6 +242,14 @@ Item {
         }
         return out
     }
+
+    // v1.3: captions / translation / AI dub for a finished download
+    function openVoiceStudio(row) {
+        if (!row || !row.filepath) return
+        voiceStudio.openFor({ path: row.filepath, title: row.title || "",
+                              videoId: row.videoId || "", clipStart: 0, clipEnd: 0 })
+    }
+    C.VoiceStudioSheet { id: voiceStudio; objectName: "voiceStudio" }
 
     function _playRow(videoId) {
         var info = Downloads.playInfo(videoId)
@@ -1185,6 +1198,7 @@ Item {
     component StatusBadge: Rectangle {
         id: sb
         property string kind: "queued"
+        property var live: null           // v1.4: names the captions / dub step
         property bool onMedia: false      // sitting over a thumbnail
         readonly property color _c: page._kindColor(kind)
         radius: Tokens.radiusPill
@@ -1205,7 +1219,7 @@ Item {
             }
             C.AppText {
                 anchors.verticalCenter: parent.verticalCenter
-                text: page._kindLabel(sb.kind)
+                text: page._kindLabel(sb.kind, sb.live)
                 weight: Tokens.weightBold
                 font.pixelSize: Tokens.fontMicro
                 color: sb.onMedia ? "#ffffff" : sb._c
@@ -1391,6 +1405,14 @@ Item {
         C.IconButton {
             visible: ra.kind === "done"
             width: 36; height: 36
+            iconName: "translate"
+            accent: Theme.primary
+            tip: I18n.tr("Captions & AI dub")
+            onClicked: page.openVoiceStudio(ra.row)
+        }
+        C.IconButton {
+            visible: ra.kind === "done"
+            width: 36; height: 36
             iconName: "open_in_new"
             tip: I18n.tr("Open in your default player")
             onClicked: Downloads.openFile(ra.row.videoId)
@@ -1517,10 +1539,16 @@ Item {
                     Layout.topMargin: Tokens.space2
                     implicitHeight: 8
                     value: lr._pct / 100
-                    indeterminate: lr.kind === "merging" && !lr._stopping
+                    indeterminate: lr.kind === "merging" && !lr._stopping && !(lr.liveData && lr.liveData.post)
                     accent: lr._stopping ? Theme.warn : Theme.primary
                     opacity: lr._stopping ? 0.7 : 1
                     Behavior on opacity { NumberAnimation { duration: Tokens.durMed } }
+                }
+                // v1.4: ✓ Download · ◐ Captions 42% · ○ AI dub
+                C.PostSteps {
+                    visible: !!(lr.liveData && lr.liveData.post && lr.liveData.steps && lr.liveData.steps.length)
+                    steps: lr.liveData && lr.liveData.steps ? lr.liveData.steps : []
+                    Layout.topMargin: 2
                 }
                 RowLayout {
                     Layout.fillWidth: true
@@ -1528,7 +1556,7 @@ Item {
                     spacing: Tokens.space2
                     LayoutMirroring.enabled: false
                     C.AppText {
-                        text: lr.kind === "merging" ? "" : lr._pct + "%"
+                        text: lr.kind === "merging" && !(lr.liveData && lr.liveData.post) ? "" : lr._pct + "%"
                         visible: text !== ""
                         mono: true
                         weight: Tokens.weightBold
@@ -1539,6 +1567,7 @@ Item {
                         text: {
                             var s = page._sizeText(lr.row, lr.liveData)
                             var st = page._statusLine(lr.row, lr.liveData, lr._pct)
+                            if (lr.liveData && lr.liveData.post) return st
                             if (lr._stopping || lr.kind === "merging" || s === "") return st
                             return s
                         }
@@ -1674,6 +1703,13 @@ Item {
                     quality: lib.row.quality || ""
                     onPlay: page._playRow(lib.row.videoId)
                 }
+                // v1.4.7: captions / dub in the file this row plays
+                C.PostFxBadge {
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: 5
+                    fx: lib.row.fx || ({})
+                }
                 TickBox {
                     anchors.left: parent.left
                     anchors.top: parent.top
@@ -1788,6 +1824,18 @@ Item {
                         font.pixelSize: Tokens.fontCaption
                         color: Theme.on_surface_var
                     }
+                    // v1.3: captions / dub stay one visible click away, not
+                    // only under the hover actions.
+                    C.IconButton {
+                        visible: lib.kind === "done"
+                        width: 30; height: 30
+                        glyphSize: 15
+                        iconName: "translate"
+                        accent: Theme.primary
+                        tip: I18n.tr("Captions & AI dub")
+                        anchors.verticalCenter: parent.verticalCenter
+                        onClicked: page.openVoiceStudio(lib.row)
+                    }
                 }
                 Row {
                     id: libActions
@@ -1803,6 +1851,14 @@ Item {
                         iconName: "folder_open"
                         tip: I18n.tr("Show in folder")
                         onClicked: Downloads.reveal(lib.row.videoId)
+                    }
+                    C.IconButton {
+                        visible: lib.kind === "done"
+                        width: 38; height: 38
+                        iconName: "translate"
+                        accent: Theme.primary
+                        tip: I18n.tr("Captions & AI dub")
+                        onClicked: page.openVoiceStudio(lib.row)
                     }
                     C.IconButton {
                         visible: lib.kind === "done"
@@ -1909,6 +1965,14 @@ Item {
                     quality: card.row.quality || ""
                     onPlay: page._playRow(card.row.videoId)
                 }
+                // v1.4.7: captions / dub in the file this card plays
+                C.PostFxBadge {
+                    visible: has && !card._running
+                    anchors.left: parent.left
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 8
+                    fx: card.row.fx || ({})
+                }
                 TickBox {
                     anchors.left: parent.left
                     anchors.top: parent.top
@@ -1922,6 +1986,7 @@ Item {
                     anchors.right: parent.right
                     anchors.top: parent.top
                     anchors.margins: 8
+                    live: card.liveData
                     kind: card.kind
                     onMedia: true
                 }
@@ -1933,7 +1998,7 @@ Item {
                     anchors.margins: 8
                     height: 4
                     value: card._livePct / 100
-                    indeterminate: card.kind === "merging"
+                    indeterminate: card.kind === "merging" && !(card.liveData && card.liveData.post)
                 }
             }
 

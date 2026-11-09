@@ -1426,3 +1426,448 @@ select.track:hover:not(:disabled) { border-color: rgba(var(--acc-rgb), .45); }
   .cticks i { opacity: .45; }
   .beam, .csweep { display: none; }
 }
+
+
+/* ═══ v1.4 — Captions & AI dub ═══════════════════════════════════════════ */
+.post { margin-top: 14px; padding: 12px; border-radius: 14px; background: var(--well);
+        border: 1px solid var(--line-soft); display: grid; gap: 10px; }
+.post.on { border-color: color-mix(in srgb, var(--acc) 38%, var(--line-soft)); }
+.post[data-locked] { opacity: .62; pointer-events: none; }
+.post .phead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.post .pt { font-weight: 700; font-size: 13px; color: var(--strong); letter-spacing: .2px; }
+.post .ppill { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 10px;
+               border-radius: 999px; font-size: 11px; font-weight: 600; color: var(--muted);
+               border: 1px solid var(--line-soft); white-space: nowrap; }
+.post .ppill i { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); }
+.post .ppill.on { color: var(--acc); border-color: color-mix(in srgb, var(--acc) 40%, transparent);
+                  background: color-mix(in srgb, var(--acc) 10%, transparent); }
+.post .ppill.on i { background: var(--acc); }
+.post .plane { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.post .ptile { display: flex; align-items: center; gap: 8px; min-width: 0; height: 44px; padding: 0 10px;
+               border-radius: 12px; border: 1px solid var(--line); background: var(--raise);
+               color: var(--text); font: inherit; cursor: pointer; transition: border-color .15s, background .15s; }
+.post .ptile:hover { border-color: color-mix(in srgb, var(--acc) 45%, var(--line)); }
+.post .ptile:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
+.post .ptile .pic { display: grid; place-items: center; width: 26px; height: 26px; flex: none;
+                    border-radius: 8px; background: var(--track); color: var(--muted); }
+.post .ptile .pn { flex: 1; min-width: 0; text-align: start; font-weight: 700; font-size: 13px;
+                   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.post .ptile .psw { position: relative; flex: none; width: 30px; height: 18px; border-radius: 9px;
+                    background: var(--track); transition: background .15s; }
+.post .ptile .psw i { position: absolute; top: 2px; inset-inline-start: 2px; width: 14px; height: 14px;
+                      border-radius: 50%; background: #fff; transition: inset-inline-start .2s cubic-bezier(.3,1.4,.5,1); }
+.post .ptile.on { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 10%, var(--raise)); }
+.post .ptile.on .pic { background: var(--acc); color: var(--on-acc); }
+.post .ptile.on .pn { color: var(--acc); }
+.post .ptile.on .psw { background: var(--acc); }
+.post .ptile.on .psw i { inset-inline-start: 14px; }
+.post .pbox { display: grid; gap: 8px; padding: 10px; border-radius: 12px; background: var(--raise);
+              border: 1px solid var(--line-soft); }
+.post .prow { display: grid; grid-template-columns: 74px minmax(0, 1fr); align-items: center; gap: 8px; }
+.post .pl { font-size: 12px; font-weight: 600; color: var(--muted); }
+.post .pv { min-width: 0; }
+.post .pseg { display: flex; width: 100%; }
+.post .pseg .fchip { flex: 1; min-width: 0; }
+.post .psel { width: 100%; height: 32px; padding: 0 10px; border-radius: 9px; border: 1px solid var(--line);
+              background: var(--well); color: var(--text); font: inherit; font-size: 12.5px; }
+.post .psel:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
+.post .plooks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.post .plook { display: grid; justify-items: center; gap: 2px; padding: 6px 4px; border-radius: 9px;
+               border: 1px solid transparent; background: linear-gradient(160deg, #2b3a55, #4a3f60 60%, #151b28);
+               color: #fff; font: inherit; cursor: pointer; }
+.post .plook b { font-size: 14px; line-height: 1.1; }
+.post .plook small { font-size: 10.5px; opacity: .72; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.post .plook.on { border-color: var(--acc); box-shadow: 0 0 0 1px var(--acc) inset; }
+.post .plook.on small { opacity: 1; }
+.post .plook[data-k="youtube"] b { background: rgba(8,8,8,.75); padding: 0 5px; border-radius: 2px; font-weight: 500; font-family: Arial, sans-serif; }
+.post .plook[data-k="pop"] b { font-weight: 900; color: #ffd400; text-transform: uppercase; }
+.post .plook[data-k="boxed"] b { background: rgba(26,29,38,.55); padding: 0 7px; border-radius: 6px; letter-spacing: .02em;
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); box-shadow: inset 0 1px 0 rgba(255,255,255,.12); }
+.post .plook[data-k="neon"] b { text-shadow: 0 0 2px #00e5ff, 0 0 6px #00e5ff, 0 0 14px rgba(0,229,255,.55); }
+.post .plook[data-k="cinema"] b { color: #ffe14d; text-shadow: 0 1px 6px rgba(0,0,0,.65); }
+/* v1.4.6: the 2026 set */
+.post .plook[data-k="lyric"] b { font-weight: 800; background: linear-gradient(90deg, #fff 50%, rgba(255,255,255,.4) 50%);
+  -webkit-background-clip: text; background-clip: text; color: transparent; filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
+.post .plook[data-k="spotlight"] b { font-weight: 900; text-transform: uppercase; background: #7c5cff; padding: 0 5px; border-radius: 5px; text-shadow: none; }
+.post .plook[data-k="punch"] b { font-weight: 900; font-size: 17px; color: #c8ff2e; text-transform: uppercase; text-shadow: 0 2px 8px rgba(0,0,0,.6); }
+.post .plook[data-k="aura"] b { font-weight: 600; letter-spacing: .03em; text-shadow: 0 0 10px rgba(139,123,255,.95), 0 0 20px rgba(139,123,255,.5); }
+.post .pmuted { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.post .note { margin: 0; }
+.post .note.ok { color: var(--ok); }
+
+/* the capsule's step row: ✓ Download · ◐ Captions 42% · ○ AI dub */
+.psteps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 2px 0; }
+.psteps[hidden] { display: none; }
+.pstep { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.pstep i { width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--dim); box-sizing: border-box; }
+.pstep[data-s="done"] { color: var(--strong); }
+.pstep[data-s="done"] i { border: 0; background: var(--ok) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 6.2l2 2 4-4.4' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/10px no-repeat; }
+.pstep[data-s="running"] { color: var(--acc); }
+.pstep[data-s="running"] i { border-color: color-mix(in srgb, var(--acc) 30%, transparent); border-top-color: var(--acc);
+                             animation: yth-spin .8s linear infinite; }
+.pstep[data-s="failed"] { color: var(--bad); }
+.pstep[data-s="failed"] i { border-color: var(--bad); background: var(--bad); }
+.pstep[data-s="cancelled"] { color: var(--warn); }
+.psep { width: 10px; height: 1px; background: var(--line); }
+@keyframes yth-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pstep[data-s="running"] i { animation: none; } }
+
+/* ═════════════════════════════════════════════════════════════════════
+   v1.4.1 — the language picker (Captions & AI dub)
+   Replaces the native <select>. A floating glass sheet: sections, a code
+   glyph per language, native + English name, YouTube kind badges, type to
+   search. Shares .dd / .ddbtn / .ddm / .ddo with the audio-track dropdown.
+   ═════════════════════════════════════════════════════════════════════ */
+.ddo[hidden], .lpsec[hidden], .lpnone[hidden] { display: none !important; }
+
+/* trigger */
+.lp .lpbtn {
+  height: 38px; padding-inline: 5px 10px; gap: 10px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--strong) 4%, transparent), transparent 70%),
+    var(--well);
+  border-color: var(--line);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent);
+}
+.lp .lpbtn:hover:not(:disabled) {
+  border-color: rgba(var(--acc-rgb), .5);
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(var(--acc-rgb), .10), transparent 60%),
+    var(--well);
+}
+.lp .lpbtn .lptx small { display: inline; }        /* room for both names on one line */
+.lp .lpbtn:has(.ddk) .lptx small { display: none; } /* ...unless a badge needs the room */
+
+/* the code glyph: a little lit tile */
+.lpc {
+  flex: none; width: 28px; height: 28px; box-sizing: border-box;
+  display: inline-grid; place-items: center; border-radius: 8px;
+  font: 700 10.5px/1 var(--mono); letter-spacing: .05em; direction: ltr;
+  color: var(--muted);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--strong) 9%, transparent), color-mix(in srgb, var(--strong) 3%, transparent));
+  box-shadow: inset 0 0 0 1px var(--line-soft), inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent);
+  transition: color .15s ease, background .15s ease, box-shadow .15s ease;
+}
+.lpbtn .lpc, .lpo.on .lpc {
+  color: var(--on-acc, #fff);
+  background: linear-gradient(150deg, color-mix(in srgb, var(--acc) 78%, #fff), var(--acc) 55%, color-mix(in srgb, var(--acc) 80%, #000));
+  box-shadow: 0 4px 12px -4px rgba(var(--acc-rgb), .7), inset 0 1px 0 rgba(255, 255, 255, .28);
+}
+.lpc.wave { color: var(--ok); }
+.lpbtn .lpc.wave, .lpo.on .lpc.wave {
+  color: #fff;
+  background: linear-gradient(150deg, color-mix(in srgb, var(--ok) 75%, #fff), var(--ok) 60%, color-mix(in srgb, var(--ok) 80%, #000));
+  box-shadow: 0 4px 12px -4px color-mix(in srgb, var(--ok) 70%, transparent), inset 0 1px 0 rgba(255, 255, 255, .28);
+}
+
+.lptx { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 7px; overflow: hidden; }
+.lptx b { flex: 0 1 auto; min-width: 0; font-weight: 650; font-size: 13px; color: var(--strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lptx small { flex: 0 50 auto; min-width: 0; font: 500 12px/1 var(--sans); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.ddk.k-up { color: color-mix(in srgb, var(--acc) 85%, var(--strong)); background: rgba(var(--acc-rgb), .13); }
+.ddk.k-ai {
+  color: var(--on-acc, #fff);
+  background: linear-gradient(120deg, var(--acc), color-mix(in srgb, var(--acc) 55%, #b06bff));
+}
+
+/* the sheet */
+.lp .lpm {
+  /* the trigger sits in a narrow value column: the sheet opens over the
+     label column too, so names never squeeze into "Portu…" */
+  inset-inline-start: auto; inset-inline-end: 0; width: calc(100% + 82px);
+  max-height: 312px; padding: 6px; border-radius: 16px;
+  background: color-mix(in srgb, var(--raise) 86%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.5);
+  backdrop-filter: blur(18px) saturate(1.5);
+  border: 1px solid color-mix(in srgb, var(--strong) 10%, transparent);
+  box-shadow:
+    0 24px 60px -16px rgba(0, 0, 0, .6),
+    0 8px 18px -10px rgba(0, 0, 0, .35),
+    inset 0 1px 0 color-mix(in srgb, #fff 7%, transparent);
+  transform: translateY(-6px) scale(.97);
+  transition: opacity .18s ease, transform .26s cubic-bezier(.2, .9, .25, 1.15), visibility 0s linear .26s;
+  scrollbar-width: thin; scrollbar-color: var(--track) transparent;
+  scroll-padding-top: 52px;
+}
+.lp.up .lpm { transform: translateY(6px) scale(.97); }
+.lp[data-open="1"] .lpm { transform: none; transition: opacity .18s ease, transform .26s cubic-bezier(.2, .9, .25, 1.15), visibility 0s; }
+
+/* search, pinned to the top of the sheet */
+.lpq {
+  position: sticky; top: -6px; z-index: 2;
+  display: flex; align-items: center; gap: 8px;
+  margin: -6px -6px 4px; padding: 10px 12px 9px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--raise) 96%, transparent) 70%, transparent);
+  border-bottom: 1px solid var(--line-soft);
+  cursor: text;
+}
+.lpqi { flex: none; color: var(--dim); transition: color .15s ease; }
+.lpq:focus-within .lpqi { color: var(--acc); }
+.lpin {
+  all: unset; flex: 1; min-width: 0; box-sizing: border-box;
+  font: 500 13px/1.2 var(--sans); color: var(--strong); unicode-bidi: plaintext;
+}
+.lpin::placeholder { color: var(--dim); }
+.lpq kbd {
+  flex: none; font: 600 10.5px/1 var(--mono); color: var(--dim);
+  padding: 3px 5px; border-radius: 5px; box-shadow: inset 0 0 0 1px var(--line);
+  opacity: 0; transition: opacity .15s ease;
+}
+.lpm[data-q] .lpq kbd { opacity: 1; }
+
+/* sections */
+.lpsec + .lpsec { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line-soft); }
+.lph {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 9px 5px; font: 700 10.5px/1 var(--sans); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--dim);
+}
+.panel[lang="fa"] .lph { letter-spacing: 0; text-transform: none; font-size: 11px; }
+.lph i { font: 600 10.5px/1 var(--mono); font-style: normal; color: var(--dim); opacity: .8; }
+.lpm[data-q] .lph i { display: none; }
+
+/* rows */
+.lpo { position: relative; min-height: 38px; padding: 5px 9px 5px 6px; gap: 10px; border-radius: 10px; }
+.lpo::before {
+  content: ""; position: absolute; inset-inline-start: 0; top: 9px; bottom: 9px; width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--acc);
+  transform: scaleY(0); transition: transform .2s var(--ease);
+}
+.panel[dir="rtl"] .lpo::before { border-radius: 3px 0 0 3px; }
+.lpo:hover .lpc, .lpo:focus-visible .lpc { color: var(--strong); }
+.lpo:focus-visible { outline: none; box-shadow: inset 0 0 0 1px rgba(var(--acc-rgb), .45); }
+.lpo.on { background: linear-gradient(90deg, rgba(var(--acc-rgb), .16), rgba(var(--acc-rgb), .05)); }
+.panel[dir="rtl"] .lpo.on { background: linear-gradient(270deg, rgba(var(--acc-rgb), .16), rgba(var(--acc-rgb), .05)); }
+.lpo.on::before { transform: none; }
+.lpo .ddtick { margin-inline-start: auto; }
+
+/* rows settle in on open: a short stagger on the first ten only */
+.lp[data-open="1"] .lpo { animation: lp-in .32s var(--ease) both; animation-delay: calc(var(--i, 0) * 14ms); }
+@keyframes lp-in { from { opacity: 0; transform: translateY(4px); } }
+
+.lpnone { margin: 0; padding: 18px 10px 16px; text-align: center; font-size: 12.5px; color: var(--muted); }
+.lpnone b { color: var(--strong); font-weight: 600; }
+
+:host([data-theme="light"]) .lp .lpm {
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  box-shadow: 0 24px 56px -18px rgba(20, 20, 40, .28), 0 6px 16px -10px rgba(20, 20, 40, .16), inset 0 1px 0 #fff;
+}
+:host([data-theme="light"]) .lp .lpbtn { box-shadow: inset 0 1px 0 #fff; }
+
+@media (prefers-reduced-motion: reduce) {
+  .lp .lpm, .lpo::before, .lpc { transition: none !important; }
+  .lp[data-open="1"] .lpo { animation: none; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * v1.5 — the panel is yours to place
+ * Drag the header to move (docks to edges, snaps home), drag an edge or the
+ * free bottom corner to resize, lock it, or minimise it to a slim header that
+ * keeps the live percent. Double-click the header to send it home.
+ * ═════════════════════════════════════════════════════════════════════ */
+.head { cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none; }
+.panel[data-locked] .head { cursor: default; }
+.panel[data-drag] .head { cursor: grabbing; }
+.panel[data-drag], .panel[data-resizing] { transition: none !important; user-select: none; -webkit-user-select: none; }
+.panel[data-drag] .body, .panel[data-resizing] .body { pointer-events: none; }
+/* lifted while carried: a deeper shadow and an accent hairline */
+.panel[data-drag] {
+  box-shadow: 0 40px 90px -20px rgba(0, 0, 0, .7), 0 0 0 1px rgba(var(--acc-rgb), .55);
+}
+.panel[data-resizing] { box-shadow: var(--shadow), 0 0 0 1px rgba(var(--acc-rgb), .4); }
+
+/* header controls */
+.hbtns { margin-inline-start: auto; display: flex; gap: 2px; flex: none; }
+.hbtns + .x { margin-inline-start: 2px; }
+.hb {
+  all: unset;
+  width: 32px; height: 32px;
+  display: grid; place-items: center;
+  border-radius: 10px;
+  color: var(--dim);
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.hb:hover { background: var(--track); color: var(--strong); }
+.hb:focus-visible { outline: 2px solid var(--acc); outline-offset: 1px; }
+.hb[data-geo="lock"][aria-pressed="true"] { color: var(--acc); background: rgba(var(--acc-rgb), .12); }
+.hb.nudge { animation: nudge .4s var(--ease); }
+@keyframes nudge {
+  20% { transform: translateX(-3px) rotate(-10deg); }
+  45% { transform: translateX(3px) rotate(8deg); }
+  70% { transform: translateX(-1.5px) rotate(-3deg); }
+}
+
+/* the slim header's live readout */
+.mstat {
+  display: none;
+  flex: none;
+  font: 600 12.5px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--acc);
+}
+.panel[data-min] .mstat:not(:empty) { display: inline-block; }
+
+/* minimised: header only, a hairline of progress along its floor */
+.panel[data-min] { height: auto !important; width: auto !important; min-width: 264px; }
+.panel[data-min] .tabs,
+.panel[data-min] .video,
+.panel[data-min] .body,
+.panel[data-min] .foot,
+.panel[data-min] .rz { display: none !important; }
+.panel[data-min] .head { padding-block: 10px; cursor: pointer; }
+.panel[data-min]::after {
+  content: "";
+  position: absolute; inset-inline-start: 0; bottom: 0;
+  height: 2px; width: calc(var(--mp, 0) * 100%);
+  background: linear-gradient(90deg, var(--acc2), var(--acc));
+  opacity: 0;
+  transition: width .4s var(--ease), opacity .2s ease;
+}
+.panel[data-min][data-mrun]::after { opacity: 1; }
+
+/* a resized panel: the body takes the extra room, the footer stays on the floor */
+.panel[data-sized] .body { flex: 1 1 auto; min-height: 0; }
+
+/* keep the body's scrollbar clear of the right-edge resize zone */
+.body { margin-inline-end: 4px; padding-inline-end: 8px; }
+
+/* resize zones: both sides, the floor, both bottom corners */
+.rz { position: absolute; z-index: 6; touch-action: none; }
+.rz[data-rz="w"] { top: 22px; bottom: 22px; left: 0; width: 5px; cursor: ew-resize; }
+.rz[data-rz="e"] { top: 22px; bottom: 22px; right: 0; width: 5px; cursor: ew-resize; }
+.rz[data-rz="s"] { left: 22px; right: 22px; bottom: 0; height: 5px; cursor: ns-resize; }
+.rz[data-rz="sw"] { left: 0; bottom: 0; width: 20px; height: 20px; cursor: nesw-resize; }
+.rz[data-rz="se"] { right: 0; bottom: 0; width: 20px; height: 20px; cursor: nwse-resize; }
+.panel[data-locked] .rz { display: none; }
+
+/* the grip: a small corner bracket on the FREE corner (away from the edge
+   it's docked to), echoing the panel's own radius. Shows on hover. */
+.rz[data-rz="sw"]::after, .rz[data-rz="se"]::after {
+  content: "";
+  position: absolute; bottom: 6px;
+  width: 9px; height: 9px;
+  border-bottom: 2px solid var(--dim);
+  opacity: 0;
+  transition: opacity .2s ease, border-color .15s ease;
+  pointer-events: none;
+}
+.rz[data-rz="sw"]::after { left: 6px; border-left: 2px solid var(--dim); border-bottom-left-radius: 7px; }
+.rz[data-rz="se"]::after { right: 6px; border-right: 2px solid var(--dim); border-bottom-right-radius: 7px; }
+.panel:not([data-ax="l"]):hover .rz[data-rz="sw"]::after,
+.panel[data-ax="l"]:hover .rz[data-rz="se"]::after { opacity: .75; }
+.rz:hover::after, .panel[data-resizing] .rz::after { border-color: var(--acc) !important; }
+.panel[data-resizing="sw"] .rz[data-rz="sw"]::after,
+.panel[data-resizing="se"] .rz[data-rz="se"]::after { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hb.nudge, .panel[data-min]::after { animation: none !important; transition: none !important; }
+}
+
+/* v1.4.3: the Saved screen says when captions / dub didn't finish */
+.postfail { margin: 10px 0 0; line-height: 1.45; overflow-wrap: anywhere; }
+.postfail b { font-weight: 700; }
+.postfail small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+
+/* v1.4.9: ...as one quiet card. Amber, not red: the video IS saved. */
+.pfail {
+  --pf: #f2b544;
+  display: grid; grid-template-columns: auto 1fr auto; align-items: start; gap: 10px;
+  margin: 10px 0 0; padding: 11px 12px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--pf) 7%, var(--raise));
+  border: 1px solid color-mix(in srgb, var(--pf) 20%, transparent);
+  animation: pf-in .32s var(--ease) both;
+}
+:host([data-theme="light"]) .pfail, .panel[data-theme="light"] .pfail { --pf: #c47f0e; }
+.pf-ico {
+  display: grid; place-items: center; width: 22px; height: 22px; margin-top: 1px;
+  border-radius: 50%; color: var(--pf);
+  background: color-mix(in srgb, var(--pf) 16%, transparent);
+}
+.pf-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pf-body b { color: var(--strong); font-size: 13.5px; font-weight: 650; letter-spacing: -.01em; }
+.pf-detail {
+  color: var(--text); font-family: var(--mono); font-size: 12px; opacity: .82;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pf-body small { color: var(--muted); font-size: 12px; line-height: 1.45; margin-top: 2px; }
+.pf-act {
+  align-self: center; border: 0; cursor: pointer; white-space: nowrap;
+  padding: 6px 10px; border-radius: 9px; font: 600 12px var(--sans);
+  color: var(--pf); background: color-mix(in srgb, var(--pf) 12%, transparent);
+  transition: background .18s var(--ease);
+}
+.pf-act:hover { background: color-mix(in srgb, var(--pf) 20%, transparent); }
+@keyframes pf-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .pfail { animation: none; } }
+
+/* v1.4.8: smooth height. While the panel glides between a loader and its
+   content (see smoothHeight in content.js) nothing inside may scroll or
+   flash a scrollbar, and the edge fades wait until it has settled. */
+.panel[data-hanim] .body { overflow: hidden; -webkit-mask-image: none !important; mask-image: none !important; }
+.panel[data-hanim] .foot { position: relative; z-index: 1; }
+/* content landing after a loader: rises a few px and fades up, row by row */
+.body.land > * { animation: land .42s var(--ease) backwards; }
+.body.land > *:nth-child(2) { animation-delay: .04s; }
+.body.land > *:nth-child(3) { animation-delay: .08s; }
+.body.land > *:nth-child(n+4) { animation-delay: .12s; }
+@keyframes land {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .body.land > * { animation: none !important; }
+}
+
+/* v1.4.8: Play found no copy with the picked captions / dub */
+.pnote {
+  position: absolute; left: 12px; right: 12px; bottom: 72px; z-index: 7;
+  padding: 10px 12px; border-radius: 12px;
+  background: var(--raise); color: var(--text);
+  border: 1px solid rgba(var(--acc-rgb), .35);
+  box-shadow: 0 14px 30px -12px rgba(0, 0, 0, .5);
+  font-size: 12.5px; line-height: 1.45;
+  opacity: 0; transform: translateY(6px); pointer-events: none;
+  transition: opacity .22s ease, transform .3s var(--ease);
+}
+.pnote.on { opacity: 1; transform: none; }
+
+/* ═════════════════════════════════════════════════════════════════════
+   v1.4.13 — dropdowns sit ON TOP, solid
+   Bug: the "land" entrance kept every body row a stacking context
+   (fill-mode both), so the ladder painted over the open Audio-track list
+   and the list looked see-through. The fill is now backwards-only, and an
+   open dropdown lifts its whole row above its siblings anyway.
+   ═════════════════════════════════════════════════════════════════════ */
+.dd[data-open="1"] { z-index: 60; }
+.body > :has(.dd[data-open="1"]),
+.body :has(> .dd[data-open="1"]) { position: relative; z-index: 60; }
+
+/* one solid surface for every list: no page showing through */
+.ddm, .lp .lpm {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--strong) 4%, var(--raise)), var(--raise) 40%);
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+  border: 1px solid color-mix(in srgb, var(--strong) 11%, var(--line));
+  box-shadow:
+    0 26px 60px -14px rgba(0, 0, 0, .7),
+    0 10px 22px -12px rgba(0, 0, 0, .45),
+    inset 0 1px 0 color-mix(in srgb, #fff 7%, transparent);
+}
+:host([data-theme="light"]) .ddm, :host([data-theme="light"]) .lp .lpm {
+  box-shadow: 0 22px 48px -16px rgba(20, 20, 30, .32), 0 4px 12px -6px rgba(20, 20, 30, .12);
+}
+/* the audio-track list opens over the label column too: full names fit */
+.trk .ddm { inset-inline-start: auto; inset-inline-end: 0; width: calc(100% + 96px); max-height: 300px; padding: 6px; border-radius: 15px; }
+.ddo { padding: 9px 10px; }
+.ddo.on { background: rgba(var(--acc-rgb), .14); box-shadow: inset 0 0 0 1px rgba(var(--acc-rgb), .28); }
+/* slim themed scrollbar instead of the OS one */
+.ddm, .lp .lpm { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--strong) 18%, transparent) transparent; }
+.ddm::-webkit-scrollbar, .lp .lpm::-webkit-scrollbar { width: 8px; }
+.ddm::-webkit-scrollbar-track, .lp .lpm::-webkit-scrollbar-track { background: transparent; }
+.ddm::-webkit-scrollbar-thumb, .lp .lpm::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--strong) 16%, transparent); border-radius: 8px;
+  border: 2px solid transparent; background-clip: padding-box;
+}
+.ddm::-webkit-scrollbar-button, .lp .lpm::-webkit-scrollbar-button { display: none; height: 0; }

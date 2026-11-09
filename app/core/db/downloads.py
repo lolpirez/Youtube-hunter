@@ -79,6 +79,10 @@ def init_downloads_db():
             "subs_hidden":       "INTEGER NOT NULL DEFAULT 0",
             "added_at":      "TEXT",
             "updated_at":    "TEXT",
+            # v1.4.7: captions / dub made a new version of the file; the row
+            # shows that one, and remembers the plain download beside it
+            "original_path": "TEXT",
+            "post_fx":       "TEXT",
         }
         for col, decl in required.items():
             if col not in cols:
@@ -165,6 +169,14 @@ def downloads_upsert(video_id, title=None, thumbnail_url=None, quality_label=Non
                  merged.get("channel_url") or "",
                  merged.get("subscriber_count"), merged.get("subs_hidden") or 0,
                  now, video_id))
+        if status == "downloading" and filepath == "":
+            # a fresh (re)download: whatever captions / dub did to the old
+            # file no longer describes this row
+            try:
+                cur.execute("UPDATE downloads SET original_path='', post_fx='' WHERE video_id=?",
+                            (video_id,))
+            except sqlite3.OperationalError:
+                pass
         conn.commit()
         conn.close()
         return True
@@ -250,4 +262,58 @@ def downloads_delete(video_id):
         conn.close()
         return True
     except Exception:
+        return False
+
+
+def downloads_find_by_path(path, video_id=""):
+    """v1.4.7: the download row a file belongs to (its current file or its
+    plain original), or None. The video id narrows it when known."""
+    from app.core import post_fx as FX
+    if not path:
+        return None
+    for row in downloads_list():
+        if video_id and (row.get("video_id") or "") != video_id:
+            continue
+        if FX.same_path(row.get("filepath"), path) or FX.same_path(row.get("original_path"), path):
+            return row
+    return None
+
+
+def downloads_adopt(video_id, final, layers, base_path):
+    """v1.4.7: point a download row at the captioned / dubbed version.
+
+    `base_path` is the file the job ran on: the row's current file (layers
+    stack) or its original (layers start over). The plain download stays on
+    disk; the row remembers it as original_path."""
+    from app.core import post_fx as FX
+    if not video_id or not final or not os.path.isfile(final):
+        return False
+    try:
+        conn = db_connect(DATA_DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM downloads WHERE video_id = ?", (video_id,))
+        row = cur.fetchone()
+        if row is None:
+            conn.close()
+            return False
+        row = dict(row)
+        current = row.get("filepath") or ""
+        original = row.get("original_path") or ""
+        if not original or not os.path.isfile(original):
+            original = base_path if not FX.same_path(base_path, final) else current
+        on_current = bool(current) and FX.same_path(base_path, current) and not FX.same_path(current, original)
+        new_layers = FX.stack(row.get("post_fx") or FX.from_name(current), layers, on_current)
+        cur.execute("""UPDATE downloads SET filepath=?, file_size=?, original_path=?, post_fx=?,
+                       status='complete', progress=100, updated_at=? WHERE video_id=?""",
+                    (final, file_size_of(final), original or "", FX.dump(new_layers),
+                     datetime.now(timezone.utc).isoformat(), video_id))
+        conn.commit()
+        conn.close()
+        # v1.4.8: the file keeps its own record, so a later download of the
+        # same video can't make the panel forget what this copy holds
+        FX.remember(final, new_layers)
+        return True
+    except Exception:
+        log_crash("downloads_adopt failed:\n" + traceback.format_exc())
         return False

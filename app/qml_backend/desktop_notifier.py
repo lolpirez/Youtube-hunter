@@ -923,8 +923,9 @@ class DesktopNotifier(QObject):
         text = str(entry.get("text") or "")
         pct = int(entry.get("pct") or 0)
         done = int(entry.get("done") or 0)
-        post = (text == tr("Merging…")
-                or text.startswith(tr("Converting to {fmt}…").split("{")[0]))
+        studio = bool(entry.get("post"))      # v1.4: captions / dub running
+        post = studio or (text == tr("Merging…")
+                          or text.startswith(tr("Converting to {fmt}…").split("{")[0]))
         if job.get("resuming") and not entry.get("cancelling") and (
                 pct > int(entry.get("floor") or 0) or done > 0
                 or text == tr("Merging…")):
@@ -939,6 +940,8 @@ class DesktopNotifier(QObject):
                 job["pausing"] = True
         elif job.get("resuming"):
             stage = tr("Resuming…")
+        elif studio:
+            stage = text or tr("Finishing")
         elif text.startswith(tr("Downloading… {pct}%").split("{")[0].strip()):
             stage = tr("Downloading")
         else:
@@ -948,7 +951,7 @@ class DesktopNotifier(QObject):
                          speed=0.0 if post else float(entry.get("speed") or 0),
                          eta=0 if post else int(entry.get("eta") or 0),
                          stage=stage,
-                         indeterminate=post or (pct <= 0 and done <= 0))
+                         indeterminate=(post and not studio) or (pct <= 0 and done <= 0 and not studio))
 
     def _dl_settle(self, key):
         job = self._jobs.get(key)

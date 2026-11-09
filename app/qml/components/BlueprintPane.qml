@@ -1122,8 +1122,41 @@ Item {
                             ColumnLayout {
                                 id: part
                                 Layout.fillWidth: true
-                                spacing: 4
-                                HoverHandler { id: partHover }
+                                // v1.4.8: no layout spacing. The bar and the reason
+                                // carry their own gap, so a collapsed reason takes
+                                // exactly 0 px and the open / close never jumps.
+                                spacing: 0
+                                readonly property bool hasWhy: (modelData.why || "") !== ""
+                                readonly property bool hot: partHover.hovered
+                                readonly property color tone: modelData.points >= 16 ? Theme.secondary_container
+                                                            : modelData.points >= 11 ? root.scoreColor : Theme.warn
+                                // 0..1: how far the reason is open. Opens after a
+                                // short dwell (sweeping the pointer down the list
+                                // doesn't make every row flap), closes at once.
+                                property real reveal: 0
+                                property bool open: false
+                                Behavior on reveal {
+                                    NumberAnimation {
+                                        duration: part.open ? 340 : 220
+                                        easing.type: part.open ? Easing.OutCubic : Easing.InOutCubic
+                                    }
+                                }
+                                onOpenChanged: reveal = open ? 1 : 0
+                                Timer {
+                                    id: dwell
+                                    interval: 110
+                                    onTriggered: part.open = part.hot && part.hasWhy
+                                }
+                                onHotChanged: {
+                                    if (hot && fillBar.width > 8) glintRun.restart()
+                                    if (hot && hasWhy) dwell.restart()
+                                    else { dwell.stop(); open = false }
+                                }
+                                // the whole row lifts a touch while it is hot
+                                property real lift: hot ? 1 : 0
+                                Behavior on lift { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+
+                                HoverHandler { id: partHover; cursorShape: part.hasWhy ? Qt.PointingHandCursor : Qt.ArrowCursor }
                                 RowLayout {
                                     Layout.fillWidth: true
                                     spacing: Tokens.space2
@@ -1131,9 +1164,19 @@ Item {
                                         text: modelData.label
                                         font.pixelSize: Tokens.fontBody
                                         weight: Tokens.weightDemiBold
-                                        color: Theme.on_surface
+                                        color: part.hot ? Theme.text_strong : Theme.on_surface
                                         Layout.fillWidth: true
                                         elide: Text.ElideRight
+                                        Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: 180 } }
+                                    }
+                                    // a small chevron says "there is more here", and turns as it opens
+                                    C.IconGlyph {
+                                        visible: part.hasWhy
+                                        name: "expand_more"
+                                        size: 14
+                                        glyphColor: Theme.on_surface_var
+                                        opacity: 0.35 + 0.65 * Math.max(part.lift, part.reveal)
+                                        rotation: 180 * part.reveal
                                     }
                                     C.AppText {
                                         text: modelData.points + "/20"
@@ -1142,26 +1185,70 @@ Item {
                                         color: modelData.points >= 16 ? Theme.secondary_container
                                              : modelData.points >= 11 ? Theme.on_surface_var : Theme.warn
                                         LayoutMirroring.enabled: false
+                                        scale: 1 + 0.08 * part.lift
+                                        transformOrigin: Item.Right
                                     }
                                 }
-                                Rectangle {
+                                // the bar: thickens and brightens while hot
+                                Item {
                                     Layout.fillWidth: true
-                                    implicitHeight: 6
-                                    radius: 3
-                                    color: Theme.surface_highest
+                                    Layout.topMargin: 4
+                                    implicitHeight: 8
                                     Rectangle {
-                                        height: parent.height
-                                        radius: 3
-                                        width: parent.width * Math.min(1, root.scoreShown / Math.max(1, root.score)) * modelData.points / 20
-                                        color: modelData.points >= 16 ? Theme.secondary_container
-                                             : modelData.points >= 11 ? root.scoreColor : Theme.warn
+                                        id: track
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        height: 6 + 2 * part.lift
+                                        radius: height / 2
+                                        color: Theme.surface_highest
+                                        Rectangle {
+                                            id: fillBar
+                                            height: parent.height
+                                            radius: height / 2
+                                            width: parent.width * Math.min(1, root.scoreShown / Math.max(1, root.score)) * modelData.points / 20
+                                            color: part.hot ? Qt.lighter(part.tone, Theme.isDark ? 1.18 : 1.06) : part.tone
+                                            Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: 200 } }
+                                            clip: true
+                                            // one soft glint runs along the fill when the row turns hot
+                                            Rectangle {
+                                                id: glint
+                                                width: 60
+                                                height: parent.height
+                                                x: -width
+                                                opacity: 0
+                                                gradient: Gradient {
+                                                    orientation: Gradient.Horizontal
+                                                    GradientStop { position: 0.0; color: U.withAlpha("#FFFFFF", 0.0) }
+                                                    GradientStop { position: 0.5; color: U.withAlpha("#FFFFFF", Theme.isDark ? 0.45 : 0.6) }
+                                                    GradientStop { position: 1.0; color: U.withAlpha("#FFFFFF", 0.0) }
+                                                }
+                                            }
+                                            SequentialAnimation {
+                                                id: glintRun
+                                                PropertyAction { target: glint; property: "opacity"; value: 1 }
+                                                XAnimator { target: glint; from: -glint.width; to: fillBar.width; duration: 620; easing.type: Easing.InOutSine }
+                                                PropertyAction { target: glint; property: "opacity"; value: 0 }
+                                            }
+                                        }
                                     }
                                 }
-                                Body {
-                                    visible: partHover.hovered && (modelData.why || "") !== ""
-                                    text: modelData.why || ""
-                                    font.pixelSize: Tokens.fontCaption + 1
-                                    color: Theme.on_surface_var
+                                // the reason: grows open, fades and slides in
+                                Item {
+                                    id: whyBox
+                                    Layout.fillWidth: true
+                                    visible: part.hasWhy && part.reveal > 0.001
+                                    implicitHeight: (whyText.implicitHeight + 6) * part.reveal
+                                    clip: true
+                                    Body {
+                                        id: whyText
+                                        width: parent.width
+                                        y: 6 - 6 * (1 - part.reveal)
+                                        text: modelData.why || ""
+                                        font.pixelSize: Tokens.fontCaption + 1
+                                        color: Theme.on_surface_var
+                                        opacity: Math.max(0, (part.reveal - 0.15) / 0.85)
+                                    }
                                 }
                             }
                         }

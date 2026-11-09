@@ -128,6 +128,7 @@ from app.qml_backend.vm.quality_probe import QualityProbeVM
 from app.qml_backend.vm.settings_vm import SettingsVM
 from app.qml_backend.vm.studio_vm import StudioVM
 from app.qml_backend.vm.usage_vm import UsageVM
+from app.qml_backend.vm.voice_studio_vm import VoiceStudioVM
 from app.qml_backend.web_bridge import WebBridge, bridge_running
 from app.qml_backend.vm.extension_setup_vm import ExtensionSetupVM
 
@@ -176,7 +177,16 @@ def main():
     # FATAL. Appended, so flags already set in the environment are kept.
     _cf = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
     if "--log-level" not in _cf:
-        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (_cf + " --log-level=3").strip()
+        _cf = (_cf + " --log-level=3").strip()
+    # v1.4.2 (memory): the Support window shows ONE page. One renderer
+    # process at most (a payment hop reuses it instead of spawning a second
+    # ~80 MB process) and no back-forward cache (it keeps every page you
+    # navigated away from alive in RAM).
+    if "--renderer-process-limit" not in _cf:
+        _cf += " --renderer-process-limit=1"
+    if "BackForwardCache" not in _cf:
+        _cf += " --disable-features=BackForwardCache"
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = _cf.strip()
 
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
@@ -335,6 +345,11 @@ def main():
     # Video Cutter: cut a segment out of a link or a local file. One instance
     # for the whole app, like every other page VM.
     cutter_vm = CutterVM()
+    # v1.3: captions / AI translation / AI dubbing for downloads and clips
+    voice_studio_vm = VoiceStudioVM()
+    # v1.4.7: captions / dub finished from the sheet → the row shows the new file
+    voice_studio_vm.adopted.connect(
+        lambda who: downloads_vm.refresh() if who == "download" else cutter_vm.refreshClips())
     # Script Studio: reads the blueprints Content Lab / AI Ideas already stored
     # and drives the teleprompter. Constructed here rather than lazily because
     # the BlueprintPane overlay on two other pages talks to the same instance.
@@ -456,6 +471,7 @@ def main():
     ctx.setContextProperty("Ideas", ideas_vm)
     ctx.setContextProperty("ContentLab", content_lab_vm)
     ctx.setContextProperty("Cutter", cutter_vm)
+    ctx.setContextProperty("VoiceStudio", voice_studio_vm)
     ctx.setContextProperty("Studio", studio_vm)
     ctx.setContextProperty("Insights", insights_vm)
     ctx.setContextProperty("Chat", chat_vm)
@@ -530,6 +546,9 @@ def main():
     # without opening the app). See app/qml_backend/web_bridge.py.
     web_bridge = WebBridge(downloads_vm, desktop_notify, cutter_vm=cutter_vm)
     web_bridge.extensionSeen.connect(ext_setup.markConnected)
+    # v1.4.2: the extension talking to us is the strongest "a download is
+    # coming" signal there is — warm yt-dlp then (once), not at every launch.
+    web_bridge.extensionSeen.connect(app_ctrl.prewarmDownloadEngine)
     web_bridge.start()
     # First update check a few seconds after the window is up, then every
     # UPDATE_CHECK_HOURS. Silent unless a newer release exists.
@@ -573,6 +592,13 @@ def main():
     # the window loses focus). See app/qml_backend/gc_pacing.py.
     from app.qml_backend import gc_pacing
     gc_pacing.install(app)
+    # v1.4.2: hand memory back while the window is in the background /
+    # minimised (QML GC + component cache, Python GC, image caches, working
+    # set). See app/qml_backend/mem_trim.py. YH_MEM=1 logs the numbers.
+    from app.qml_backend.mem_trim import MemoryTrimmer
+    mem_trimmer = MemoryTrimmer(app, engine, engine.rootObjects()[0])
+    app_ctrl._mem_trimmer = mem_trimmer
+    app._qml_refs = app._qml_refs + (mem_trimmer,)
     sys.exit(app.exec())
 
 

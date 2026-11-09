@@ -24,6 +24,7 @@ from app.config import load_app_config
 from app.core.cutter import (
     DOWNLOAD_CANCELLED, clean_error, cut_file, cut_link, extract_clip_thumb,
     fmt_clock, parse_clock, probe_file_with_error, probe_link)
+from app.core import post_fx as FX
 from app.core.db.clips import (
     clips_add, clips_clear, clips_delete, clips_list, clips_update_channel)
 from app.core.db.ideas import DATA_DB_PATH
@@ -155,6 +156,9 @@ class CutterVM(QObject):
         self._clips = []
         # cuts started from the browser extension, shown live on this page
         self._ext_cuts = {}
+        # v1.4: captions / dub running on the clip that was just cut
+        self._post_pid = ""
+        self._post = {}
         self._ext_cancel = None
         # source video's channel identity (link mode), recorded with each clip
         self._channel = {}
@@ -307,6 +311,10 @@ class CutterVM(QObject):
     @Property(str, notify=changed)
     def thumbId(self):
         return self._thumb_id
+
+    @Property(str, notify=changed)
+    def videoId(self):
+        return self._video_id
 
     @Property(float, notify=changed)
     def durationSec(self):
@@ -714,9 +722,45 @@ class CutterVM(QObject):
         self.changed.emit()
 
     # ── cut ──────────────────────────────────────────────────────────────
+    # ── v1.4: post-production (captions / dub after the cut) ──────────
+    @Property(bool, notify=changed)
+    def postActive(self):
+        return bool(self._post_pid)
+
+    @Property(int, notify=progressChanged)
+    def postPct(self):
+        return int(round(float(self._post.get("pct") or 0) * 100))
+
+    @Property(str, notify=progressChanged)
+    def postStage(self):
+        return str(self._post.get("stage") or "")
+
+    @Property("QVariantList", notify=progressChanged)
+    def postSteps(self):
+        steps = [{"kind": "cut", "label": tr("Cut"), "state": "done", "pct": 1.0}]
+        return steps + list(self._post.get("steps") or [])
+
+    @Property(str, notify=changed)
+    def resultNote(self):
+        return str(self._post.get("doneNote") or "")
+
+    @Slot()
+    def cancelPost(self):
+        if not self._post_pid:
+            return
+        try:
+            from app.qml_backend.vm.voice_studio_vm import VoiceStudioVM
+            st = VoiceStudioVM.instance()
+            if st is not None and st.cancel_pipeline(self._post_pid):
+                self._post["stage"] = tr("Stopping…")
+                self.progressChanged.emit()
+        except Exception:                 # noqa: BLE001
+            pass
+
     @Property(bool, notify=changed)
     def canCut(self):
         return (self._has_info and not self._probing and not self._cutting
+                and not self._post_pid
                 and self._end > self._start
                 and (self._mode == 1 or len(self._qualities) > 0))
 
@@ -1016,6 +1060,12 @@ class CutterVM(QObject):
         self._cutting = False
         self._cancel = False
         self._pause = False
+        # v1.4: captions / dub picked for this clip → the cut is step 1 of
+        # the job; the dock keeps its progress until they are done
+        if ok and message != DOWNLOAD_CANCELLED and filepath and self._start_post(filepath):
+            self.changed.emit()
+            self.progressChanged.emit()
+            return
         # v3.41: a live card still on screen becomes the "done" notice itself
         live = notifier()
         consumed = False
@@ -1055,7 +1105,7 @@ class CutterVM(QObject):
         self.changed.emit()
         self.progressChanged.emit()
 
-    def _record_clip(self, filepath):
+    def _record_clip(self, filepath, original_path="", post_fx=""):
         """Persist one finished clip into the history (best effort)."""
         try:
             if not filepath or not os.path.isfile(filepath):
@@ -1071,11 +1121,111 @@ class CutterVM(QObject):
                 start_sec=self._cut_start, end_sec=self._cut_end,
                 quality_label=self._result_label,
                 filepath=filepath, file_size=file_size_of(filepath),
-                channel=self._channel if self._mode == 0 else None)
+                channel=self._channel if self._mode == 0 else None,
+                original_path=original_path or "", post_fx=post_fx or "")
         except Exception:                 # noqa: BLE001 — history is auxiliary
             log_crash("CutterVM record clip failed:\n"
                       + traceback.format_exc())
         self.refreshClips()
+
+    def _start_post(self, filepath):
+        try:
+            from app.qml_backend.vm.voice_studio_vm import VoiceStudioVM
+            st = VoiceStudioVM.instance()
+            if st is None:
+                return False
+            link = self._mode == 0
+            vid = self._video_id if link else ""
+            fb = "" if link else "local:" + os.path.normcase(os.path.abspath(self._file_path))
+            entry = st.take_queued(vid, filepath, fallback_key=fb)
+            if not entry:
+                return False
+            title = ((self._title or "") if link else (os.path.basename(self._file_path) or ""))
+            self._post = {"pct": 0.0, "stage": tr("Starting captions & dub…"), "steps": [],
+                          "raw": filepath, "entry": dict(entry)}
+            pid = st.start_pipeline("cut", filepath, vid, title, self._cut_start, self._cut_end,
+                                    entry, on_update=self._on_post_update,
+                                    on_done=self._on_post_done)
+            if not pid:
+                self._post = {}
+                return False
+            self._post_pid = pid
+            self._set_status(tr("Cut. Now adding captions & dub…"), "muted")
+            self.toast.emit(tr("Clip cut. Now adding captions & dub…"), "info")
+            live = notifier()
+            if live is not None:
+                live.live_update("cut", stage=tr("Captions & dub"), pct=0, indeterminate=False)
+            return True
+        except Exception:                 # noqa: BLE001 — the clip is safe
+            log_crash("CutterVM post-production failed:\n" + traceback.format_exc())
+            self._post, self._post_pid = {}, ""
+            return False
+
+    def _on_post_update(self, summary):
+        self._post.update({"pct": summary.get("pct") or 0.0,
+                           "stage": summary.get("stage") or "",
+                           "steps": summary.get("steps") or []})
+        self.progressChanged.emit()
+        live = notifier()
+        if live is not None:
+            live.live_update("cut", stage=summary.get("stage") or tr("Captions & dub"),
+                             pct=int(round(float(summary.get("pct") or 0) * 100)),
+                             indeterminate=False)
+
+    def _on_post_done(self, summary):
+        raw = self._post.get("raw") or ""
+        entry = self._post.get("entry") or {}
+        final = summary.get("video") or ""
+        if not final or not os.path.isfile(final):
+            final = raw
+        state = summary.get("state")
+        self._post_pid = ""
+        self._post = {"steps": summary.get("steps") or [], "pct": 1.0,
+                      "doneNote": (tr("with captions & dub") if state == "done"
+                                   else tr("plain clip: captions & dub stopped") if state == "cancelled"
+                                   else (summary.get("error") or ""))}
+        self._result_path = final or ""
+        self._set_status(tr("Saved."), "ok")
+        # v1.4.7: the clip row shows the captioned / dubbed version and
+        # remembers the plain cut beside it
+        from app.core import post_fx as FX
+        layers = FX.pipeline_layers(entry, summary, raw, final)
+        self._record_clip(final, original_path=raw if layers else "",
+                          post_fx=FX.dump(layers))
+        live = notifier()
+        consumed = False
+        if live is not None:
+            try:
+                consumed = live.live_finish("cut", "success", path=final)
+            except Exception:             # noqa: BLE001
+                consumed = False
+        from app.qml_backend.vm import _post_production as post
+        text, kind = post.finish_text(state, summary)
+        self.toast.emit(text.replace("{f}", os.path.basename(final or "")), kind)
+        if not consumed:
+            announce("success", tr("Clip ready"), os.path.basename(final or ""), page=12,
+                     path=final, icon="scissors", source=tr("Video Cutter"))
+        self.changed.emit()
+        self.progressChanged.emit()
+
+    def _run_queued_studio(self, filepath):
+        """Captions/dub picked before the cut run against the finished clip."""
+        try:
+            from app.qml_backend.vm.voice_studio_vm import VoiceStudioVM
+            studio = VoiceStudioVM.instance()
+            if studio is None:
+                return
+            link = self._mode == 0
+            title = ((self._title or "") if link
+                     else (os.path.basename(self._file_path) or ""))
+            studio.runQueued(
+                self._video_id if link else "", filepath, title=title,
+                clip_start=self._cut_start, clip_end=self._cut_end,
+                fallback_key="" if link else
+                "local:" + os.path.normcase(os.path.abspath(self._file_path)))
+        except Exception:                 # noqa: BLE001 — the clip is safe
+            log_crash("CutterVM queued Voice Studio failed:\n"
+                      + traceback.format_exc())
 
     # ── persisted clips history ──────────────────────────────────────
     @Slot()
@@ -1101,6 +1251,8 @@ class CutterVM(QObject):
                 "sizeText": _size_text(item.get("file_size") or 0),
                 "fileName": os.path.basename(fp) if fp else "",
                 "filepath": fp,
+                # v1.4.7: captions / dub in this clip's file
+                "fx": FX.badge(item.get("post_fx"), fp),
                 "exists": bool(fp) and os.path.isfile(fp),
                 "videoId": item.get("video_id") or "",
                 "isAudio": os.path.splitext(fp)[1].lower() in _AUDIO_EXTS,
@@ -1512,6 +1664,8 @@ class CutterVM(QObject):
 
     @Slot()
     def newClip(self):
+        if not self._post_pid:
+            self._post = {}
         """Back to a fresh cut on the same source (keeps the probed info)."""
         self._result_path = ""
         self._result_label = ""

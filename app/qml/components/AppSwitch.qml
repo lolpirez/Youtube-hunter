@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Layouts
 import NicheScope
 import "../Utils.js" as U
 
@@ -7,6 +8,10 @@ import "../Utils.js" as U
 Switch {
     id: root
     implicitHeight: 26
+    // v1.4: a layout may never squeeze a switch: its track is drawn at a
+    // fixed 44 px, so a narrower item let it poke out of its card
+    Layout.minimumWidth: implicitWidth
+    Layout.fillWidth: false
 
     // Pointing-hand cursor whenever the switch is live.
     HoverHandler {
@@ -53,6 +58,6 @@ Switch {
         text: root.text
         color: Theme.on_surface
         verticalAlignment: Text.AlignVCenter
-        leftPadding: root.indicator.width + Tokens.space3
+        leftPadding: root.text !== "" ? root.indicator.width + Tokens.space3 : root.indicator.width
     }
 }

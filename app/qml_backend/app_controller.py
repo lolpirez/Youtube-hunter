@@ -14,6 +14,8 @@ It deliberately holds NO scraping/business logic — that lives in the per-page
 ViewModels (app.qml_backend.vm.*), which call straight into app.core.
 """
 
+import os
+
 from PySide6.QtCore import QObject, Property, QPointF, QTimer, Signal, Slot
 from PySide6.QtGui import QCursor
 
@@ -90,6 +92,24 @@ def resolved_telegram_url() -> str:
 
 # Bump when the onboarding tour changes enough to be worth showing again.
 TOUR_VERSION = 2
+
+
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+# v1.4.2 (memory) — page lifetime policy, read by Main.qml's page stack.
+#   YH_PAGE_WARM  pages pre-built in the background after start-up (-1 = all,
+#                 the old behaviour). Every other page is built on hover/click.
+#   YH_PAGE_KEEP  hidden pages kept alive besides the landing page, most
+#                 recently used first (0 = keep everything, the old behaviour).
+#   YH_PAGE_IDLE  seconds a page must have been hidden before it may be freed.
+PAGE_WARM_COUNT = _env_int("YH_PAGE_WARM", 3)
+PAGE_KEEP_ALIVE = _env_int("YH_PAGE_KEEP", 5)
+PAGE_IDLE_SEC = _env_int("YH_PAGE_IDLE", 180)
 
 class AppController(QObject):
     """Application shell state for the QML UI."""
@@ -180,9 +200,18 @@ class AppController(QObject):
         self._quota_heartbeat.start()
 
         # v3.41.3: warm the download engine (yt-dlp import, ffmpeg dir, JS
-        # runtime) off the GUI thread once the window has settled, so the
-        # first download/cut doesn't spend its "Preparing…" on it.
-        QTimer.singleShot(4000, self._prewarm_download_engine)
+        # runtime) off the GUI thread, so the first download/cut doesn't spend
+        # its "Preparing…" on it.
+        # v1.4.2 (memory): on INTENT instead of 4 s after every launch. The
+        # import alone is tens of MB of Python heap (yt-dlp + the YouTube
+        # extractor) that a session spent scraping / researching never uses.
+        # It now runs the moment the user opens Downloads or Video Cutter, or
+        # the browser extension says hello (main_qml.py) — still seconds
+        # before the first real download. YH_DL_PREWARM=eager = old timing.
+        self._dl_prewarmed = False
+        self._mem_trimmer = None          # set by main_qml.py
+        if os.environ.get("YH_DL_PREWARM", "").lower() == "eager":
+            QTimer.singleShot(4000, self._prewarm_download_engine)
         # v1.0.1: the prewarm also starts the PO Token helper. On Windows 11
         # Smart App Control refuses to run it (it is not signed), and the only
         # symptom used to be a download failing for an unrelated-looking
@@ -206,7 +235,15 @@ class AppController(QObject):
         except Exception:                # noqa: BLE001 — cosmetic
             pass
 
+    @Slot()
+    def prewarmDownloadEngine(self):
+        """Warm yt-dlp once, the first time a download is likely (idempotent)."""
+        self._prewarm_download_engine()
+
     def _prewarm_download_engine(self):
+        if self._dl_prewarmed:
+            return
+        self._dl_prewarmed = True
         import threading
 
         def _warm():
@@ -331,6 +368,30 @@ class AppController(QObject):
             gc_pacing.hold(900)
             self._current_page = int(idx)
             self.currentPageChanged.emit()
+            if self._current_page in (PAGE_DOWNLOADS, PAGE_CUTTER) and not self._dl_prewarmed:
+                # after the page's entrance, off the GUI thread
+                QTimer.singleShot(700, self._prewarm_download_engine)
+
+    # ── memory policy (v1.4.2) ─────────────────────────────────────────
+    @Property(int, constant=True)
+    def pageWarmCount(self):
+        return PAGE_WARM_COUNT
+
+    @Property(int, constant=True)
+    def pageKeepAlive(self):
+        return PAGE_KEEP_ALIVE
+
+    @Property(int, constant=True)
+    def pageIdleSec(self):
+        return max(0, PAGE_IDLE_SEC)
+
+    @Slot()
+    def trimMemorySoon(self):
+        """QML freed something big (a page, the Support window): let the
+        trimmer release the engine's caches once the UI is idle."""
+        t = self._mem_trimmer
+        if t is not None:
+            t.request_light_trim()
 
     @Slot(int)
     def goto(self, idx):
