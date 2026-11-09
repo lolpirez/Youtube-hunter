@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import QtQuick.Shapes
 import NicheScope
 import "." as C
 import "../Utils.js" as U
@@ -1050,7 +1051,12 @@ Item {
                     }
                 }
 
-                // THE SCORE — five audited parts + the blueprint check
+                // THE SCORE v2 "Scorecard": a gauge with a verdict up top, the
+                // five parts as notched meters on one line each, and the check
+                // as a segmented strip. Light on purpose: one Shape (the gauge,
+                // 3 arcs), plain Rectangles everywhere else, no layers, no
+                // shaders, no running loops (the only motion is the count-up
+                // that already drives scoreShown, and a hover glint).
                 Rectangle {
                     id: scoreCard
                     Layout.fillWidth: true
@@ -1064,14 +1070,45 @@ Item {
                     border.color: Theme.border
                     implicitHeight: scoreCol.implicitHeight + Tokens.space6 * 2
 
+                    readonly property var parts: root.hasScoreParts ? (root.idea.scoreParts || []) : []
+                    readonly property real frac: Math.max(0, Math.min(1, root.scoreShown / 100))
+                    readonly property string verdict: root.score >= 85 ? I18n.tr("Greenlight")
+                                                    : root.score >= 70 ? I18n.tr("Strong contender")
+                                                    : root.score >= 55 ? I18n.tr("Promising")
+                                                    : I18n.tr("Needs work")
+                    function _pick(best) {
+                        var p = scoreCard.parts, k = -1
+                        for (var i = 0; i < p.length; i++)
+                            if (k < 0 || (best ? p[i].points > p[k].points : p[i].points < p[k].points)) k = i
+                        return k
+                    }
+                    readonly property int bestI: _pick(true)
+                    readonly property int worstI: _pick(false)
+                    function tone(pts) {
+                        return pts >= 16 ? Theme.secondary_container : pts >= 11 ? Theme.primary : Theme.warn
+                    }
+
+                    // the score's own light, behind the gauge
                     C.GlowBlob {
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.rightMargin: -40
-                        anchors.topMargin: -60
-                        size: 220
+                        x: Tokens.space6 + 54 - width / 2
+                        y: Tokens.space6 + 54 - height / 2
+                        size: 260
                         glow: root.scoreColor
-                        strength: Theme.isDark ? 0.14 : 0.08
+                        strength: Theme.isDark ? 0.12 : 0.06
+                    }
+                    // specular hairline on the top edge: the card reads as glass
+                    Rectangle {
+                        anchors.top: parent.top
+                        anchors.topMargin: 1
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: parent.width * 0.7
+                        height: 1
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0; color: U.withAlpha("#FFFFFF", 0.0) }
+                            GradientStop { position: 0.5; color: U.withAlpha("#FFFFFF", Theme.isDark ? 0.10 : 0.7) }
+                            GradientStop { position: 1.0; color: U.withAlpha("#FFFFFF", 0.0) }
+                        }
                     }
 
                     ColumnLayout {
@@ -1080,174 +1117,318 @@ Item {
                         anchors.right: parent.right
                         anchors.top: parent.top
                         anchors.margins: Tokens.space6
-                        spacing: Tokens.space4
+                        spacing: Tokens.space5
 
+                        // ── head: gauge + verdict ──
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: Tokens.space3
-                            Row {
-                                LayoutMirroring.enabled: false
-                                spacing: Tokens.space2
-                                C.AppText {
-                                    text: String(Math.round(root.scoreShown))
-                                    weight: Tokens.weightExtraBold
-                                    font.pixelSize: 58
-                                    color: Theme.text_strong
+                            spacing: Tokens.space5
+                            LayoutMirroring.enabled: false
+
+                            Item {
+                                id: gauge
+                                Layout.preferredWidth: 108
+                                Layout.preferredHeight: 108
+                                readonly property real c: 54
+                                readonly property real r: 46
+                                readonly property real endA: (135 + 270 * scoreCard.frac) * Math.PI / 180
+                                Shape {
+                                    anchors.fill: parent
+                                    preferredRendererType: Shape.CurveRenderer
+                                    // track
+                                    ShapePath {
+                                        strokeWidth: 7
+                                        strokeColor: Theme.surface_highest
+                                        fillColor: "transparent"
+                                        capStyle: ShapePath.RoundCap
+                                        PathAngleArc { centerX: gauge.c; centerY: gauge.c; radiusX: gauge.r; radiusY: gauge.r
+                                                       startAngle: 135; sweepAngle: 270 }
+                                    }
+                                    // soft halo under the fill
+                                    ShapePath {
+                                        strokeWidth: 15
+                                        strokeColor: U.withAlpha(root.scoreColor, Theme.isDark ? 0.16 : 0.12)
+                                        fillColor: "transparent"
+                                        capStyle: ShapePath.RoundCap
+                                        PathAngleArc { centerX: gauge.c; centerY: gauge.c; radiusX: gauge.r; radiusY: gauge.r
+                                                       startAngle: 135; sweepAngle: Math.max(0.5, 270 * scoreCard.frac) }
+                                    }
+                                    // the fill
+                                    ShapePath {
+                                        strokeWidth: 7
+                                        strokeColor: root.scoreColor
+                                        fillColor: "transparent"
+                                        capStyle: ShapePath.RoundCap
+                                        PathAngleArc { centerX: gauge.c; centerY: gauge.c; radiusX: gauge.r; radiusY: gauge.r
+                                                       startAngle: 135; sweepAngle: Math.max(0.5, 270 * scoreCard.frac) }
+                                    }
                                 }
-                                C.AppText {
-                                    text: "/100"
-                                    font.pixelSize: Tokens.fontLabel
-                                    color: Theme.outline
-                                    anchors.bottom: parent.bottom
-                                    anchors.bottomMargin: 11
+                                // a spark rides the end of the fill
+                                Rectangle {
+                                    visible: scoreCard.frac > 0.01
+                                    width: 5; height: 5; radius: 2.5
+                                    antialiasing: true
+                                    color: "#FFFFFF"
+                                    opacity: Theme.isDark ? 0.9 : 0.95
+                                    x: gauge.c + gauge.r * Math.cos(gauge.endA) - width / 2
+                                    y: gauge.c + gauge.r * Math.sin(gauge.endA) - height / 2
+                                }
+                                Column {
+                                    anchors.centerIn: parent
+                                    anchors.verticalCenterOffset: 2
+                                    spacing: -4
+                                    C.AppText {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        text: String(Math.round(root.scoreShown))
+                                        weight: Tokens.weightExtraBold
+                                        font.pixelSize: 40
+                                        font.letterSpacing: -1
+                                        font.features: ({ "tnum": 1 })
+                                        color: Theme.text_strong
+                                    }
+                                    C.AppText {
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        text: "/100"
+                                        mono: true
+                                        font.pixelSize: Tokens.fontMicro
+                                        color: Theme.outline
+                                    }
                                 }
                             }
-                            Item { Layout.fillWidth: true }
+
                             ColumnLayout {
+                                Layout.fillWidth: true
                                 Layout.alignment: Qt.AlignVCenter
-                                spacing: 2
-                                Caption { text: I18n.tr("Greenlight score"); horizontalAlignment: Text.AlignRight }
+                                spacing: 6
                                 C.AppText {
-                                    Layout.alignment: Qt.AlignRight
-                                    text: root.hasScoreParts ? I18n.tr("sum of 5 parts") : I18n.tr("model estimate")
+                                    text: I18n.tr("Greenlight score")
+                                    font.pixelSize: Tokens.fontMicro
+                                    font.capitalization: Font.AllUppercase
+                                    font.letterSpacing: 1.4
+                                    weight: Tokens.weightBold
+                                    color: Theme.outline
+                                }
+                                Row {
+                                    spacing: 10
+                                    Rectangle {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 8; height: 8; radius: 4
+                                        antialiasing: true
+                                        color: root.scoreColor
+                                    }
+                                    C.AppText {
+                                        text: scoreCard.verdict
+                                        weight: Tokens.weightBold
+                                        font.pixelSize: 24
+                                        font.letterSpacing: -0.4
+                                        color: Theme.text_strong
+                                    }
+                                }
+                                // best and weakest part: what to keep, what to fix
+                                Flow {
+                                    Layout.fillWidth: true
+                                    spacing: Tokens.space2
+                                    visible: scoreCard.bestI >= 0
+                                    Repeater {
+                                        model: scoreCard.bestI >= 0 && scoreCard.worstI !== scoreCard.bestI
+                                               ? [{ i: scoreCard.bestI, up: true }, { i: scoreCard.worstI, up: false }]
+                                               : (scoreCard.bestI >= 0 ? [{ i: scoreCard.bestI, up: true }] : [])
+                                        Rectangle {
+                                            readonly property var p: scoreCard.parts[modelData.i] || ({})
+                                            readonly property color t: modelData.up ? Theme.secondary_container : Theme.warn
+                                            radius: Tokens.radiusPill
+                                            color: U.withAlpha(t, Theme.isDark ? 0.10 : 0.08)
+                                            border.width: 1
+                                            border.color: U.withAlpha(t, 0.28)
+                                            implicitWidth: chipRow.implicitWidth + 18
+                                            implicitHeight: 24
+                                            Row {
+                                                id: chipRow
+                                                anchors.centerIn: parent
+                                                spacing: 6
+                                                C.IconGlyph { anchors.verticalCenter: parent.verticalCenter
+                                                              name: modelData.up ? "expand_less" : "expand_more"; size: 12; glyphColor: t }
+                                                C.AppText {
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    text: (modelData.up ? I18n.tr("Strongest") : I18n.tr("Fix first")) + "  " + (p.label || "")
+                                                    font.pixelSize: Tokens.fontCaption
+                                                    weight: Tokens.weightDemiBold
+                                                    color: Theme.text_strong
+                                                }
+                                                C.AppText {
+                                                    anchors.verticalCenter: parent.verticalCenter
+                                                    text: String(p.points || 0)
+                                                    mono: true
+                                                    font.pixelSize: Tokens.fontCaption
+                                                    color: t
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                C.AppText {
+                                    visible: !root.hasScoreParts
+                                    text: I18n.tr("model estimate")
                                     font.pixelSize: Tokens.fontCaption
                                     color: Theme.outline
                                 }
                             }
                         }
 
-                        // five parts, each out of 20
-                        Repeater {
-                            model: root.hasScoreParts ? root.idea.scoreParts : []
-                            ColumnLayout {
-                                id: part
-                                Layout.fillWidth: true
-                                // v1.4.8: no layout spacing. The bar and the reason
-                                // carry their own gap, so a collapsed reason takes
-                                // exactly 0 px and the open / close never jumps.
-                                spacing: 0
-                                readonly property bool hasWhy: (modelData.why || "") !== ""
-                                readonly property bool hot: partHover.hovered
-                                readonly property color tone: modelData.points >= 16 ? Theme.secondary_container
-                                                            : modelData.points >= 11 ? root.scoreColor : Theme.warn
-                                // 0..1: how far the reason is open. Opens after a
-                                // short dwell (sweeping the pointer down the list
-                                // doesn't make every row flap), closes at once.
-                                property real reveal: 0
-                                property bool open: false
-                                Behavior on reveal {
-                                    NumberAnimation {
-                                        duration: part.open ? 340 : 220
-                                        easing.type: part.open ? Easing.OutCubic : Easing.InOutCubic
-                                    }
-                                }
-                                onOpenChanged: reveal = open ? 1 : 0
-                                Timer {
-                                    id: dwell
-                                    interval: 110
-                                    onTriggered: part.open = part.hot && part.hasWhy
-                                }
-                                onHotChanged: {
-                                    if (hot && fillBar.width > 8) glintRun.restart()
-                                    if (hot && hasWhy) dwell.restart()
-                                    else { dwell.stop(); open = false }
-                                }
-                                // the whole row lifts a touch while it is hot
-                                property real lift: hot ? 1 : 0
-                                Behavior on lift { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
-
-                                HoverHandler { id: partHover; cursorShape: part.hasWhy ? Qt.PointingHandCursor : Qt.ArrowCursor }
-                                RowLayout {
+                        // ── five parts, each out of 20, one line each ──
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            visible: root.hasScoreParts
+                            spacing: Tokens.space2
+                            Repeater {
+                                model: scoreCard.parts
+                                ColumnLayout {
+                                    id: part
                                     Layout.fillWidth: true
-                                    spacing: Tokens.space2
-                                    C.AppText {
-                                        text: modelData.label
-                                        font.pixelSize: Tokens.fontBody
-                                        weight: Tokens.weightDemiBold
-                                        color: part.hot ? Theme.text_strong : Theme.on_surface
-                                        Layout.fillWidth: true
-                                        elide: Text.ElideRight
-                                        Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: 180 } }
-                                    }
-                                    // a small chevron says "there is more here", and turns as it opens
-                                    C.IconGlyph {
-                                        visible: part.hasWhy
-                                        name: "expand_more"
-                                        size: 14
-                                        glyphColor: Theme.on_surface_var
-                                        opacity: 0.35 + 0.65 * Math.max(part.lift, part.reveal)
-                                        rotation: 180 * part.reveal
-                                    }
-                                    C.AppText {
-                                        text: modelData.points + "/20"
-                                        mono: true
-                                        font.pixelSize: Tokens.fontCaption + 1
-                                        color: modelData.points >= 16 ? Theme.secondary_container
-                                             : modelData.points >= 11 ? Theme.on_surface_var : Theme.warn
-                                        LayoutMirroring.enabled: false
-                                        scale: 1 + 0.08 * part.lift
-                                        transformOrigin: Item.Right
-                                    }
-                                }
-                                // the bar: thickens and brightens while hot
-                                Item {
-                                    Layout.fillWidth: true
-                                    Layout.topMargin: 4
-                                    implicitHeight: 8
-                                    Rectangle {
-                                        id: track
-                                        anchors.left: parent.left
-                                        anchors.right: parent.right
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        height: 6 + 2 * part.lift
-                                        radius: height / 2
-                                        color: Theme.surface_highest
-                                        Rectangle {
-                                            id: fillBar
-                                            height: parent.height
-                                            radius: height / 2
-                                            width: parent.width * Math.min(1, root.scoreShown / Math.max(1, root.score)) * modelData.points / 20
-                                            color: part.hot ? Qt.lighter(part.tone, Theme.isDark ? 1.18 : 1.06) : part.tone
-                                            Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: 200 } }
-                                            clip: true
-                                            // one soft glint runs along the fill when the row turns hot
-                                            Rectangle {
-                                                id: glint
-                                                width: 60
-                                                height: parent.height
-                                                x: -width
-                                                opacity: 0
-                                                gradient: Gradient {
-                                                    orientation: Gradient.Horizontal
-                                                    GradientStop { position: 0.0; color: U.withAlpha("#FFFFFF", 0.0) }
-                                                    GradientStop { position: 0.5; color: U.withAlpha("#FFFFFF", Theme.isDark ? 0.45 : 0.6) }
-                                                    GradientStop { position: 1.0; color: U.withAlpha("#FFFFFF", 0.0) }
-                                                }
-                                            }
-                                            SequentialAnimation {
-                                                id: glintRun
-                                                PropertyAction { target: glint; property: "opacity"; value: 1 }
-                                                XAnimator { target: glint; from: -glint.width; to: fillBar.width; duration: 620; easing.type: Easing.InOutSine }
-                                                PropertyAction { target: glint; property: "opacity"; value: 0 }
-                                            }
+                                    spacing: 0
+                                    readonly property bool hasWhy: (modelData.why || "") !== ""
+                                    readonly property bool hot: partHover.hovered
+                                    readonly property color tone: scoreCard.tone(modelData.points)
+                                    // the reason opens after a short dwell, closes at once
+                                    property real reveal: 0
+                                    property bool open: false
+                                    Behavior on reveal {
+                                        NumberAnimation {
+                                            duration: part.open ? 320 : 200
+                                            easing.type: part.open ? Easing.OutCubic : Easing.InOutCubic
                                         }
                                     }
-                                }
-                                // the reason: grows open, fades and slides in
-                                Item {
-                                    id: whyBox
-                                    Layout.fillWidth: true
-                                    visible: part.hasWhy && part.reveal > 0.001
-                                    implicitHeight: (whyText.implicitHeight + 6) * part.reveal
-                                    clip: true
-                                    Body {
-                                        id: whyText
-                                        width: parent.width
-                                        y: 6 - 6 * (1 - part.reveal)
-                                        text: modelData.why || ""
-                                        font.pixelSize: Tokens.fontCaption + 1
-                                        color: Theme.on_surface_var
-                                        opacity: Math.max(0, (part.reveal - 0.15) / 0.85)
+                                    onOpenChanged: reveal = open ? 1 : 0
+                                    Timer {
+                                        id: dwell
+                                        interval: 110
+                                        onTriggered: part.open = part.hot && part.hasWhy
+                                    }
+                                    onHotChanged: {
+                                        if (hot && fillBar.width > 8) glintRun.restart()
+                                        if (hot && hasWhy) dwell.restart()
+                                        else { dwell.stop(); open = false }
+                                    }
+                                    property real lift: hot ? 1 : 0
+                                    Behavior on lift { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+
+                                    HoverHandler { id: partHover; cursorShape: part.hasWhy ? Qt.PointingHandCursor : Qt.ArrowCursor }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 30
+                                        spacing: Tokens.space3
+                                        C.AppText {
+                                            Layout.preferredWidth: root.wide ? 128 : 96
+                                            text: modelData.label
+                                            font.pixelSize: Tokens.fontBody
+                                            weight: Tokens.weightDemiBold
+                                            color: part.hot ? Theme.text_strong : Theme.on_surface
+                                            elide: Text.ElideRight
+                                            Behavior on color { enabled: !Tokens.themeSwapping; ColorAnimation { duration: 160 } }
+                                        }
+                                        // the meter: a track cut into four 5-point notches
+                                        Item {
+                                            Layout.fillWidth: true
+                                            implicitHeight: 10
+                                            Rectangle {
+                                                id: track
+                                                anchors.left: parent.left
+                                                anchors.right: parent.right
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                height: 6 + 2 * part.lift
+                                                radius: height / 2
+                                                color: Theme.surface_highest
+                                                Rectangle {
+                                                    id: fillBar
+                                                    height: parent.height
+                                                    radius: height / 2
+                                                    width: parent.width * Math.min(1, root.scoreShown / Math.max(1, root.score)) * modelData.points / 20
+                                                    clip: true
+                                                    gradient: Gradient {
+                                                        orientation: Gradient.Horizontal
+                                                        GradientStop { position: 0.0; color: U.withAlpha(part.tone, 0.45) }
+                                                        GradientStop { position: 1.0; color: part.hot ? Qt.lighter(part.tone, Theme.isDark ? 1.2 : 1.06) : part.tone }
+                                                    }
+                                                    // one soft glint when the row turns hot
+                                                    Rectangle {
+                                                        id: glint
+                                                        width: 60
+                                                        height: parent.height
+                                                        x: -width
+                                                        opacity: 0
+                                                        gradient: Gradient {
+                                                            orientation: Gradient.Horizontal
+                                                            GradientStop { position: 0.0; color: U.withAlpha("#FFFFFF", 0.0) }
+                                                            GradientStop { position: 0.5; color: U.withAlpha("#FFFFFF", Theme.isDark ? 0.45 : 0.6) }
+                                                            GradientStop { position: 1.0; color: U.withAlpha("#FFFFFF", 0.0) }
+                                                        }
+                                                    }
+                                                    SequentialAnimation {
+                                                        id: glintRun
+                                                        PropertyAction { target: glint; property: "opacity"; value: 1 }
+                                                        XAnimator { target: glint; from: -glint.width; to: fillBar.width; duration: 600; easing.type: Easing.InOutSine }
+                                                        PropertyAction { target: glint; property: "opacity"; value: 0 }
+                                                    }
+                                                }
+                                                // notches at 5 / 10 / 15: card-coloured cuts
+                                                Repeater {
+                                                    model: 3
+                                                    Rectangle {
+                                                        x: Math.round(track.width * (index + 1) / 4) - 1
+                                                        width: 2
+                                                        height: track.height
+                                                        color: scoreCard.color
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Row {
+                                            Layout.preferredWidth: 52
+                                            LayoutMirroring.enabled: false
+                                            spacing: 1
+                                            layoutDirection: Qt.RightToLeft
+                                            C.AppText {
+                                                anchors.baseline: ptsBig.baseline
+                                                text: "/20"
+                                                mono: true
+                                                font.pixelSize: Tokens.fontMicro
+                                                color: Theme.outline
+                                            }
+                                            C.AppText {
+                                                id: ptsBig
+                                                text: String(modelData.points)
+                                                mono: true
+                                                weight: Tokens.weightBold
+                                                font.pixelSize: Tokens.fontBody
+                                                color: part.tone
+                                            }
+                                        }
+                                        C.IconGlyph {
+                                            Layout.preferredWidth: 14
+                                            name: "expand_more"
+                                            size: 14
+                                            glyphColor: Theme.on_surface_var
+                                            opacity: part.hasWhy ? 0.3 + 0.7 * Math.max(part.lift, part.reveal) : 0
+                                            rotation: 180 * part.reveal
+                                        }
+                                    }
+                                    // the reason: grows open under the meter
+                                    Item {
+                                        Layout.fillWidth: true
+                                        Layout.leftMargin: (root.wide ? 128 : 96) + Tokens.space3
+                                        visible: part.hasWhy && part.reveal > 0.001
+                                        implicitHeight: (whyText.implicitHeight + 8) * part.reveal
+                                        clip: true
+                                        Body {
+                                            id: whyText
+                                            width: parent.width
+                                            y: 2 - 6 * (1 - part.reveal)
+                                            text: modelData.why || ""
+                                            font.pixelSize: Tokens.fontCaption + 1
+                                            color: Theme.on_surface_var
+                                            opacity: Math.max(0, (part.reveal - 0.15) / 0.85)
+                                        }
                                     }
                                 }
                             }
@@ -1268,85 +1449,131 @@ Item {
                             }
                         }
 
-                        Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: Theme.border; Layout.topMargin: Tokens.space1 }
-
-                        // the model-free blueprint check
-                        RowLayout {
+                        // ── the model-free blueprint check, in an inset well ──
+                        Rectangle {
                             Layout.fillWidth: true
-                            spacing: Tokens.space2
-                            C.IconGlyph {
-                                name: root.auditAllOk ? "check_circle" : "checklist"
-                                fill: root.auditAllOk
-                                size: 16
-                                glyphColor: root.auditAllOk ? Theme.secondary_container : Theme.warn
-                            }
-                            C.AppText {
-                                Layout.fillWidth: true
-                                text: I18n.tr("Greenlight check")
-                                weight: Tokens.weightBold
-                                font.pixelSize: Tokens.fontBody
-                                color: Theme.text_strong
-                                elide: Text.ElideRight
-                            }
-                            C.AppText {
-                                text: root.num(root.audit.passed || 0) + " / " + root.num(root.audit.total || 0)
-                                mono: true
-                                font.pixelSize: Tokens.fontCaption + 1
-                                color: root.auditAllOk ? Theme.secondary_container : Theme.warn
-                            }
-                        }
-                        Repeater {
-                            model: {
-                                var c = root.audit.checks || [], bad = []
-                                for (var i = 0; i < c.length; i++) if (!c[i].ok) bad.push(c[i])
-                                return bad.slice(0, 4)
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: Tokens.space2
-                                Rectangle {
-                                    Layout.preferredWidth: 6; Layout.preferredHeight: 6
-                                    Layout.alignment: Qt.AlignTop
-                                    Layout.topMargin: 7
-                                    radius: 3
-                                    color: Theme.warn
+                            radius: Tokens.radiusLg
+                            color: U.withAlpha(Theme.on_surface, Theme.isDark ? 0.035 : 0.025)
+                            border.width: 1
+                            border.color: U.withAlpha(Theme.on_surface, Theme.isDark ? 0.06 : 0.05)
+                            implicitHeight: checkCol.implicitHeight + Tokens.space4 * 2
+                            ColumnLayout {
+                                id: checkCol
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: Tokens.space4
+                                spacing: Tokens.space3
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: Tokens.space2
+                                    C.IconGlyph {
+                                        name: root.auditAllOk ? "check_circle" : "checklist"
+                                        fill: root.auditAllOk
+                                        size: 16
+                                        glyphColor: root.auditAllOk ? Theme.secondary_container : Theme.warn
+                                    }
+                                    C.AppText {
+                                        text: I18n.tr("Greenlight check")
+                                        weight: Tokens.weightBold
+                                        font.pixelSize: Tokens.fontBody
+                                        color: Theme.text_strong
+                                    }
+                                    Item { Layout.fillWidth: true }
+                                    // one segment per check, lit when it passes
+                                    Row {
+                                        LayoutMirroring.enabled: false
+                                        spacing: 3
+                                        Repeater {
+                                            model: Math.min(12, root.audit.total || 0)
+                                            Rectangle {
+                                                width: 14; height: 6; radius: 3
+                                                color: index < (root.audit.passed || 0)
+                                                       ? (root.auditAllOk ? Theme.secondary_container : Theme.primary)
+                                                       : Theme.surface_highest
+                                            }
+                                        }
+                                    }
+                                    C.AppText {
+                                        text: root.num(root.audit.passed || 0) + "/" + root.num(root.audit.total || 0)
+                                        mono: true
+                                        weight: Tokens.weightBold
+                                        font.pixelSize: Tokens.fontCaption + 1
+                                        color: root.auditAllOk ? Theme.secondary_container : Theme.warn
+                                    }
+                                }
+                                Repeater {
+                                    model: {
+                                        var c = root.audit.checks || [], bad = []
+                                        for (var i = 0; i < c.length; i++) if (!c[i].ok) bad.push(c[i])
+                                        return bad.slice(0, 4)
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: Tokens.space2
+                                        Rectangle {
+                                            Layout.preferredWidth: 6; Layout.preferredHeight: 6
+                                            Layout.alignment: Qt.AlignTop
+                                            Layout.topMargin: 7
+                                            radius: 3
+                                            color: Theme.warn
+                                        }
+                                        C.AppText {
+                                            text: modelData.label
+                                            font.pixelSize: Tokens.fontCaption + 1
+                                            weight: Tokens.weightDemiBold
+                                            color: Theme.on_surface
+                                            Layout.alignment: Qt.AlignTop
+                                        }
+                                        C.AppText {
+                                            Layout.fillWidth: true
+                                            Layout.alignment: Qt.AlignTop
+                                            visible: !!modelData.note
+                                            text: modelData.note || ""
+                                            font.pixelSize: Tokens.fontCaption + 1
+                                            color: Theme.on_surface_var
+                                            wrapMode: Text.Wrap
+                                        }
+                                        Item { visible: !modelData.note; Layout.fillWidth: true }
+                                    }
                                 }
                                 C.AppText {
+                                    visible: root.auditAllOk
                                     Layout.fillWidth: true
-                                    text: modelData.label + (modelData.note ? "  ·  " + modelData.note : "")
+                                    text: I18n.tr("Timing, titles, hook length and data citations all check out.")
                                     font.pixelSize: Tokens.fontCaption + 1
                                     color: Theme.on_surface_var
                                     wrapMode: Text.Wrap
                                 }
                             }
                         }
-                        C.AppText {
-                            visible: root.auditAllOk
-                            Layout.fillWidth: true
-                            text: I18n.tr("Timing, titles, hook length and data citations all check out.")
-                            font.pixelSize: Tokens.fontCaption + 1
-                            color: Theme.on_surface_var
-                            wrapMode: Text.Wrap
-                        }
+
                         // completeness: how many of the dossier's sections came back
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: Tokens.space3
+                            C.AppText {
+                                text: I18n.tr("Dossier")
+                                font.pixelSize: Tokens.fontCaption
+                                color: Theme.outline
+                            }
                             Rectangle {
                                 Layout.fillWidth: true
-                                implicitHeight: 4
-                                radius: 2
+                                implicitHeight: 3
+                                radius: 1.5
                                 color: Theme.surface_highest
                                 Rectangle {
                                     height: parent.height
-                                    radius: 2
+                                    radius: 1.5
                                     width: parent.width * (root.audit.completeness || 0) / 100
                                     color: root.scoreColor
-                                    opacity: 0.8
+                                    opacity: 0.75
                                 }
                             }
                             C.AppText {
                                 text: I18n.tr("{n}% complete").replace("{n}", root.num(root.audit.completeness || 0))
+                                mono: true
                                 font.pixelSize: Tokens.fontCaption
                                 color: Theme.outline
                             }

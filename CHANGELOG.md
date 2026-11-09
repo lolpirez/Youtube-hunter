@@ -7,6 +7,20 @@ Version numbering restarted at **1.0.0** for the public release.
 
 ---
 
+## 1.3.0 (bundle v1.7 Scorecard): Greenlight scorecard
+
+- **Blueprint score card redesigned** ("Scorecard"): a 270° gauge with the
+  score counting up inside it and a spark riding the arc, a verdict
+  (Greenlight / Strong contender / Promising / Needs work), and two chips
+  that say what to keep and what to fix first (strongest / weakest part).
+- The five parts sit one per line: label, a gradient meter notched at
+  5 / 10 / 15, and the points; hovering still opens the reason.
+- The Greenlight check lives in an inset well with one segment per check;
+  failing items show the check in bold and its note beside it.
+- Light by design: one Shape (3 arcs) for the gauge, plain Rectangles
+  elsewhere, no layers / shaders / running loops.
+- Launch splash and loading animations are **unchanged**.
+
 ## 1.3.0 (bundle v1.7): guided Captions & Dub, ElevenLabs voices, Gemini quota saver
 
 - **Settings → Captions & Dub is a guided 1-2-3.** A live map at the top
