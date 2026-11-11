@@ -15,6 +15,7 @@ ViewModels (app.qml_backend.vm.*), which call straight into app.core.
 """
 
 import os
+import time
 
 from PySide6.QtCore import QObject, Property, QPointF, QTimer, Signal, Slot
 from PySide6.QtGui import QCursor
@@ -26,6 +27,79 @@ from app.core.quota import (add_quota_listener, api_quota_capacity,
 from app.crash import log_crash
 from app.ui import theme
 from app.qml_backend import gc_pacing, svg_icon_provider
+
+# Fallback launch stamp when main_qml.py did not set one (tests, old entry).
+_IMPORT_T0 = time.time()
+
+
+def _launch_epoch_ms():
+    """Process launch time in epoch ms (main_qml._LAUNCH_T0), for the splash."""
+    try:
+        import __main__
+        t0 = getattr(__main__, "_LAUNCH_T0", None)
+        if isinstance(t0, (int, float)) and t0 > 0:
+            return float(t0) * 1000.0
+    except Exception:                        # noqa: BLE001 — cosmetic only
+        pass
+    return _IMPORT_T0 * 1000.0
+
+
+# BrandSplash v24 "hello, you": account names that are not a person's name
+_NOT_A_NAME = {"user", "users", "admin", "administrator", "owner", "pc", "windows",
+               "default", "guest", "home", "desktop", "laptop", "microsoft",
+               "test", "local", "root", "system", "public"}
+
+
+def _first_name(raw):
+    """First name out of a display / login name, or "" when it isn't one.
+
+    "Sara Ahmadi" -> "Sara", "ahmadi, sara" -> "Sara", "ali.rezaei" -> "Ali",
+    "DESKTOP-1\\user" -> "". Letters only (any script), 2..14 characters.
+    """
+    if not isinstance(raw, str):
+        return ""
+    t = raw.strip()
+    if "\\" in t:                       # DOMAIN\login
+        t = t.rsplit("\\", 1)[-1]
+    if "@" in t:                         # someone@example.com
+        t = t.split("@", 1)[0]
+    if "," in t:                         # "Last, First" (directory style)
+        t = t.split(",", 1)[1]
+    for sep in "._-+":
+        t = t.replace(sep, " ")
+    parts = t.split()
+    if not parts:
+        return ""
+    first = parts[0]
+    if not first.isalpha() or not (2 <= len(first) <= 14):
+        return ""
+    if first.lower() in _NOT_A_NAME:
+        return ""
+    if first.islower() or first.isupper():
+        first = first[:1].upper() + first[1:].lower()
+    return first
+
+
+def _resolve_first_name():
+    """The Windows display name, else the login name. May be slow on a
+    domain account (directory lookup), so it only ever runs off the GUI
+    thread."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            fn = ctypes.windll.secur32.GetUserNameExW
+            fn.argtypes = [ctypes.c_int, ctypes.c_wchar_p, ctypes.POINTER(wintypes.ULONG)]
+            fn.restype = wintypes.BOOLEAN
+            size = wintypes.ULONG(256)
+            buf = ctypes.create_unicode_buffer(size.value)
+            if fn(3, buf, ctypes.byref(size)):           # NameDisplay
+                name = _first_name(buf.value)
+                if name:
+                    return name
+        except Exception:                    # noqa: BLE001 — cosmetic only
+            pass
+    return _first_name(os.environ.get("USERNAME") or os.environ.get("USER") or "")
 
 
 # Page indices. The QML StackLayout in Main.qml uses these directly.
@@ -132,6 +206,9 @@ class AppController(QObject):
     # translated strings can rebuild them.
     languageRetranslate = Signal()
     donateRequested = Signal()      # the Donate pill: open the Support window
+    userFirstNameChanged = Signal()
+    # worker thread -> GUI thread: the display name was resolved
+    _firstNameResolved = Signal(str)
 
     def __init__(self, theme_bridge, i18n_bridge, font_bridge, parent=None):
         super().__init__(parent)
@@ -154,6 +231,31 @@ class AppController(QObject):
         # v4: ambient motion (drifting page wash, breathing glows). On by
         # default; Settings → Appearance can turn it off for a perfectly still UI.
         self._ambient_motion = bool(cfg.get("ambient_motion", True))
+        # BrandSplash v24: the lock-in chime ("splash_sound": false = silent)
+        self._splash_sound = bool(cfg.get("splash_sound", True))
+        # BrandSplash v26 personal best: the fastest cold start so far (ms,
+        # 0 = none yet). Read once; the splash compares against THIS value,
+        # so a record set by this launch never cancels its own "New best".
+        try:
+            self._best_launch_ms = max(0.0, float(cfg.get("best_launch_ms", 0) or 0))
+        except (TypeError, ValueError):
+            self._best_launch_ms = 0.0
+        self._launch_recorded = False
+        # BrandSplash v24 "Good evening, Sara". "display_name" in config.json
+        # wins ("" hides the name); otherwise the login name right away and
+        # the Windows display name from a worker thread (it can be a slow
+        # directory lookup on a domain account, never on the GUI thread).
+        self._user_first_name = ""
+        self._firstNameResolved.connect(self._apply_first_name)
+        override = cfg.get("display_name")
+        if isinstance(override, str):
+            self._user_first_name = _first_name(override)
+        else:
+            self._user_first_name = _first_name(
+                os.environ.get("USERNAME") or os.environ.get("USER") or "")
+            import threading
+            threading.Thread(target=lambda: self._firstNameResolved.emit(_resolve_first_name()),
+                             daemon=True, name="splash-name").start()
         # True while the rail's collapse/expand slide is running. Grids freeze
         # their column count + card width on it (see the railTimer in
         # Sidebar.qml) so a 200ms slide doesn't rebuild every card per frame.
@@ -265,6 +367,57 @@ class AppController(QObject):
         the kind of detail that makes a product feel unfinished.
         """
         return APP_VERSION
+
+    @Property(bool, constant=True)
+    def splashSound(self):
+        """Whether the launch splash plays its lock-in chime (BrandSplash v24)."""
+        return self._splash_sound
+
+    @Property(str, notify=userFirstNameChanged)
+    def userFirstName(self):
+        """First name for the splash greeting, "" when unknown (BrandSplash v24)."""
+        return self._user_first_name
+
+    @Slot(str)
+    def _apply_first_name(self, name):
+        name = name or ""
+        if name and name != self._user_first_name:
+            self._user_first_name = name
+            self.userFirstNameChanged.emit()
+
+    @Property(float, constant=True)
+    def bestLaunchMs(self):
+        """Fastest cold start before this launch, in ms (0 = no record yet).
+        The splash tags a faster launch "New best" (BrandSplash v26)."""
+        return self._best_launch_ms
+
+    @Slot(float)
+    def recordLaunch(self, ms):
+        """Called once by the splash with this launch's cold-start time.
+        Persists it as `best_launch_ms` only when it beats the record."""
+        if self._launch_recorded:
+            return
+        self._launch_recorded = True
+        try:
+            ms = float(ms)
+        except (TypeError, ValueError):
+            return
+        if not (0 < ms < 120000):
+            return
+        if self._best_launch_ms > 0 and ms >= self._best_launch_ms:
+            return
+        try:
+            cfg = load_app_config()
+            cfg["best_launch_ms"] = int(round(ms))
+            save_app_config(cfg)
+        except Exception:                    # noqa: BLE001
+            log_crash("recordLaunch: could not persist the launch record")
+
+    @Property(float, constant=True)
+    def launchEpochMs(self):
+        """When the process started (epoch ms). The launch splash turns its
+        percent into the real cold-start time on lock-in (BrandSplash v22)."""
+        return _launch_epoch_ms()
 
     # ── support link (v3.52) ───────────────────────────────────────────
     # The rail's Donate pill used to be a dead button: SupportFooter emitted

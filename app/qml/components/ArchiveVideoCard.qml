@@ -1257,6 +1257,24 @@ C.GlassPanel {
                     tip: I18n.tr("Open channel")
                     onClicked: card.target.openUrl(row.channelUrl || "")
                 }
+                // v2.1: the Video Dossier, everything about this video in
+                // one card (details, transcript, comments) + CSV export
+                C.IconButton {
+                    visible: !card._isChan
+                    implicitWidth: 42; implicitHeight: 40
+                    Layout.preferredWidth: 42
+                    Layout.preferredHeight: 40
+                    iconName: "page_insights"
+                    accent: Theme.primary
+                    enabled: (row.videoId || "") !== ""
+                    tip: I18n.tr("Video dossier: details, transcript, comments, CSV")
+                    onClicked: VideoDossier.open({
+                        videoId: row.videoId || "",
+                        title: row.title || "",
+                        thumbId: row.thumbId || "",
+                        channelTitle: row.channelTitle || ""
+                    })
+                }
                 // bookmark, wrapped so the pop can scale it without fighting
                 // IconButton's own press scale
                 Item {

@@ -282,6 +282,10 @@ class ArchiveVM(QObject):
     # v1.0.2: the open-section row read + metric pass runs off the GUI thread
     # (group_id, token, rows)
     _detailLoaded = Signal(int, int, list)
+    # v2.2 full export (every video read like the Video Dossier)
+    fullExportChanged = Signal()
+    _fxProgress = Signal(int, int, int)                 # (token, done, total)
+    _fxFinished = Signal(int, str, int, int, bool, str)  # (token, path, ok, total, stopped, error)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -336,6 +340,15 @@ class ArchiveVM(QObject):
         self._dl_scan_token = 0
         self._dlScanned.connect(self._on_dl_scanned)
         self._detailLoaded.connect(self._on_detail_loaded)
+        # v2.2 full export state
+        self._fx_token = 0
+        self._fx_busy = False
+        self._fx_done = 0
+        self._fx_total = 0
+        self._fx_path = ""
+        self._fx_stop = threading.Event()
+        self._fxProgress.connect(self._on_fx_progress)
+        self._fxFinished.connect(self._on_fx_finished)
         # v1.0.2: no synchronous disk scan at construction — every finished
         # download used to cost an os.path.isfile() before the window could
         # open. ArchivePage refreshes the set off-thread when it is shown.
@@ -1268,6 +1281,163 @@ class ArchiveVM(QObject):
             return
         self.toast.emit(tr("Exported {n} rows.").format(n=len(payload)), "success")
 
+    # ── v2.2: full export, every video read like the Video Dossier ──────
+    # The quick export above is a table of what the archive already holds
+    # (offline, instant). This one opens each video of the section the way
+    # the dossier card does (stats, tags, description, thumbnails, the WHOLE
+    # transcript, top comments most-liked-first and the newest ones) and
+    # writes them all into ONE table: a row per video, a column per fact
+    # (v2.3; v2.2 used the dossier's stacked row format). Runs in the background,
+    # three videos at a time; stopping it keeps what is already read.
+    @Property(bool, notify=fullExportChanged)
+    def fullExportBusy(self):
+        return self._fx_busy
+
+    @Property(int, notify=fullExportChanged)
+    def fullExportDone(self):
+        return self._fx_done
+
+    @Property(int, notify=fullExportChanged)
+    def fullExportTotal(self):
+        return self._fx_total
+
+    @Property(str, notify=fullExportChanged)
+    def fullExportPath(self):
+        return self._fx_path
+
+    @Slot(str)
+    def exportFull(self, path):
+        if self._fx_busy:
+            self.toast.emit(tr("A full export is already running."), "info")
+            return
+        rows = [r for r in (self._detail_filtered_videos or self._detail_filtered or [])
+                if (r.get("video_id") or "").strip()]
+        if not rows:
+            self.toast.emit(tr("Nothing to export."), "error")
+            return
+        path = local_path_from_url(path)
+        # v2.3: .xlsx gets the formatted workbook, anything else a CSV
+        if not path.lower().endswith((".csv", ".xlsx")):
+            path += ".csv"
+        try:
+            section = self.detailTitle
+        except Exception:                    # noqa: BLE001 — a label only
+            section = ""
+        self._fx_token += 1
+        self._fx_stop.clear()
+        self._fx_busy, self._fx_done, self._fx_total, self._fx_path = True, 0, len(rows), ""
+        self.fullExportChanged.emit()
+        self.toast.emit(tr("Reading {n} videos like the Dossier. Keep using the app, it runs in the background.")
+                        .format(n=len(rows)), "info")
+        threading.Thread(target=self._fx_worker, args=(self._fx_token, list(rows), path, section),
+                         name="archive-full-export", daemon=True).start()
+
+    @Slot()
+    def cancelFullExport(self):
+        if self._fx_busy:
+            self._fx_stop.set()
+
+    @Slot()
+    def revealFullExport(self):
+        if self._fx_path:
+            from app.core.utils import reveal_in_file_manager
+            reveal_in_file_manager(self._fx_path)
+
+    def _fx_worker(self, token, rows, path, section):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from app.core import dossier as D
+        from app.qml_backend.vm.dossier_vm import _api_keys
+        stop = lambda: self._fx_stop.is_set() or token != self._fx_token
+        total = len(rows)
+        results = [None] * total
+        dead = set()
+        err = ""
+        try:
+            keys = _api_keys()
+        except Exception:                    # noqa: BLE001 — yt-dlp still works
+            keys = []
+
+        def one(i):
+            if stop():
+                return
+            try:
+                results[i] = D.collect(rows[i].get("video_id").strip(), keys, dead, stop)
+            except Exception as exc:         # noqa: BLE001 — one bad video never kills the file
+                results[i] = {"meta": None, "errors": [str(exc)[:200]]}
+
+        done = 0
+        try:
+            with ThreadPoolExecutor(max_workers=3, thread_name_prefix="fx") as pool:
+                for f in as_completed([pool.submit(one, i) for i in range(total)]):
+                    f.result()
+                    done += 1
+                    self._fxProgress.emit(token, done, total)
+        except Exception as exc:             # noqa: BLE001
+            log_crash("archive full export: " + str(exc))
+            err = str(exc)
+
+        # v2.3: one row per video, in the section's order, every fact in its
+        # own column (app.core.dossier.write_wide_dossier). v2.2 stacked ~100
+        # "section / field / value" rows per video, which read as a mess.
+        out, ok = [], 0
+        for i, r in enumerate(rows):
+            got = results[i]
+            if got is None:                  # stopped before this one was read
+                continue
+            vid = r.get("video_id").strip()
+            mult = r.get("multiplier")
+            try:
+                mult_txt = f"{float(mult):.2f}x" if mult else ""
+            except (TypeError, ValueError):
+                mult_txt = ""
+            if got.get("meta"):
+                ok += 1
+            out.append({
+                "no": i + 1, "video_id": vid, "title": r.get("title") or "",
+                "url": r.get("video_url") or f"https://www.youtube.com/watch?v={vid}",
+                "section": section, "meta": got.get("meta"),
+                "top": got.get("top"), "latest": got.get("latest"),
+                "transcript": got.get("transcript") or {},
+                "seed": {"outlierText": mult_txt, "outlierKey": "archive_views_per_sub"},
+                "comments_off": bool(got.get("commentsOff")),
+                "errors": got.get("errors") or [],
+            })
+
+        stopped = stop()
+        if out and not err:
+            try:
+                D.write_wide_dossier(path, out, "xlsx" if path.lower().endswith(".xlsx") else "csv")
+            except Exception as exc:         # noqa: BLE001
+                log_crash("archive full export write: " + str(exc))
+                err = str(exc)
+        elif not out and not err:
+            path = ""
+        self._fxFinished.emit(token, path if not err else "", ok, total, stopped, err)
+
+    @Slot(int, int, int)
+    def _on_fx_progress(self, token, done, total):
+        if token != self._fx_token:
+            return
+        self._fx_done, self._fx_total = done, total
+        self.fullExportChanged.emit()
+
+    @Slot(int, str, int, int, bool, str)
+    def _on_fx_finished(self, token, path, ok, total, stopped, err):
+        if token != self._fx_token:
+            return
+        self._fx_busy = False
+        self._fx_path = path
+        self.fullExportChanged.emit()
+        if err:
+            self.toast.emit(tr("Export failed: {err}").format(err=err), "error")
+        elif not path:
+            self.toast.emit(tr("Export stopped before any video was read."), "info")
+        elif stopped:
+            self.toast.emit(tr("Stopped. Saved what was read: {ok} of {n} videos.")
+                            .format(ok=ok, n=total), "success")
+        else:
+            self.toast.emit(tr("Full export saved: {ok} of {n} videos.").format(ok=ok, n=total), "success")
+
     # ── download (same ladder as the Niche Finder card action) ──────────
     @Slot(str, int)
     def startDownload(self, video_id, quality_index):
@@ -1583,8 +1753,8 @@ class ArchiveVM(QObject):
                 video_id, filepath,
                 on_update=lambda sm, v=video_id: self._on_post_tick(v, sm),
                 on_finish=lambda st, f, sm, v=video_id: self._on_post_done(v, st, f, sm)):
-            self._on_post_tick(video_id, {"pct": 0, "stage": tr("Starting captions & dub…")})
-            self.toast.emit(tr("Downloaded. Now adding captions & dub…"), "info")
+            self._on_post_tick(video_id, {"pct": 0, "stage": tr("Starting captions…")})
+            self.toast.emit(tr("Downloaded. Now adding captions…"), "info")
             return
         # v1.1: DB first (see the stopped branch above)
         downloads_upsert(video_id, status="done" if ok else "error",

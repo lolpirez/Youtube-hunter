@@ -52,6 +52,9 @@
     .then((x) => { PANEL_CSS = x; if (panelStyleEl) panelStyleEl.textContent = x; })
     .catch(() => {});
   const STORE_KEY = "yth.lastQuality";
+  // v1.8: per video, the captions picks its last download was started
+  // with, so Play opens that same result after a reload / another visit
+  const WANTS_KEY = "yth.wants";
 
   // ── i18n ──────────────────────────────────────────────────────────────
   // The panel follows the APP's language (from /v1/ping); before the app has
@@ -103,7 +106,7 @@
       play: "Play",
       playTip: "Open the saved file in your player",
       playFail: "Couldn't find that file. It may have been moved or deleted.",
-      playPlainNote: "No copy of this quality has those captions / dub yet, so the closest one is playing.",
+      playPlainNote: "No copy of this quality has those captions yet, so the closest one is playing.",
       fmtVideo: "Video format",
       fmtAudio: "Audio format",
       audioTrack: "Audio track",
@@ -153,12 +156,11 @@
       dlPaused: "Paused",
       dlResuming: "Resuming…",
       dlFinishing: "Finishing up…",
-      // v1.4 — captions & AI dub
-      postHead: "Captions & AI dub",
+      // v1.4 — captions
+      postHead: "Captions",
       postOff: "Optional",
       postOn: "Runs after, in the same bar",
       postCap: "Captions",
-      postDub: "AI dub",
       postWords: "Words",
       postYt: "YouTube",
       postAi: "AI listens",
@@ -174,20 +176,12 @@
       postPlaceBottom: "Bottom",
       postPlaceMiddle: "Middle",
       postPlaceTop: "Top",
-      postSizeNote: "Size and place apply when the captions are burned in or dubbed over.",
-      postFailed: "Saved, but captions / dub didn't finish:",
+      postSizeNote: "Size and place apply when the captions are burned in.",
+      postFailed: "Saved, but captions didn't finish:",
       postFailedHint: "The plain video is saved. Open YouTube Hunter to retry it.",
       postFailSaved: "Video saved",
       postFailRetry: "Retry in app",
       postTrack: "Track",
-      postInto: "Dub into",
-      postVoices: "Voices",
-      postAuto: "Auto-cast",
-      postOne: "One voice",
-      postBg: "Original",
-      postDuck: "Ducked",
-      postBed: "Low bed",
-      postReplace: "Replace",
       postAsSpoken: "Original · as spoken",
       // v1.4.1 — the language picker
       lpSearch: "Search {n} languages",
@@ -195,7 +189,6 @@
       lpKeep: "No translation",
       lpAi: "Translate with AI",
       lpOnYt: "On YouTube for this video",
-      lpDubInto: "Dub into",
       lpFree: "Free",
       lpAuto: "Auto",
       lpUploaded: "Uploaded",
@@ -208,19 +201,11 @@
       postAiNote: "Your Captions AI listens and writes the lines, and translates them too.",
       postAiNoteBy: "{who} listens and writes the lines, and translates them too.",
       postAiNoteYt: "Uses YouTube's own captions; the AI makes them fluent and translates them. No captions? It listens instead.",
-      postNeedListen: "Pick a provider that can hear audio for Captions in the app (Settings → Captions & Dub).",
-      postNeedGemini: "Gemini voices need a Google Gemini key in the app (Settings → AI Providers), or pick ElevenLabs.",
-      postEngine: "Voices by",
-      postEngGem: "Gemini",
-      postEngEl: "ElevenLabs",
-      postNeedEleven: "ElevenLabs needs your key in the app (Settings → Captions & Dub), or pick Gemini.",
-      postElNote: "ElevenLabs voices ({v}), each speaker matched to their gender. Uses ElevenLabs credits.",
-      postGemNote: "Gemini voices, each speaker matched to their gender. Uses Gemini requests.",
+      postNeedListen: "Pick a provider that can hear audio for Captions in the app (Settings → Captions).",
       postNeedAi: "Translating needs an AI provider in the app.",
-      postOnePass: "Dub + captions in one pass: one video at the end.",
-      postNoPlay: "Play unlocks when captions & dub are done.",
-      postOld: "Update the YouTube Hunter app to add captions & dub from here.",
-      postStop: "Stop captions & dub",
+      postNoPlay: "Play unlocks when captions are done.",
+      postOld: "Update the YouTube Hunter app to add captions from here.",
+      postStop: "Stop captions",
       pause: "Pause",
       resume: "Resume",
       speed: "speed",
@@ -1446,8 +1431,11 @@
       if (!same) Cut.reset();
       if (!same || ["error", "offline", "idle", "waking", "linked"].includes(state.phase)) {
         const keep = same ? state.saved : [];
+        const keepWant = same ? state.dlWant : null;
         state = freshState(vid);
         state.saved = keep;
+        state.dlWant = keepWant;
+        if (!keepWant) restoreWant(vid.id);
         render();
         connect(true);
       } else {
@@ -1725,14 +1713,37 @@
       render();
     }
 
-    // v1.4.8: the captions / dub version Play should open. On the Saved
-    // screen: the picks that download was started with. Anywhere else: the
-    // panel's captions / dub switches as they are now (both off = plain).
+    // v1.8: remember / restore what each video's last download was made with
+    async function rememberWant(w) {
+      if (!w || !w.vid) return;
+      try {
+        const all = (await chrome.storage.local.get(WANTS_KEY))[WANTS_KEY] || {};
+        delete all[w.vid];
+        all[w.vid] = Object.assign({}, w, { at: Date.now() });
+        const ids = Object.keys(all);
+        if (ids.length > 60) ids.sort((a, b) => (all[a].at || 0) - (all[b].at || 0)).slice(0, ids.length - 60).forEach((k) => delete all[k]);
+        await chrome.storage.local.set({ [WANTS_KEY]: all });
+      } catch (_) { /* a nicety */ }
+    }
+    async function restoreWant(vidId) {
+      try {
+        const all = (await chrome.storage.local.get(WANTS_KEY))[WANTS_KEY] || {};
+        const w = all[vidId];
+        if (w && state.video && state.video.id === vidId && !state.dlWant) state.dlWant = w;
+      } catch (_) { /* a nicety */ }
+    }
+
+    // v1.4.8: the captioned version Play should open. On the Saved screen:
+    // the picks that download was started with. Anywhere else: the panel's
+    // Captions switch as it is now (off = plain).
+    // v1.8: the picks the download was made with also win on a later visit,
+    // as long as the switch wasn't touched since: the panel plays what was
+    // made, like the app does.
     function wantFor(row) {
       const w = state.dlWant;
       if (w && row && state.video && w.vid === state.video.id && w.key === rid(row)
-          && state.phase === "done") {
-        return { captions: w.captions, dub: w.dub, capLang: w.capLang, dubLang: w.dubLang };
+          && (state.phase === "done" || !Post.touched())) {
+        return { captions: !!w.captions, capLang: w.capLang || "" };
       }
       return Post.want(!!(row && row.isAudio));
     }
@@ -1759,8 +1770,8 @@
       }
       const want = wantFor(row);
       const r = await call("/v1/play", { method: "POST", body: { v: state.video.id, id: rid(row), want } });
-      if (r.reachable && r.data && r.data.ok && r.data.exact === false && (want.captions || want.dub)) {
-        // asked for captions / dub, but no such copy of this quality exists yet
+      if (r.reachable && r.data && r.data.ok && r.data.exact === false && want.captions) {
+        // asked for captions, but no such copy of this quality exists yet
         state.message = t("playPlainNote");
         flashNote(state.message);
       }
@@ -1829,8 +1840,10 @@
       state.phase = "sending";
       state.parked = null;
       state.dlKey = rid(row);
-      // v1.4.8: Play on the Saved screen opens exactly this (plain / captions / dub / both)
+      // v1.4.8: Play on the Saved screen opens exactly this (plain / captions)
       state.dlWant = Object.assign({ key: rid(row), vid: state.video.id }, Post.want(!!row.isAudio));
+      Post.untouch();
+      rememberWant(state.dlWant);
       state.result = null;
       state.live = { pct: 0, text: t("sending") };
       shownPct = 0; speeds = []; ctlWant = ""; ctlAt = 0;
@@ -1844,7 +1857,7 @@
                 inPage: true,
                 // v3.45: the format + dub picked in this panel
                 vf: state.vf || undefined, af: state.af || undefined, lang: state.lang || "",
-                // v1.4: captions / dub to run on the finished file
+                // v1.4: captions to run on the finished file
                 post: Post.spec(!!row.isAudio) || undefined },
         timeout: 20000,
       });
@@ -2523,7 +2536,7 @@
       if (state.message && state.phase === "pick") html += `<p class="note warn">${esc(state.message)}</p>`;
       else if (state.phase === "pick" && isSaved(curRow())) html += `<p class="note again">${esc(t("savedHere"))}</p>`;
       if (state.phase === "done") html += `<p class="note again">${esc(t("againQuality"))}</p>`;
-      // v1.4: captions & AI dub, run right after the download
+      // v1.4: captions, run right after the download
       if (state.probed !== undefined) html += Post.html(!canPick(), !!(curRow() && curRow().isAudio));
       return html;
     }
@@ -2588,7 +2601,7 @@
       }
     }
 
-    // v1.4.9: captions / dub didn't finish. One quiet card: what happened,
+    // v1.4.9: captions didn't finish. One quiet card: what happened,
     // which model and when it clears, the one thing to do. The provider's
     // raw reply stays in the app's log, never here.
     function postFailHTML(s) {
@@ -2672,7 +2685,7 @@
       const ph = state.phase;
       const dlc = root.querySelector(".dlc");
       if (dlc) {
-        const studio = s.phase === "post";      // v1.4: captions / dub on the file
+        const studio = s.phase === "post";      // v1.4: captions on the file
         const post = !!s.post && !studio;
         const indeterminate = ph === "sending" || ph === "resuming"
           || post || (ph === "running" && !studio && !(s.done > 0) && pct <= 0);
@@ -2730,24 +2743,30 @@
     }
 
     // ═══════════════════════════════════════════════════════════════════
-    //  v1.4 — Captions & AI dub (Download and Cut tabs)
+    //  v1.4 — Captions (Download and Cut tabs)
     // ═══════════════════════════════════════════════════════════════════
     //
-    // One compact section, the same in both tabs: two switches (Captions /
-    // AI dub) and, for the one that is on, only the choices that matter.
+    // One compact section, the same in both tabs: the Captions switch and,
+    // when it is on, only the choices that matter. (v2.0: the AI dub is gone
+    // from the app, and from here too.)
     // YouTube = the video's own captions in the languages YouTube itself has
     // (never an AI); every other language lives under "AI listens". The
     // picks are sticky (chrome.storage), and the app runs them right after
     // the file lands, inside the SAME capsule: the bar keeps going through
-    // "Captions" and "AI dub", and Play only unlocks when everything is done.
+    // "Captions", and Play only unlocks when everything is done.
     const Post = (() => {
       const KEY = "yth.post";
-      let p = { cap: false, dub: false, src: "youtube", track: 0, lang: "", style: "youtube",
-                out: "burn", size: "m", pos: "bottom", dubLang: "fa", voices: "auto", bg: "duck", open: false };
+      let p = { cap: false, src: "youtube", track: 0, lang: "", style: "youtube",
+                out: "burn", size: "m", pos: "bottom", open: false };
+      // v2.0: picks an older panel saved for the AI dub. A sticky `dub: true`
+      // used to ride along with every download even with the tile hidden.
+      const DROP = ["dub", "dubLang", "voices", "bg", "engine"];
+      const clean = (x) => { const y = Object.assign({}, x); DROP.forEach((k) => { delete y[k]; }); return y; };
       let opts = {};                 // per video: /v1/captions answer
       let api = null;                // the app answers /v1/captions (null = unknown)
-      try { chrome.storage.local.get(KEY, (r) => { if (r && r[KEY]) p = Object.assign(p, r[KEY], { track: 0 }); }); } catch (_) {}
-      const save = () => { try { chrome.storage.local.set({ [KEY]: Object.assign({}, p, { track: 0 }) }); } catch (_) {} };
+      try { chrome.storage.local.get(KEY, (r) => { if (r && r[KEY]) p = Object.assign(p, clean(r[KEY]), { track: 0 }); }); } catch (_) {}
+      let touched = false;           // v1.8: switches changed since the last download
+      const save = () => { touched = true; try { chrome.storage.local.set({ [KEY]: Object.assign(clean(p), { track: 0 }) }); } catch (_) {} };
       const vid = () => (state.video && state.video.id) || "";
       const o = () => opts[vid()] || null;
 
@@ -2761,24 +2780,6 @@
         opts[v] = (r.data && r.data.ok) ? r.data : { youtube: [], error: "" };
         if (!o().youtube.length && p.src === "youtube" && p.cap) p.src = "ai";
         rerender();
-      }
-      // v1.6: which voices are ready, re-read every few seconds while the dub
-      // box is open (turning ElevenLabs on in the app shows here at once)
-      let readyAt = 0, readyBusy = false;
-      async function refreshReady() {
-        const v = vid();
-        if (!v || readyBusy || Date.now() - readyAt < 3000) return;
-        readyBusy = true; readyAt = Date.now();
-        try {
-          const r = await call("/v1/dubready", { timeout: 4000 });
-          const cur = opts[v];
-          if (r && r.data && r.data.ok && cur && !cur.loading) {
-            const k = ["engine", "eleven", "geminiVoices", "elevenVoice"];
-            const changed = k.some((x) => cur[x] !== r.data[x]);
-            k.forEach((x) => { cur[x] = r.data[x]; });
-            if (changed) setTimeout(rerender, 0);
-          }
-        } catch (_) {} finally { readyBusy = false; }
       }
       function rerender() {
         if (!root || !isOpen()) return;
@@ -2851,7 +2852,7 @@
         if (d.off || api === false) {
           return `<div class="post" data-audio="${audio ? 1 : 0}"${locked ? " data-locked" : ""}><p class="note">${esc(t("postOld"))}</p></div>`;
         }
-        const any = p.cap || p.dub;
+        const any = p.cap;
         const yt = d.youtube || [];
         // v1.4.1: {code, native, name}; an older app sends only "native · name"
         const aiLangs = (d.languages || []).map((l) => {
@@ -2865,9 +2866,6 @@
             <button type="button" class="ptile${p.cap ? " on" : ""}" data-act="pcap" aria-pressed="${p.cap}"${locked ? " disabled" : ""}>
               <span class="pic"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="3" width="13" height="10" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4.5 9.5h3M9 9.5h2.5M4.5 7h7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span>
               <span class="pn">${esc(t("postCap"))}</span><span class="psw"><i></i></span></button>
-            <button type="button" class="ptile${p.dub ? " on" : ""}" data-act="pdub" aria-pressed="${p.dub}"${locked ? " disabled" : ""}>
-              <span class="pic"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 6h2.2L8.5 3v10L5.2 10H3z" fill="currentColor"/><path d="M11 5.5a3.5 3.5 0 010 5M12.8 3.8a6 6 0 010 8.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span>
-              <span class="pn">${esc(t("postDub"))}</span><span class="psw"><i></i></span></button>
           </div>`;
         if (p.cap) {
           h += `<div class="pbox">`;
@@ -2898,50 +2896,28 @@
               `<button type="button" class="plook${st.key === p.style ? " on" : ""}" data-act="pstyle" data-val="${esc(st.key)}" data-k="${esc(st.key)}"${locked ? " disabled" : ""}><b>Aa</b><small>${esc(st.name)}</small></button>`).join("")}</span>`);
             h += row(t("postOut"), seg("pout", [["burn", t("postBurn")], ["soft", t("postTrack")], ["srt", ".srt"]], p.out, locked));
             // v1.4.3: caption size + place (only matter when drawn onto the picture)
-            const drawn = p.out === "burn" || p.dub;
+            const drawn = p.out === "burn";
             h += row(t("postSize"), seg("psize", [["s", t("postSizeS")], ["m", t("postSizeM")], ["l", t("postSizeL")]], p.size, locked || !drawn));
             h += row(t("postPlace"), seg("ppos", [["bottom", t("postPlaceBottom")], ["middle", t("postPlaceMiddle")], ["top", t("postPlaceTop")]], p.pos, locked || !drawn));
             if (!drawn) h += `<p class="note">${esc(t("postSizeNote"))}</p>`;
           }
           h += `</div>`;
         }
-        if (p.dub) {
-          h += `<div class="pbox">`;
-          h += row(t("postInto"), lp("dubLang", [{ head: t("lpDubInto"), search: true,
-            items: aiLangs.length ? aiLangs : [lpItem("fa", "fa", "فارسی", "Persian"), lpItem("en", "en", "English", "English")] }],
-            p.dubLang, locked, t("postInto")));
-          h += row(t("postVoices"), seg("pvoices", [["auto", t("postAuto")], ["single", t("postOne")]], p.voices, locked));
-          h += row(t("postBg"), seg("pbg", [["duck", t("postDuck")], ["bed", t("postBed")], ["replace", t("postReplace")]], p.bg, locked));
-          // v1.6: both engines, always; the default follows the app's setting live
-          const eng = p.engine || d.engine || "gemini";
-          h += row(t("postEngine"), seg("pengine", [["gemini", t("postEngGem")], ["elevenlabs", t("postEngEl")]], eng, locked));
-          if (eng === "elevenlabs") h += d.eleven === false ? `<p class="note warn">${esc(t("postNeedEleven"))}</p>`
-                                                           : `<p class="note ok">${esc(t("postElNote").replace("{v}", d.elevenVoice || "ElevenLabs"))}</p>`;
-          else h += (d.geminiVoices === false || (d.geminiVoices === undefined && !d.gemini))
-                    ? `<p class="note warn">${esc(t("postNeedGemini"))}</p>` : `<p class="note">${esc(t("postGemNote"))}</p>`;
-          refreshReady();
-          h += `</div>`;
-        }
-        if (p.cap && p.dub && !audio) h += `<p class="note">${esc(t("postOnePass"))}</p>`;
         return h + `</div>`;
       }
 
       function onAct(act, el) {
         const v = el.getAttribute("data-val");
         if (act === "pcap") p.cap = !p.cap;
-        else if (act === "pdub") p.dub = !p.dub;
         else if (act === "psrc") { p.src = v; if (p.style === "youtube" || p.style === "pop") p.style = v === "youtube" ? "youtube" : "pop"; }
         else if (act === "pstyle") p.style = v;
         else if (act === "pout") p.out = v;
         else if (act === "psize") p.size = ["s", "m", "l"].includes(v) ? v : "m";
         else if (act === "ppos") p.pos = ["bottom", "middle", "top"].includes(v) ? v : "bottom";
-        else if (act === "pvoices") p.voices = v;
-        else if (act === "pbg") p.bg = v;
-        else if (act === "pengine") p.engine = v === "elevenlabs" ? "elevenlabs" : "gemini";
         else if (act === "ppick") {
           const k = el.getAttribute("data-pset");
           if (k === "track") p.track = parseInt(v, 10) || 0;
-          else if (k === "lang" || k === "dubLang") p[k] = v || "";
+          else if (k === "lang") p.lang = v || "";
           else return false;
           save(); rerender();
           // keep the keyboard where it was: on the (new) trigger
@@ -2961,7 +2937,7 @@
       }
       // what the app gets: null = nothing picked
       function spec(audio) {
-        if (!(p.cap || p.dub) || api === false) return null;
+        if (!p.cap || api === false) return null;
         const d = o() || {};
         const out = {};
         if (p.cap) {
@@ -2972,7 +2948,6 @@
           } else out.captions = { source: "ai", target: p.lang || "", style: p.style, output: audio ? "srt" : p.out };
           if (out.captions) { out.captions.size = p.size || "m"; out.captions.position = p.pos || "bottom"; }
         }
-        if (p.dub) out.dub = { target: p.dubLang || "fa", voices: p.voices, bg: p.bg, engine: p.engine || d.engine || "" };
         return Object.keys(out).length ? out : null;
       }
       function stepsHTML(steps) {
@@ -2987,12 +2962,12 @@
       // a download would use. Nothing picked = the plain video.
       function want(audio) {
         const sp = spec(audio);
-        const w = { captions: false, dub: false, capLang: "", dubLang: "" };
+        const w = { captions: false, capLang: "" };
         if (sp && sp.captions && sp.captions.output !== "srt") { w.captions = true; w.capLang = sp.captions.target || ""; }
-        if (sp && sp.dub) { w.dub = true; w.dubLang = sp.dub.target || ""; }
         return w;
       }
-      return { html, onAct, onChange, spec, want, stepsHTML, active: () => p.cap || p.dub };
+      return { html, onAct, onChange, spec, want, stepsHTML, active: () => p.cap,
+               touched: () => touched, untouch: () => { touched = false; } };
     })();
 
     // ═══════════════════════════════════════════════════════════════════

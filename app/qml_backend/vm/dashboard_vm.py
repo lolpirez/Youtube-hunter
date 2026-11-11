@@ -2196,7 +2196,14 @@ class DashboardVM(QObject):
                         "Long transcripts continue in the transcript_part2, "
                         "transcript_part3 … columns (Excel holds 32,767 characters "
                         "per cell). Nothing was cut."))
-                if thorough:
+                # v2.1: every run (not only Thorough) also writes each
+                # transcript as its own .txt. A spreadsheet holds 32,767
+                # characters per cell, so a long video's subtitle continues in
+                # transcript_part2/3... columns, which reads as "cut" when you
+                # only look at the first one. The .txt is the whole track in
+                # one place, always.
+                if any(isinstance(d.get("transcript"), str) and d["transcript"] not in ("", "N/A")
+                       for d in data):
                     try:
                         tx_dir = os.path.splitext(out_path)[0] + "_transcripts"
                         n_txt = write_transcript_files(data, tx_dir)

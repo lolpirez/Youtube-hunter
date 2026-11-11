@@ -42,13 +42,12 @@ Transport: a tiny JSON HTTP server on 127.0.0.1:BRIDGE_PORT.
     POST /v1/unwatch {v, jobs?}      → v3.51: panel closed / tab left (card may show now)
     POST /v1/cut/cancel {job}        → stop it
 
-    v1.4 — captions & AI dub from the panel:
+    v1.4 — captions from the panel:
     GET  /v1/captions?v=<id>         → the languages YouTube's OWN captions
                                        come in (no AI), the looks, every
-                                       language for AI, voices, readiness
-    GET  /v1/dubready                → v1.6: {engine, eleven, geminiVoices}
-                                       re-read live while the dub box is open
-    POST /v1/download {…, post}      → post = {captions?, dub?}: queued for
+                                       language for AI, readiness
+    GET  /v1/dubready                → v2.0: gone (answers "gone" for old panels)
+    POST /v1/download {…, post}      → post = {captions?}: queued for
                                        this video, run when the file lands;
                                        /v1/status stays "running" with
                                        phase "post" + steps until they end
@@ -318,7 +317,55 @@ def _variants(vid, plain):
     return out
 
 
+def _all_copies(vid, row):
+    """v1.8: every captioned / dubbed copy of this video on disk, whatever
+    quality or base it was made from, plus the file the app's row plays."""
+    from app.core import post_fx as FX
+    seen, out = set(), []
+
+    def add(path, layers):
+        k = os.path.normcase(os.path.abspath(path))
+        if k not in seen:
+            seen.add(k)
+            out.append((path, layers))
+
+    plains = list(_saved_files(vid).values())
+    orig = str(row.get("original_path") or "")
+    if orig and os.path.isfile(orig):
+        plains.append(orig)
+    for plain in plains:
+        for path, layers in _variants(vid, plain)[1:]:
+            add(path, layers)
+    fp = str(row.get("filepath") or "")
+    if fp and os.path.isfile(fp):
+        layers = FX.layers_of(fp, row)
+        if layers:
+            add(fp, layers)
+    return out
+
+
 def _open_target(vid, rid, want):
+    """v1.8: like _open_this_quality, but when no copy of THIS quality holds
+    everything the user picked (dub + captions), a copy that does (made from
+    another quality / base, or the app's own row file) wins over "the
+    closest copy of this quality". The panel then plays what the app plays."""
+    from app.core import post_fx as FX
+    f, layers, exact = _open_this_quality(vid, rid, want)
+    if want is None or exact or not vid or not any(want.get(k) for k in FX.KINDS):
+        return f, layers, exact
+    try:
+        from app.core.db.downloads import downloads_get
+        copies = _all_copies(vid, downloads_get(vid) or {})
+    except Exception:                    # noqa: BLE001 - the per-quality answer stands
+        copies = []
+    if copies:
+        bf, bl, bex = FX.pick([("", [])] + copies, want)
+        if bex and bf:
+            return bf, bl, True
+    return f, layers, exact
+
+
+def _open_this_quality(vid, rid, want):
     """v1.4.8: the file Play / Show in folder should open, and what it holds.
 
     Returns (path or "", layers, exact). With `want` (a v1.4.8 panel) the copy
@@ -735,7 +782,7 @@ class WebBridge(QObject):
                 # The job stays "running" (phase post) until they are done;
                 # the clip is recorded with the FINISHED file.
                 jobs.update(job, state="running", phase="post", pct=0, file=fp, size=size,
-                            text=tr("Starting captions & dub…"),
+                            text=tr("Starting captions…"),
                             steps=[{"kind": "cut", "label": tr("Cut"), "state": "done", "pct": 1.0}])
                 self._cutEvent.emit(job, "post", {"path": fp})
                 return
@@ -816,7 +863,7 @@ class WebBridge(QObject):
                     self._cutter.note_ext_cut(job, "update", {"pct": pct, "stage": sm.get("stage") or ""})
                 n = self._notifier
                 if n is not None:
-                    n.live_update(key, stage=sm.get("stage") or tr("Captions & dub"), pct=pct,
+                    n.live_update(key, stage=sm.get("stage") or tr("Captions"), pct=pct,
                                   indeterminate=False)
 
             def done(sm):
@@ -869,7 +916,7 @@ class WebBridge(QObject):
         if kind == "post":
             try:
                 if n is not None:
-                    n.live_update(key, stage=tr("Captions & dub"), pct=0, indeterminate=False)
+                    n.live_update(key, stage=tr("Captions"), pct=0, indeterminate=False)
                 self._start_ext_post(job, data.get("path") or "")
             except Exception as exc:      # noqa: BLE001
                 log_crash("web bridge post: " + repr(exc))
@@ -1059,7 +1106,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                     "theme": _theme(), "pause": True,
                     # v3.45: per-row formats + dubs, and ▶ Play for saved files
                     "formats": True, "play": True,
-                    # v1.4: captions & AI dub from the panel
+                    # v1.4: captions from the panel
                     "post": True})
             if url.path == "/v1/qualities":
                 return self._qualities(self._vid(q.get("v")), q.get("vf"),
@@ -1073,9 +1120,9 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             if url.path == "/v1/captions":
                 return self._captions(self._vid(q.get("v")))
             if url.path == "/v1/dubready":
-                # v1.6: light, no YouTube call: just which voices are ready
-                from app.qml_backend.vm.voice_studio_vm import VoiceStudioVM
-                return self._send(200, dict(VoiceStudioVM.dubReadiness(), ok=True))
+                # v2.0: the AI dub is gone; an older panel still asks
+                return self._send(200, {"ok": True, "gone": True, "engine": "",
+                                        "eleven": False, "geminiVoices": False})
             if url.path == "/v1/cut/status":
                 job_id = str(q.get("job") or "")
                 if q.get("watch") == "1":
@@ -1442,13 +1489,13 @@ class _BridgeHandler(BaseHTTPRequestHandler):
 
     @staticmethod
     def _post_spec(body, audio_only=False):
-        """The panel's captions / dub picks, shape-checked (VoiceStudio
+        """The panel's caption picks, shape-checked (VoiceStudio
         validates every value again before anything is queued)."""
         raw = body.get("post")
         if not isinstance(raw, dict):
             return None
         out = {}
-        for k in ("captions", "dub"):
+        for k in ("captions",):          # v2.0: "dub" from an old panel is ignored
             v = raw.get(k)
             if isinstance(v, dict):
                 out[k] = {kk: str(vv)[:64] for kk, vv in v.items()
@@ -1458,7 +1505,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         return out or None
 
     def _captions(self, vid):
-        """What the panel's Captions & dub section shows for one video."""
+        """What the panel's Captions section shows for one video."""
         if not vid:
             return self._send(400, {"ok": False, "error": "bad video id"})
         from app.core.captions import languages as L

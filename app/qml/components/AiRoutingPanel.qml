@@ -33,7 +33,7 @@ ColumnLayout {
     readonly property var choiceIcons: choices.map(function (c) { return c.glyph })
 
     // v1.6: which feature rows to show ([] = all). Settings shows "ideas"
-    // under AI Providers and "captions" / "dub" under Captions & Dub.
+    // under AI Providers and "captions" / "dub" under Captions.
     property var features: []
     readonly property var _rows: {
         var rs = Settings.aiRoutes || []

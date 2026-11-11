@@ -87,6 +87,31 @@ def speak_rate(lang):
     return _RATE.get((lang or "").split("-")[0].lower(), 13.5)
 
 
+# v1.8: marks that change how a word is SAID, not how long it takes:
+# harakat / tanvin / sukun / shadda / superscript alef, ZWNJ, vocal tags
+_MARKS = re.compile("[\u064b-\u065f\u0670\u200c]")
+_VOCAL = re.compile(r"<[a-z][a-z \-]{1,24}>|\[[a-z][a-z \-]{1,24}\]", re.I)
+# the short vowels a reader doesn't need on screen (tanvin, shadda and hamza stay)
+_SHORT_VOWELS = re.compile("[\u064e\u064f\u0650\u0652]")
+
+
+def spoken_len(text):
+    """v1.8: characters that take time to say. Diacritics added for the voice
+    (اعراب) and ZWNJ must not make a line look "too long" (that triggered a
+    paid tightening call for nothing)."""
+    t = _VOCAL.sub(" ", str(text or ""))
+    return len(re.sub(r"\s{2,}", " ", _MARKS.sub("", t)).strip())
+
+
+def caption_text(text, lang):
+    """v1.8: the dub's script as captions. The voice gets the diacritics; the
+    screen gets clean Persian (short vowels off, tanvin / shadda kept)."""
+    t = str(text or "")
+    if str(lang or "").split("-")[0].lower() == "fa":
+        t = _SHORT_VOWELS.sub("", t)
+    return t
+
+
 def char_budget(seconds, lang):
     return max(8, int(seconds * speak_rate(lang)))
 
@@ -260,7 +285,126 @@ def _brief_text(brief):
 
 # ── batches ──────────────────────────────────────────────────────────────
 
-_SYS_SUB = """You are an award-winning subtitle translator. You translate meaning, intent, humour and tone, never word-for-word. Your subtitles sound like a native speaker of the target language wrote them for this exact video: natural idioms instead of literal ones, the right register, names and numbers kept correct. You are accurate: you never add or drop information that matters."""
+_SYS_SUB = """You are an award-winning subtitle translator and a native speaker of the target language. You never translate word-for-word: you hear what the person MEANS and write how a native speaker would actually SAY it in that moment: everyday words, natural idioms instead of literal ones, the speaker's energy and humour. A viewer must never feel they are reading a translation, and never feel it is bookish or stiff. Names and numbers stay correct; you never add or drop information that matters."""
+
+# v2.0: how the translation talks. "natural" is the default: spoken, never bookish.
+REGISTERS = (
+    ("natural", "Natural", "Spoken and fluent, the way a native YouTuber says it. Never bookish."),
+    ("casual", "Casual", "Chatty and street-level: slang and contractions, like friends talking."),
+    ("formal", "Formal", "Clean standard language for news, lectures and documentaries."),
+)
+_REGISTER_KEYS = tuple(k for k, _n, _d in REGISTERS)
+
+_REG_RULES = {
+    "natural": """
+- Register: SPOKEN. Write it the way people really talk on YouTube in {tgt}, not the way a book, a dictionary or the news would. Short everyday words over formal ones; active voice; natural word order of {tgt}.
+- Kill translationese: no literal calques of English structure ("this is a ... that ...", "in fact" on every line, "you know" / "like" / "so" translated literally); drop filler that a native wouldn't say.""",
+    "casual": """
+- Register: CASUAL. Friends talking: slang, contractions and colloquial grammar of {tgt} wherever the speaker is relaxed; jokes and swearing keep their strength. Never stiff.""",
+    "formal": """
+- Register: FORMAL but natural: clean standard {tgt}, correct grammar, no slang; still fluent and modern, never archaic or bureaucratic.""",
+}
+
+_FA_SUB = {
+    "natural": """
+- Persian (فارسی): محاوره‌ای و روان، مثل یک یوتیوبر ایرانی که خودش حرف می‌زند؛ نه کتابی و نه خبری. Use spoken forms where they read naturally: می‌خوام، می‌تونم، نمی‌دونم، اینو، اونجا، یه، چی، الان، خیلی، واقعاً. NEVER bookish words: «می‌باشد، گردید، نمودن، جهت، لذا، اینجانب، فلذا، همچنین» (use «هست، شد، کردن، برای، پس، من، تازه/هم»). Idioms by meaning: "piece of cake" → «مثل آب خوردن»، "no way" → «امکان نداره» / «عمراً»، "guys" → «بچه‌ها»، "Oh my god" → «وای خدای من» / «وای». Persian punctuation «؟ ، !»، نیم‌فاصله in می‌/نمی‌ and ‌ها. Keep Latin brand names as they are.""",
+    "casual": """
+- Persian (فارسی): کاملاً خودمونی و شکسته، مثل حرف زدن دو تا رفیق: می‌خوام، نمی‌دونم، چیکار، اینجوری، خفن، باحال، داداش (when it fits). Strong reactions stay strong. Persian punctuation «؟ ، !»، نیم‌فاصله in می‌/نمی‌ and ‌ها.""",
+    "formal": """
+- Persian (فارسی): فارسیِ معیار و روان (نوشتاری ولی امروزی)، نه شکسته و نه کتابی‌ـاداری. Avoid «می‌باشد، گردید، نمودن، جهت، لذا». Persian punctuation «؟ ، ؛»، نیم‌فاصله where Persian spelling needs it.""",
+}
+
+# v2.0: the biggest cause of stiff subtitles is translating fragments
+_SENTENCE = """
+- Think in SENTENCES, not lines: when one spoken sentence runs across several ids, translate the whole sentence first in natural {tgt} word order, then split it back across those ids at natural break points. A word may move to a neighbouring id when {tgt} grammar needs it; never leave an id empty."""
+
+
+def register_rules(tgt, register):
+    reg = register if register in _REGISTER_KEYS else "natural"
+    out = _REG_RULES[reg].format(tgt=_lang_label(tgt)) + _SENTENCE.format(tgt=_lang_label(tgt))
+    if str(tgt or "").split("-")[0].lower() == "fa":
+        out += _FA_SUB[reg]
+    return out
+
+
+_SYS_REFINE = """You are a native {tgt} subtitle editor with a great ear. You get subtitles that were translated from another language. You fix every line that still sounds translated, stiff, bookish or unnatural, so it reads exactly like a native speaker talking. You keep the meaning, names and numbers. You leave good lines alone."""
+
+_REFINE_PROMPT = """These {tgt} subtitles were translated from {src}{title_line}.
+
+BRIEF:
+{brief}
+
+Rules:
+- Rewrite ONLY the lines that sound translated, literal, bookish or stiff in {tgt}. Leave natural lines out of your answer.{reg}
+- Same meaning, same speaker intent. Keep names, numbers and brand names exactly.
+- About the same length (never more than ~15% longer): these are subtitles.
+- A sentence that runs across several ids stays split across the same ids.
+
+LINES ("src" = original, "x" = current subtitle):
+{lines}
+
+Return JSON only, with the changed lines only (empty list when all are fine): {{"t": [{{"id": <id>, "x": "<better line>"}}, …]}}"""
+
+
+def refine_cues(out, src, tgt, register="natural", title="", client=None, brief_txt="",
+                cache_dir="", should_cancel=None, on_progress=None):
+    """v2.0 native-editor pass. Returns (cues, n_changed). Never fails the
+    job: any error keeps the first-pass lines."""
+    client = client or _client("captions")
+    reg = register_rules(tgt, register)
+    changed = 0
+    res = [c.copy() for c in out]
+    batches = [list(range(i, min(len(res), i + _BATCH))) for i in range(0, len(res), _BATCH)]
+    for n, ids in enumerate(batches):
+        if should_cancel and should_cancel():
+            break
+        listing = "\n".join(json.dumps({"id": i, "src": C.flat(res[i].meta.get("src", "")),
+                                         "x": C.flat(res[i].text)}, ensure_ascii=False, separators=_COMPACT)
+                            for i in ids if not res[i].meta.get("untranslated"))
+        if not listing:
+            continue
+        path = ""
+        if cache_dir:
+            h = hashlib.sha1((listing + "|" + str(register) + "|" + brief_txt).encode("utf-8", "replace")).hexdigest()[:16]
+            path = os.path.join(cache_dir, f"rf_{(tgt or 'x').split('-')[0]}_{h}.json")
+        got = None
+        if path and os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    got = {int(k): v for k, v in json.load(f).items()}
+            except Exception:            # noqa: BLE001
+                got = None
+        if got is None:
+            prompt = _REFINE_PROMPT.format(tgt=_lang_label(tgt), src=_lang_label(src),
+                                           title_line=f' (video: "{title}")' if title else "",
+                                           brief=brief_txt or "(none)", reg=reg, lines=listing)
+            try:
+                data = _json(client.generate(prompt, _SYS_REFINE.format(tgt=_lang_label(tgt)), timeout=180,
+                                             max_output_tokens=min(8000, 300 + 120 * len(ids))))
+            except Exception:            # noqa: BLE001 - the first pass stands
+                break
+            got = {}
+            for item in (data.get("t") if isinstance(data, dict) else data) or []:
+                try:
+                    i = int(item.get("id"))
+                except (TypeError, ValueError, AttributeError):
+                    continue
+                x = C.clean_text(str(item.get("x") or "")).replace("\n", " ")
+                if i in ids and x and len(x) <= max(12, int(len(C.flat(res[i].text)) * 1.35)):
+                    got[i] = x
+            if path:
+                try:
+                    with open(path, "w", encoding="utf-8") as f:
+                        json.dump({str(k): v for k, v in got.items()}, f, ensure_ascii=False)
+                except OSError:
+                    pass
+        for i, x in got.items():
+            if 0 <= i < len(res) and x != res[i].text:
+                res[i] = res[i].copy(text=x, meta=dict(res[i].meta, refined=True))
+                changed += 1
+        if on_progress:
+            on_progress((n + 1) / len(batches))
+    return res, changed
 
 _SYS_DUB = """You are a dubbing adapter for film and YouTube. You rewrite lines in the target language so a voice actor can SAY them naturally in the time the original line takes. Spoken register, natural rhythm, the same emotion and intent. You keep meaning faithful and keep names and numbers correct."""
 
@@ -278,6 +422,23 @@ _RULES_DUB = """Rules:
 - Keep vocal tags exactly where they belong in the sentence: <laugh>, <sigh>, <gasp>, <short pause>, <breath> … (English tags, angle brackets).
 - One translation per id. Do not merge or split ids. Do not translate the CONTEXT lines.
 - No stage directions in words, no notes.{rtl_rule}"""
+
+# v1.8: a Persian dub is READ by a TTS voice: the spelling is the pronunciation
+_FA_DUB = """
+- Persian script for the voice (a TTS voice reads this line, so the spelling IS the pronunciation):
+  * Persian punctuation that carries the intonation: «،» for a breath, «.» to end, «؟» on every question (without it the question is read flat), «!» only for real excitement, «…» for a trailing or hesitant end. Never Latin ? , ;
+  * نیم‌فاصله (ZWNJ) wherever Persian spelling needs it: می‌خوام، نمی‌دونم، کتاب‌ها، خونه‌ات، بزرگ‌تر. Never a plain space there.
+  * اعراب ONLY where a word would otherwise be misread: homographs (کُشت / کِشت، مُرد / مَرد، گُل / گِل)، the ezafe kasre when the phrase is ambiguous (دستِ راست)، tanvin as it is spelled (واقعاً، حتماً). Do not vocalise every word. Diacritics and ZWNJ don't count toward "max".
+  * Numbers, symbols and abbreviations written the way they are said: ۲۵٪ → بیست‌وپنج درصد، $10 → ده دلار.
+  * When the register is casual, colloquial Persian spelled as it is pronounced (می‌خوام، نمی‌دونم، اینجوری)."""
+
+_FA_SHORT = (" Keep the Persian punctuation (، ؟ !)، the نیم‌فاصله and the few diacritics that fix "
+             "pronunciation; diacritics don't count toward \"max\".")
+
+
+def _script_hint(tgt):
+    return _FA_SHORT if str(tgt or "").split("-")[0].lower() == "fa" else ""
+
 
 # v1.4.12: YouTube's auto captions as the source
 _RAW_ASR = """
@@ -356,7 +517,7 @@ _JSON_NUDGE = ("\n\nIMPORTANT: your last answer could not be read. Reply with th
 
 
 def _translate_batch(client, cues, ids, src, tgt, brief_txt, tone, dub, title="", raw_asr=False,
-                     polish=False):
+                     polish=False, register="natural"):
     lo, hi = ids[0], ids[-1]
     before = range(max(0, lo - _CTX_BEFORE), lo)
     after = range(hi + 1, min(len(cues), hi + 1 + _CTX_AFTER))
@@ -368,8 +529,12 @@ def _translate_batch(client, cues, ids, src, tgt, brief_txt, tone, dub, title=""
     else:
         rules = (_RULES_DUB if dub else _RULES_SUB).format(tgt=_lang_label(tgt), tone=tone or "as in the original",
                                                             cps=cps, rtl_rule=rtl_rule)
+        if not dub:
+            rules += register_rules(tgt, register)
         if raw_asr:
             rules += _RAW_ASR.format(tgt=_lang_label(tgt))
+        if dub and str(tgt or "").split("-")[0].lower() == "fa":
+            rules += _FA_DUB
     if not brief_txt and title:
         brief_txt = f"- video title: {title}"
     head = _PROMPT
@@ -398,7 +563,7 @@ def _translate_batch(client, cues, ids, src, tgt, brief_txt, tone, dub, title=""
                                          str(getattr(client, "model", "") or "")) if x) or "The model"
             raise RuntimeError(
                 f"{who} answered, but not in the format captions need (JSON). Press Resume, "
-                f"or pick another model in Settings → Captions & Dub → Captions.") from e
+                f"or pick another model in Settings → Captions → Captions.") from e
     got = {}
     for item in (data.get("t") if isinstance(data, dict) else data) or []:
         try:
@@ -421,19 +586,21 @@ def _looks_untranslated(src_text, out_text, src, tgt):
 
 
 def translate_cues(cues, tgt, src="", title="", mode="subtitle", on_progress=None,
-                   should_cancel=None, client=None, workers=3, cache_dir="", raw_asr=False):
+                   should_cancel=None, client=None, workers=3, cache_dir="", raw_asr=False,
+                   register="natural", refine=False):
     """New cue list (same timings) in `tgt`. Returns (cues, brief).
     mode: "subtitle" | "dub" | "polish" (v1.4.12: same language, clean-up
     only). raw_asr: the lines are YouTube's automatic captions."""
     if not cues:
         return [], {}
-    # v1.7: the dub's lines follow Settings → Captions & Dub → Script
+    # v1.7: the dub's lines follow Settings → Captions → Script
     client = client or _client("script" if mode == "dub" else "captions")
     dub = mode == "dub"
     polish = mode == "polish"
     if polish:
         tgt = tgt or src
-    flavour = "polish" if polish else ("asr" if raw_asr else "")
+    register = register if register in _REGISTER_KEYS else "natural"
+    flavour = "polish" if polish else (("asr-" if raw_asr else "") + "nat2-" + register)
     brief = (make_brief(cues, src, tgt, title, client, cache_dir)
              if len(cues) >= _BRIEF_MIN_LINES else {})
     brief_txt = _brief_text(brief)
@@ -455,7 +622,7 @@ def translate_cues(cues, tgt, src="", title="", mode="subtitle", on_progress=Non
             except Exception:            # noqa: BLE001 — re-translate
                 pass
         got = _translate_batch(client, cues, ids, src, tgt, brief_txt, tone, dub, title,
-                               raw_asr=raw_asr, polish=polish)
+                               raw_asr=raw_asr, polish=polish, register=register)
         if path and got:
             try:
                 with open(path, "w", encoding="utf-8") as f:
@@ -516,6 +683,11 @@ def translate_cues(cues, tgt, src="", title="", mode="subtitle", on_progress=Non
         x = result.get(i) or c.text
         out.append(c.copy(text=x, words=[], meta=dict(c.meta, src=c.text,
                                                        untranslated=i not in result)))
+    if refine and not polish and not dub and out:
+        out, _n = refine_cues(out, src, tgt, register, title, client, brief_txt, cache_dir,
+                              should_cancel)
+        if brief is not None and isinstance(brief, dict):
+            brief = dict(brief, refined=_n)
     if on_progress:
         on_progress(1.0)
     return out, brief
@@ -526,8 +698,8 @@ def shorten_line(text, seconds, tgt, client=None):
     client = client or _client("script")
     prompt = (f"This {_lang_label(tgt)} dubbing line must be spoken in {seconds:.1f} seconds at a "
               f"natural pace but it is too long:\n{text}\n\n"
-              "Rewrite it shorter with the same meaning, emotion and register. Keep any <tags>. "
-              'Return JSON only: {"x": "<line>"}')
+              "Rewrite it shorter with the same meaning, emotion and register. Keep any <tags>."
+              + _script_hint(tgt) + ' Return JSON only: {"x": "<line>"}')
     try:
         data = _json(client.generate(prompt, _SYS_DUB, timeout=60, max_output_tokens=400))
         x = C.clean_text(str(data.get("x") or "")).replace("\n", " ")
@@ -554,7 +726,7 @@ def shorten_lines(items, tgt, client=None, should_cancel=None, batch=25):
         prompt = (f"These {_lang_label(tgt)} dubbing lines are too long to be spoken in their time "
                   f"(\"sec\") at a natural pace. Rewrite each one at or under its \"max\" characters "
                   "(tags not counted) with the same meaning, emotion and register. Keep any <tags> "
-                  "where they belong. One line per id.\n\nLINES:\n" + listing +
+                  "where they belong. One line per id." + _script_hint(tgt) + "\n\nLINES:\n" + listing +
                   '\n\nReturn JSON only: {"t": [{"id": <id>, "x": "<line>"}, ...]}')
         try:
             data = _json(client.generate(prompt, _SYS_DUB, timeout=120,

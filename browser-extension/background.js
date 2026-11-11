@@ -60,3 +60,8 @@ chrome.runtime.onStartup.addListener(() => {
 // once; if the app was closed at that moment the ping was lost and the
 // guide waited until the next browser restart.
 bridge({ path: "/v1/ping", timeout: 2000 });
+
+// v1.7: the ad blocker is gone. Clear what v1.6 left behind (its on / off
+// setting, the skipped-ads count and the "off" toolbar badge), once per wake.
+try { chrome.storage.local.remove(["yth.adblock", "yth.adStats"]).catch(() => {}); } catch (_) {}
+try { chrome.action.setBadgeText({ text: "" }).catch(() => {}); } catch (_) {}

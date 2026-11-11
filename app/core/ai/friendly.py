@@ -108,6 +108,15 @@ def explain(err, step=""):
         kind, title = "error", "Something went wrong"
     elif low in ("cancelled", "canceled"):
         kind, title = "cancelled", "Stopped"
+    elif _has(low, "winerror 5]", "winerror 32]", "winerror 33]", "access is denied",
+              "being used by another process", "errno 13]") and not _has(low, "(403)", " 403"):
+        # v1.9: a file another program held open for a moment (antivirus,
+        # Explorer preview, a player), not a key problem. Was "Something went
+        # wrong" (or, for Errno 13, the misleading "Access refused" below).
+        kind, title = "locked", "A file was busy"
+        hint = ("Close the video if a player has it open, then Retry: everything recorded is kept. "
+                "If it keeps happening, allow YouTube Hunter in Windows Security → "
+                "Controlled folder access.")
     elif _has(low, "can't listen", "cannot listen", "listen to audio", "input_audio",
               "audio input", "does not support audio", "doesn't support audio",
               "unsupported modality", "audio is not supported"):
@@ -160,6 +169,11 @@ def explain(err, step=""):
 
     if kind == "error":
         detail = _first_sentence(raw)
+    elif kind == "locked":
+        # the file's name, not the whole C:\\Users\\... path
+        m = re.search(r"'([^']+)'", raw)
+        name = re.split(r"[\\/]+", m.group(1).replace("\\\\", "\\"))[-1] if m else ""
+        detail = f"In use: {name}" if name else ""
     else:
         detail = " · ".join(x for x in (where, when) if x)
     return {"kind": kind, "title": title, "detail": detail, "hint": hint,

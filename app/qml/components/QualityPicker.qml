@@ -997,7 +997,7 @@ Dialog {
                 })
             }
 
-            // ═══ captions & AI dub, inline (v1.3.3) ═══
+            // ═══ captions, inline (v1.3.3) ═══
             // Chosen right here (look, language, dub), applied by itself once
             // this download finishes. The full sheet is one link away.
             C.CaptionDubDeck {

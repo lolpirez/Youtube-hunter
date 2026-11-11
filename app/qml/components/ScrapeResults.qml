@@ -859,6 +859,20 @@ Item {
                                 spacing: 2
                                 opacity: rowHover.hovered ? 1 : 0.0
                                 Behavior on opacity { NumberAnimation { duration: Tokens.durFast } }
+                                // v2.1: open the Video Dossier
+                                IconButton {
+                                    implicitWidth: 32; implicitHeight: 32
+                                    iconName: "page_insights"
+                                    glyphSize: 15
+                                    accent: Theme.primary
+                                    tip: I18n.tr("Video dossier: details, transcript, comments, CSV")
+                                    onClicked: VideoDossier.open({
+                                        videoId: model.vid, title: model.title, thumbId: model.thumb,
+                                        outlierText: model.mult > 0 ? root.fmtMult(model.mult) : "",
+                                        outlierLabel: I18n.tr("vs nearby uploads"),
+                                        outlierKey: "vs_nearby_uploads"
+                                    })
+                                }
                                 IconButton {
                                     implicitWidth: 32; implicitHeight: 32
                                     iconName: "content_copy"

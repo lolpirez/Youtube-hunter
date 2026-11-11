@@ -701,7 +701,7 @@ class DownloadsVM(QObject):
             # v1.4: Stop on a finishing row stops the captions / dub; the
             # downloaded video itself is kept
             post.cancel(video_id)
-            self.toast.emit(tr("Stopping captions & dub…"), "info")
+            self.toast.emit(tr("Stopping captions…"), "info")
             return
         if not dlp.is_running(video_id):
             # Nothing is actually transferring (the worker already ended, or
@@ -943,7 +943,7 @@ class DownloadsVM(QObject):
             self.refresh()
             self._tick += 1
             self.progressChanged.emit()
-            self.toast.emit(tr("Downloaded. Now adding captions & dub…"), "info")
+            self.toast.emit(tr("Downloaded. Now adding captions…"), "info")
             return
         downloads_upsert(video_id, status="complete" if ok else "failed",
                          progress=100 if ok else None,

@@ -105,3 +105,13 @@ The bridge is a local HTTP server:
 | Everything worked, then stopped after an app update | Reload the extension (`chrome://extensions` → **Reload**) so it picks up the new panel. |
 
 ---
+
+## Ad blocker: removed (v1.7)
+
+The v1.6 ad blocker is gone: `adblock.js`, `rules/ads.json`, the
+`declarativeNetRequest` permission, the shield button in the panel header and
+the popup switch. On first wake v1.7 clears its leftover settings
+(`yth.adblock`, `yth.adStats`) and the "off" badge. The toolbar popup now just
+shows the version and a one-line hint. Press **Reload** on the extension once
+after updating.
+

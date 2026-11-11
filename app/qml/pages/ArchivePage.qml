@@ -1920,12 +1920,81 @@ Item {
                             App.goto(4)
                         }
                     }
+                    // v2.2: the full export reads every video like the Video
+                    // Dossier, in the background. Its progress lives here,
+                    // with a stop button; when it lands, "Show file".
+                    Rectangle {
+                        id: fxPill
+                        readonly property bool busy: Archive.fullExportBusy
+                        visible: busy || fxShow.running
+                        Layout.preferredHeight: Tokens.fieldHeight
+                        Layout.preferredWidth: fxRow.implicitWidth + 28
+                        Layout.alignment: Qt.AlignVCenter
+                        radius: height / 2
+                        color: U.withAlpha(Theme.primary, Theme.isDark ? 0.14 : 0.09)
+                        border.width: 1
+                        border.color: U.withAlpha(Theme.primary, Theme.isDark ? 0.4 : 0.3)
+                        onBusyChanged: if (!busy && Archive.fullExportPath !== "") fxShow.restart()
+                        Timer { id: fxShow; interval: 12000 }
+
+                        // the share already read, as a fill behind the copy
+                        Rectangle {
+                            visible: fxPill.busy
+                            x: 1; y: 1
+                            height: parent.height - 2
+                            radius: height / 2
+                            width: Math.max(height, (parent.width - 2)
+                                   * (Archive.fullExportTotal > 0 ? Archive.fullExportDone / Archive.fullExportTotal : 0))
+                            color: U.withAlpha(Theme.primary, Theme.isDark ? 0.18 : 0.12)
+                            Behavior on width { NumberAnimation { duration: 320; easing.type: Easing.OutCubic } }
+                        }
+                        Row {
+                            id: fxRow
+                            anchors.centerIn: parent
+                            spacing: 8
+                            C.IconGlyph {
+                                anchors.verticalCenter: parent.verticalCenter
+                                name: fxPill.busy ? "cloud_download" : "check"
+                                size: 16
+                                glyphColor: Theme.primary
+                            }
+                            C.AppText {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: fxPill.busy
+                                      ? I18n.tr("Full export {d}/{n}")
+                                            .replace("{d}", Archive.fullExportDone)
+                                            .replace("{n}", Archive.fullExportTotal)
+                                      : I18n.tr("Show file")
+                                weight: Tokens.weightDemiBold
+                                font.pixelSize: Tokens.fontCaption
+                                font.features: ({ "tnum": 1 })
+                                color: Theme.primary
+                            }
+                            C.IconButton {
+                                visible: fxPill.busy
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 26; height: 26
+                                implicitWidth: 26; implicitHeight: 26
+                                glyphSize: 14
+                                iconName: "close"
+                                accent: Theme.primary
+                                tip: I18n.tr("Stop (keeps what is already read)")
+                                onClicked: Archive.cancelFullExport()
+                            }
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            enabled: !fxPill.busy
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: { fxShow.stop(); Archive.revealFullExport() }
+                        }
+                    }
                     C.IconButton {
                         Layout.preferredWidth: Tokens.fieldHeight
                         Layout.preferredHeight: Tokens.fieldHeight
                         iconName: "save"
                         accent: Theme.primary
-                        tip: I18n.tr("Export")
+                        tip: I18n.tr("Export: full data like the Video Dossier, or a quick table")
                         onClicked: exportDialog.open()
                     }
                     C.IconButton {
@@ -3679,8 +3748,25 @@ Item {
         id: exportDialog
         title: I18n.tr("Export section")
         fileMode: FileDialog.SaveFile
-        nameFilters: ["CSV (*.csv)", "Excel (*.xlsx)", "JSON Lines (*.jsonl)"]
-        onAccepted: Archive.exportCurrent(selectedFile.toString())
+        // v2.2: the first filter is the FULL export (every video read like
+        // the Video Dossier: stats, tags, description, whole transcript, top
+        // comments most-liked-first, newest comments). The rest are the
+        // quick, offline table of what the archive already holds.
+        // v2.3: the full export is a real table now (one row per video,
+        // one column per fact), as a formatted Excel workbook or a CSV.
+        nameFilters: [I18n.tr("Full data, Excel (*.xlsx)"),
+                      I18n.tr("Full data, CSV (*.csv)"),
+                      I18n.tr("Quick table, CSV (*.csv)"),
+                      I18n.tr("Quick table, Excel (*.xlsx)"), "JSON Lines (*.jsonl)"]
+        onAccepted: {
+            let f = selectedFile.toString()
+            const i = selectedNameFilter.index
+            // make the extension match the picked format
+            const ext = [".xlsx", ".csv", ".csv", ".xlsx", ".jsonl"][i] || ""
+            if (ext && !f.toLowerCase().endsWith(ext)) f += ext
+            if (i <= 1) Archive.exportFull(f)
+            else Archive.exportCurrent(f)
+        }
     }
 
     C.QualityPicker { id: qualityPicker; target: Archive }

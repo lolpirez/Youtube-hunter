@@ -26,7 +26,7 @@
 ; ===========================================================================
 
 #define MyAppName "YouTube Hunter"
-#define MyAppVersion "1.3.0"
+#define MyAppVersion "2.3.1"
 #define MyAppPublisher "YouTube Hunter"
 #define MyAppExeName "YouTubeHunter.exe"
 #define MyAppId "{{8F3A2C71-4E9B-4B2A-9C6D-1E4A5F60B213}"

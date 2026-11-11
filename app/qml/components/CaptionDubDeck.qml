@@ -130,6 +130,8 @@ ColumnLayout {
     }
     function pushCaptions() {
         var o = _srcOpts()
+        o.register = VoiceStudio.defaultRegister || "natural"
+        o.refine = VoiceStudio.defaultRefine !== false
         if (capSource === "youtube") {
             o.target = _ytPick ? _ytPick.lang : ""
             o.allow_ai = false
@@ -225,7 +227,7 @@ ColumnLayout {
         spacing: Tokens.space2
         C.IconGlyph { name: "auto_awesome"; fill: true; size: 15; glyphColor: deck.anyOn ? Theme.primary : Theme.on_surface_var }
         C.AppText {
-            text: I18n.tr("Captions & AI dub")
+            text: I18n.tr("Captions")
             weight: Tokens.weightBold
             font.pixelSize: Tokens.fontBody
             color: Theme.text_strong
@@ -263,6 +265,7 @@ ColumnLayout {
             Layout.fillWidth: true
             Layout.preferredWidth: 1
             enabled: !deck.busy
+            visible: false                 // v2.0: the AI dub is gone
             glyph: "volume_up"
             heading: I18n.tr("AI dub")
             on: deck.dubOn
@@ -513,7 +516,7 @@ ColumnLayout {
     // ═════════════ dub settings ═════════════
     Rectangle {
         Layout.fillWidth: true
-        visible: deck.lane === 1 && deck.dubOn
+        visible: false                     // v2.0: the AI dub is gone
         radius: Tokens.radiusLg
         color: Theme.surface_low
         border.width: 1
@@ -611,7 +614,7 @@ ColumnLayout {
             Hint {
                 glyph: VoiceStudio.geminiReady ? (deck.capSource === "youtube" ? "youtube" : deck.capSource === "file" ? "description" : "gemini") : "warning"
                 tone: VoiceStudio.geminiReady ? "" : "warn"
-                text: !VoiceStudio.geminiReady ? I18n.tr("AI dub needs voices: a Google Gemini key or an ElevenLabs key (Settings → Captions & Dub).")
+                text: !VoiceStudio.geminiReady ? I18n.tr("AI dub needs voices: a Google Gemini key or an ElevenLabs key (Settings → Captions).")
                     : deck.capSource === "youtube" ? I18n.tr("YouTube's captions for timing, {v} for the voices").replace("{v}", VoiceEngine.engine === "elevenlabs" ? "ElevenLabs" : "Gemini")
                     : deck.capSource === "file" ? I18n.tr("Your subtitle file for timing, {v} for the voices").replace("{v}", VoiceEngine.engine === "elevenlabs" ? "ElevenLabs" : "Gemini")
                     : VoiceEngine.engine === "elevenlabs" ? I18n.tr("Gemini listens, ElevenLabs speaks") : I18n.tr("Gemini listens and speaks")

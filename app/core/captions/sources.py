@@ -312,7 +312,8 @@ Rules:
   "s" is the moment the first word is heard and "e" the moment the last word ends (not the next line's start).
 - Write clean, fluent subtitles of exactly what is said: correct punctuation, casing and spelling; numbers as digits; never break a line in the middle of a short phrase.
 - Keep fillers only when meaningful. Mark non-speech only as [music] / [laughs] / [applause] lines when there is no speech.
-- "spk": a short speaker id (S1, S2, …) consistent within the clip{spk_hint}.
+- "spk": a short speaker id (S1, S2, …). Tell people apart by their VOICE: one person keeps one id; a person
+  you haven't heard before gets a new id, never an id that belongs to someone else{spk_hint}.
 - "lang": the BCP-47 code of the spoken language.{perf_rules}
 
 Return JSON only:
@@ -327,9 +328,11 @@ _PERF_RULES = """
 - "style": how the line is delivered, in English, max 5 words ("excited, fast" / "deadpan, slow" / "whispered, nervous").
 - "tagged": ONLY when you hear a vocal event in the line: the line text with the event where it happens, using
   <laugh> <chuckle> <giggle> <sigh> <gasp> <breath> <cough> <sniff> <scoff> <hmm> <short pause> <long pause>. Leave it out otherwise.
-- "speakers": one entry per speaker id with "gender" (male|female) and "age" (child|teen|young adult|adult|senior)."""
-_SHAPE_PERF = ('{"lang": "en", "speakers": [{"id": "S1", "gender": "male", "age": "adult"}], '
-               '"lines": [{"s": 0.0, "e": 2.4, "t": "text", "spk": "S1", "style": "excited, fast"}]}')
+- "g": "m" or "f", the gender of the voice you hear in THIS line (judge the voice, not the id).
+- "speakers": one entry per speaker id with "gender" (male|female), "age" (child|teen|young adult|adult|senior,
+  judged from the voice: a kid is "child", an old man / old woman is "senior") and "voice" (timbre in 2-4 words)."""
+_SHAPE_PERF = ('{"lang": "en", "speakers": [{"id": "S1", "gender": "male", "age": "senior", "voice": "deep, raspy"}], '
+               '"lines": [{"s": 0.0, "e": 2.4, "t": "text", "spk": "S1", "g": "m", "style": "excited, fast"}]}')
 
 
 def _listen_shape(data):
@@ -356,7 +359,8 @@ def _listen_shape(data):
         for sp in sps if isinstance(sps, list) else []:
             if isinstance(sp, dict) and sp.get("id"):
                 speakers[str(sp["id"])] = {"gender": str(sp.get("gender") or "").lower(),
-                                           "age": str(sp.get("age") or "")}
+                                           "age": str(sp.get("age") or ""),
+                                           "voice": str(sp.get("voice") or "")[:40]}
         inner = next((obj[k] for k in ("lines", "subtitles", "segments", "captions", "cues")
                       if isinstance(obj.get(k), list)), None)
         if inner is not None:
@@ -368,6 +372,8 @@ def _listen_shape(data):
                   "spk": obj.get("spk", obj.get("speaker", ""))}
             if "style" in obj:
                 ln["style"] = str(obj.get("style") or "")
+            if obj.get("g"):
+                ln["g"] = str(obj.get("g"))[:6]
             if obj.get("tagged"):
                 ln["tagged"] = str(obj.get("tagged"))
             lines.append(ln)
@@ -405,8 +411,9 @@ def ai_transcribe(media_path, start=0.0, end=0.0, chunk=120.0, on_progress=None,
     known_spk = []
     # v1.5: with the quota saver on, the transcription also reads the
     # performance (the dub then skips its own listening request)
-    from app.core.captions import gemini_budget as B
-    with_perf = B.saver_on()
+    # v2.0: the dub (the only reader of the performance) is gone, so the
+    # transcription asks for the words only: fewer output tokens per slice
+    with_perf = False
     spk_info = {}
     while t < total_end - 0.5:
         if should_cancel and should_cancel():
@@ -427,7 +434,12 @@ def ai_transcribe(media_path, start=0.0, end=0.0, chunk=120.0, on_progress=None,
                                          should_cancel=should_cancel)
             if not audio:
                 raise RuntimeError("Couldn't extract the audio: " + err)
-            hint = (f"; speakers heard earlier: {', '.join(known_spk)} (reuse ids for the same voices)"
+            # v1.9: who each id IS (gender, age, timbre), not just the ids: a
+            # bare "S1, S2" let the model hand S1 to whoever it heard first
+            hint = ("; speakers heard earlier in this video (reuse an id ONLY for that same person): "
+                    + "; ".join(f"{sid} = " + ", ".join(x for x in (
+                        (spk_info.get(sid) or {}).get("gender"), (spk_info.get(sid) or {}).get("age"),
+                        (spk_info.get(sid) or {}).get("voice")) if x) for sid in known_spk)
                     if known_spk else "")
             while True:
                 try:
@@ -459,7 +471,8 @@ def ai_transcribe(media_path, start=0.0, end=0.0, chunk=120.0, on_progress=None,
         perf_slice = bool(isinstance(data, dict) and data.get("_perf"))
         data = _listen_shape(data)          # an old cached slice may be any shape
         lang = lang or str(data.get("lang") or "").split("-")[0]
-        for sid, info in (data.get("speakers") or {}).items():
+        here = dict(data.get("speakers") or {})          # this slice's own table
+        for sid, info in here.items():
             spk_info.setdefault(sid, info)
         for ln in data.get("lines") or []:
             try:
@@ -475,14 +488,21 @@ def ai_transcribe(media_path, start=0.0, end=0.0, chunk=120.0, on_progress=None,
                 known_spk.append(spk)
             meta = {}
             if perf_slice:
-                meta = {"perf": 1, "style": str(ln.get("style") or "")[:60]}
+                meta = {"perf": 1, "style": str(ln.get("style") or "")[:60], "slc": i}
                 if ln.get("tagged"):
                     meta["tagged"] = C.clean_text(str(ln["tagged"]))
-                info = spk_info.get(spk) or {}
+                # v1.9: what this id was IN THIS SLICE (the model numbers
+                # people per slice), then the line's own heard gender
+                info = here.get(spk) or spk_info.get(spk) or {}
                 if info.get("gender") in ("male", "female"):
                     meta["gender"] = info["gender"]
                 if info.get("age"):
                     meta["age"] = info["age"]
+                if info.get("voice"):
+                    meta["voice"] = info["voice"]
+                g = str(ln.get("g") or "").strip().lower()[:1]
+                if g in ("m", "f"):
+                    meta["g"] = "male" if g == "m" else "female"
             out.append(C.Cue(t + s - start, t + max(e, s + 0.3) - start, text, speaker=spk,
                              meta=meta))
         i += 1

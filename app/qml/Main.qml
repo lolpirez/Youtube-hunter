@@ -1277,6 +1277,27 @@ Window {
     // v1.1: in-app update (GitHub Releases). Opened from the title-bar button
     // or from the "update available" notification.
     C.UpdateDialog { id: updateDialog }
+
+    // v2.1 Video Dossier: built on first use (synchronous, so the very first
+    // open lands on a real card), then kept for the session.
+    // v2.1.1: the card file is VideoDossierCard.qml. It used to be
+    // VideoDossier.qml, and every file in components/ implicitly imports its
+    // own folder, so there `VideoDossier` meant the QML TYPE, not the backend
+    // context property: `VideoDossier.open(...)` threw "is not a function"
+    // and the card read every binding off the type (all empty). Keep the
+    // card's file name different from any context property.
+    Loader {
+        id: dossierLoader
+        active: false
+        source: "components/VideoDossierCard.qml"
+    }
+    Connections {
+        target: VideoDossier
+        function onOpenRequested() {
+            dossierLoader.active = true
+            if (dossierLoader.item) dossierLoader.item.present()
+        }
+    }
     Connections {
         target: Updater
         function onOpenRequested() { updateDialog.present() }

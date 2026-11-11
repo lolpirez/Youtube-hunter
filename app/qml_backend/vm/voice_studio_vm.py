@@ -1,8 +1,8 @@
 """app.qml_backend.vm.voice_studio_vm - YouTube Hunter (QML).
 
 ViewModel behind the Voice Studio sheet (components/VoiceStudioSheet.qml):
-captions in five styles, AI translation, and AI dubbing, for any finished
-download or cut clip. Exposed to QML as `VoiceStudio`.
+captions in every style and natural AI translation, for any finished
+download or cut clip (v2.0: the AI dub is gone). Exposed to QML as `VoiceStudio`.
 
 Jobs run on worker threads (app.core.captions.jobs) and keep running when the
 sheet is closed; progress comes back over queued signals and is coalesced to
@@ -20,7 +20,6 @@ import uuid
 
 from PySide6.QtCore import QObject, Property, QTimer, Signal, Slot
 
-from app.core.captions import dubbing as D
 from app.core.captions import gemini_media as G
 from app.core.captions import jobs as J
 from app.core.captions import languages as L
@@ -42,7 +41,7 @@ except Exception:                         # noqa: BLE001
 
 
 def _queue_key(video_id, path=""):
-    """Where a queued caption/dub choice waits: the video id when known,
+    """Where a queued caption choice waits: the video id when known,
     otherwise the local file it was chosen for."""
     vid = (video_id or "").strip()
     if vid:
@@ -58,7 +57,7 @@ class VoiceStudioVM(QObject):
     tracksChanged = Signal()     # v1.3.3: per-video track cache (inline deck)
     toast = Signal(str, str)
     # v1.4.7: a finished job moved a download ("download") or a clip
-    # ("clip") onto its new captioned / dubbed file: that list refreshes
+    # ("clip") onto its new captioned file: that list refreshes
     adopted = Signal(str)
 
     _tracksReady = Signal(str, "QVariant", str)        # (token, data, error)
@@ -80,7 +79,7 @@ class VoiceStudioVM(QObject):
         VoiceStudioVM._instance = self
         self._target = {}
         self._queue_mode = False
-        self._queued = {}                 # queue key -> {"captions": opts, "dub": opts}
+        self._queued = {}                 # queue key -> {"captions": opts}
         self._tracks = []
         self._spoken = ""
         self._tracks_loading = False
@@ -111,7 +110,7 @@ class VoiceStudioVM(QObject):
         self._finished.connect(self._on_finished)
         self._runQueued.connect(self._do_run_queued)
         self._deckTracks.connect(self._on_deck_tracks)
-        # v1.4 post-production: captions / dub that belong to ONE download or
+        # v1.4 post-production: captions that belong to ONE download or
         # cut run back to back as a pipeline, and the owner (the download
         # row, the Cutter dock, the YouTube panel) shows them as the next
         # steps of its own progress, not as a separate thing to go find.
@@ -133,18 +132,44 @@ class VoiceStudioVM(QObject):
     def languageLabels(self):
         return [x["label"] for x in self.languages]
 
+    @Property(str, constant=True)
+    def defaultRegister(self):
+        try:
+            from app.config import load_app_config
+            r = str((load_app_config() or {}).get("caption_register") or "natural")
+        except Exception:                # noqa: BLE001
+            r = "natural"
+        return r if r in [k for k, _n, _d in T.REGISTERS] else "natural"
+
+    @Property(bool, constant=True)
+    def defaultRefine(self):
+        try:
+            from app.config import load_app_config
+            return bool((load_app_config() or {}).get("caption_refine", True))
+        except Exception:                # noqa: BLE001
+            return True
+
+    # v2.0: the dub is gone; empty catalogues so an old binding never throws
     @Property("QVariantList", constant=True)
     def voices(self):
-        return [{"name": n, "gender": g, "character": c,
-                 "label": f"{n} · {tr(g)}, {tr(c)}"} for n, g, c in G.VOICES]
+        return []
 
     @Property("QVariantList", constant=True)
     def voiceLabels(self):
-        return [v["label"] for v in self.voices]
+        return []
 
     @Property("QVariantList", constant=True)
     def ttsModels(self):
-        return [{"key": m["key"], "label": tr(m["name"]), "desc": tr(m["desc"])} for m in G.TTS_MODELS]
+        return []
+
+    @Slot("QVariantMap", result=str)
+    def startDub(self, _opts):
+        return ""
+
+    @Property("QVariantList", constant=True)
+    def registers(self):
+        """v2.0: how the translation talks (T.REGISTERS)."""
+        return [{"key": k, "label": tr(n), "desc": tr(d)} for k, n, d in T.REGISTERS]
 
     @Slot(str, result=int)
     def languageIndex(self, code):
@@ -232,7 +257,7 @@ class VoiceStudioVM(QObject):
 
     @Property(bool, notify=changed)
     def queueMode(self):
-        """The sheet is choosing captions/dubbing for a file that doesn't
+        """The sheet is choosing captions for a file that doesn't
         exist yet; the job runs when the cut or download finishes."""
         return self._queue_mode
 
@@ -240,7 +265,7 @@ class VoiceStudioVM(QObject):
     def queuedKinds(self):
         key = _queue_key(self._target.get("videoId", ""), self._target.get("path", ""))
         slot = self._queued.get(key, {}) if key else {}
-        return {"captions": bool(slot.get("captions")), "dub": bool(slot.get("dub"))}
+        return {"captions": bool(slot.get("captions"))}
 
     @Slot(str, str, str, float, float)
     def open(self, path, title, video_id, clip_start, clip_end):
@@ -310,7 +335,7 @@ class VoiceStudioVM(QObject):
         """Re-read which AI keys exist. v1.3.3: only notifies when the answer
         changed, so the inline decks can call it on show without waking
         every binding on the page in its entrance frame."""
-        gem, ai = D.can_dub(), T.ai_ready()
+        gem, ai = bool(G.has_gemini()), T.ai_ready()
         label = T.provider_label() if ai else ""
         lis = G.can_listen("captions")
         lis_label = G.listen_label("captions") if lis else ""
@@ -481,10 +506,7 @@ class VoiceStudioVM(QObject):
         if not opts.get("media") or not os.path.isfile(opts["media"]):
             self.toast.emit(tr("The file couldn't be found — it may have been moved or deleted."), "error")
             return ""
-        if kind == "dub" and not D.can_dub(engine=opts.get("voice_engine") or ""):
-            self.toast.emit(tr(D.why_cant_dub(opts.get("voice_engine") or "")), "error")
-            return ""
-        if (opts.get("source") == "ai" and kind != "dub" and not G.can_listen("captions")
+        if (opts.get("source") == "ai" and not G.can_listen("captions")
                 and not opts.get("video_id")):        # v1.4.10: YouTube's words will do
             self.toast.emit(self._listen_why(), "error")
             return ""
@@ -504,7 +526,7 @@ class VoiceStudioVM(QObject):
         ev = threading.Event()
         self._cancel[jid] = ev
         self._job_opts[jid] = (kind, dict(opts))
-        fn = J.run_dub if kind == "dub" else J.run_captions
+        fn = J.run_captions
         threading.Thread(target=self._worker, args=(jid, fn, opts, ev), daemon=True).start()
         self._emit_jobs()
         return jid
@@ -513,18 +535,11 @@ class VoiceStudioVM(QObject):
     def startCaptions(self, opts):
         return self._queue_job("captions", opts) if self._queue_mode else self._start("captions", opts)
 
-    @Slot("QVariantMap", result=str)
-    def startDub(self, opts):
-        return self._queue_job("dub", opts) if self._queue_mode else self._start("dub", opts)
-
     def _queue_job(self, kind, raw):
         """Keep the choices until the cut/download exists, with the same
         provider checks a live run would make before starting."""
         opts = self._opts(raw)
-        if kind == "dub" and not D.can_dub(engine=opts.get("voice_engine") or ""):
-            self.toast.emit(tr(D.why_cant_dub(opts.get("voice_engine") or "")), "error")
-            return ""
-        if (opts.get("source") == "ai" and kind != "dub" and not G.can_listen("captions")
+        if (opts.get("source") == "ai" and not G.can_listen("captions")
                 and not opts.get("video_id")):        # v1.4.10: YouTube's words will do
             self.toast.emit(self._listen_why(), "error")
             return ""
@@ -538,8 +553,7 @@ class VoiceStudioVM(QObject):
             return ""
         self._queued.setdefault(key, {})[kind] = opts
         self._bump_queue()
-        self.toast.emit(tr("Captions queued — they run when the file is ready.") if kind == "captions"
-                        else tr("AI dub queued — it runs when the file is ready."), "success")
+        self.toast.emit(tr("Captions queued — they run when the file is ready."), "success")
         return "queued"
 
     def runQueued(self, video_id, media, title="", clip_start=None, clip_end=None,
@@ -568,7 +582,7 @@ class VoiceStudioVM(QObject):
         if not entry:
             return
         self._bump_queue()
-        for kind in ("captions", "dub"):
+        for kind in ("captions",):
             opts = entry.get(kind)
             if not opts:
                 continue
@@ -644,16 +658,13 @@ class VoiceStudioVM(QObject):
                 bits.append(tr("{n} lines").format(n=res["lines"]))
             if res.get("untranslated"):
                 bits.append(tr("{n} kept in the original").format(n=res["untranslated"]))
-            if res.get("failed_lines"):
-                bits.append(tr("{n} lines couldn't be voiced").format(n=res["failed_lines"]))
-                j["canResume"] = True
             if res.get("seconds"):
                 sec = float(res["seconds"])
                 bits.append(tr("took {t}").format(t=(f"{sec / 60:.1f} min" if sec >= 90 else f"{int(sec)} s")))
             if res.get("note"):
                 bits.append(res["note"])
             j["message"] = " · ".join(bits)
-            title = tr("Dub ready") if j["kind"] == "dub" else tr("Captions ready")
+            title = tr("Captions ready")
             owner = ""
             if not j.get("pipe"):
                 kind_o = self._job_opts.get(jid) or (None, None)
@@ -735,13 +746,12 @@ class VoiceStudioVM(QObject):
         key = _queue_key(video_id, path)
         slot = self._queued.get(key, {}) if key else {}
         out = {}
-        for kind in ("captions", "dub"):
+        for kind in ("captions",):
             o = slot.get(kind)
             if o:
                 tgt = (o.get("target") or "").split("|")[0]
                 out[kind] = {"target": tgt, "langName": L.native_of(tgt) if tgt else "",
-                             "style": o.get("style") or o.get("burn_style") or "",
-                             "voiceMode": o.get("voice_mode") or "", "output": o.get("output") or ""}
+                             "style": o.get("style") or "", "output": o.get("output") or ""}
         return out
 
     @Slot(str, str, result=str)
@@ -753,9 +763,9 @@ class VoiceStudioVM(QObject):
 
     @Slot(str, str, str, str, "QVariantMap", result=bool)
     def setQueued(self, kind, video_id, path, title, raw):
-        """Queue (or update) captions / a dub for a cut that hasn't happened
+        """Queue (or update) captions for a cut that hasn't happened
         yet, straight from the Cutter's inspector: no sheet, no toast."""
-        if kind not in ("captions", "dub"):
+        if kind != "captions":
             return False
         key = _queue_key(video_id, path)
         if not key:
@@ -828,21 +838,13 @@ class VoiceStudioVM(QObject):
 
     # ── v1.4: post-production pipelines ────────────────────────────────
     #
-    # A download or a cut that has captions / a dub queued is not "done"
+    # A download or a cut that has captions queued is not "done"
     # when its file lands. The owner calls take_queued() + start_pipeline(),
     # keeps its own progress UI in a "finishing" state, and gets
     # on_update(summary) / on_done(summary) on the GUI thread. The steps run
     # one after the other on one worker thread, so the owner can show one
     # honest bar (and Gemini never sees two jobs of the same file racing).
-    #
-    # Planning saves work and tokens:
-    #   * captions + dub into the SAME language, where the captions would
-    #     need an AI translation: one pass. The dub's adapted lines (what is
-    #     actually heard) are burned in; no second translation, no second
-    #     encode.
-    #   * captions + dub otherwise: the captions job only writes its lines
-    #     (cues_only) and the dub burns them in its own encode. One encode,
-    #     one final video, with both.
+
 
     def take_queued(self, video_id, media, fallback_key=""):
         """Pop what the user queued for this download / clip (or None)."""
@@ -858,12 +860,12 @@ class VoiceStudioVM(QObject):
             if key and key in self._queued:
                 entry = self._queued.pop(key)
                 self._bump_queue()
-                return entry if (entry.get("captions") or entry.get("dub")) else None
+                return entry if entry.get("captions") else None
         return None
 
     def has_queued(self, video_id, media="", fallback_key=""):
         keys = [k for k in (fallback_key, _queue_key(video_id), _queue_key("", media) if media else "") if k]
-        return any(self._queued.get(k) for k in keys)
+        return any((self._queued.get(k) or {}).get("captions") for k in keys)
 
     @staticmethod
     def _base_lang(code):
@@ -896,38 +898,11 @@ class VoiceStudioVM(QObject):
             return o
 
         cap = fill(entry["captions"]) if entry.get("captions") else None
-        dub = fill(entry["dub"]) if entry.get("dub") else None
-        merged = False
-        if cap and dub:
-            out = cap.get("output") or "burn"
-            same = self._caption_lang(cap) == self._base_lang(dub.get("target"))
-            ai_words = (cap.get("source") == "ai") or self._needs_ai(cap)
-            if same and ai_words:
-                merged = True
-                if out == "burn":
-                    dub["burn_style"] = cap.get("style") or "clean"
-                    dub["size"] = cap.get("size") or "m"
-                    dub["position"] = cap.get("position") or "bottom"
-                elif out == "soft":
-                    dub["soft_after"] = True
-                return [("dub", dub)], merged
-            if out in ("burn", "soft"):
-                cap["cues_only"] = True
-                if out == "burn":
-                    dub["burn_from_captions"] = True
-                    dub["burn_style"] = cap.get("style") or "clean"
-                    dub["size"] = cap.get("size") or "m"
-                    dub["position"] = cap.get("position") or "bottom"
-                else:
-                    dub["soft_from_captions"] = True
-            return [("captions", cap), ("dub", dub)], merged
-        return [(k, o) for k, o in (("captions", cap), ("dub", dub)) if o], merged
+        return ([("captions", cap)] if cap else []), False
 
     def _check(self, kind, opts):
         """The same provider checks a manual start makes. '' = fine."""
-        if kind == "dub" and not D.can_dub(engine=opts.get("voice_engine") or ""):
-            return tr(D.why_cant_dub(opts.get("voice_engine") or ""))
-        if (opts.get("source") == "ai" and kind != "dub" and not G.can_listen("captions")
+        if (opts.get("source") == "ai" and not G.can_listen("captions")
                 and not opts.get("video_id")):        # v1.4.10: YouTube's words will do
             return self._listen_why()
         if kind == "captions" and self._needs_ai(opts) and not T.ai_ready():
@@ -942,20 +917,18 @@ class VoiceStudioVM(QObject):
             return ""
         except Exception as e:            # noqa: BLE001
             return FR.short(str(e)) if str(e) else tr(
-                "“AI listens” needs a provider that can hear audio (Settings → Captions & Dub).")
+                "“AI listens” needs a provider that can hear audio (Settings → Captions).")
 
     @staticmethod
     def _step_weight(kind, opts):
-        if kind == "dub":
-            return 6.0
-        w = 0.6 if (opts.get("cues_only") or opts.get("output") == "srt") else 2.0
+        w = 0.6 if opts.get("output") == "srt" else 2.0
         if opts.get("source") == "ai":
             w += 2.0
         return w
 
     def start_pipeline(self, owner, media, video_id, title, clip_start, clip_end,
                        entry, on_update=None, on_done=None):
-        """Run the queued captions / dub for one finished file. Returns the
+        """Run the queued captions for one finished file. Returns the
         pipeline id ('' when nothing could start: the caller then finishes
         as a plain download / cut)."""
         if not entry or not media or not os.path.isfile(media):
@@ -974,20 +947,12 @@ class VoiceStudioVM(QObject):
             return ""
         if problems:
             self.toast.emit(problems[0], "warn")
-        # a dub that was meant to burn the captions' lines can't when the
-        # captions step was dropped
-        if not any(k == "captions" for k, _o in runnable):
-            for _k, o in runnable:
-                if o.pop("burn_from_captions", None):
-                    o["burn_style"] = ""
-                o.pop("soft_from_captions", None)
         pid = "p" + uuid.uuid4().hex[:9]
         rows = []
         for i, (kind, opts) in enumerate(runnable):
             jid = uuid.uuid4().hex[:10]
             tgt = (opts.get("target") or "").split("|")[0] or self._caption_lang(opts)
-            label = (tr("AI dub + captions") if (kind == "dub" and merged and opts.get("burn_style"))
-                     else tr("AI dub") if kind == "dub" else tr("Captions"))
+            label = tr("Captions")
             self._jobs.insert(0, {
                 "id": jid, "kind": kind, "title": opts.get("title") or os.path.basename(media),
                 "lang": tgt, "langName": L.native_of(tgt) if tgt else "",
@@ -1012,36 +977,14 @@ class VoiceStudioVM(QObject):
         return pid
 
     def _pipe_worker(self, pid, plan):
-        prev = {}
         for jid, kind, opts in plan:
             ev = self._cancel.get(jid)
             if ev is None or ev.is_set():
                 self._finished.emit(jid, False, {}, "cancelled")
                 continue
             o = dict(opts)
-            burn_from = o.pop("burn_from_captions", False)
-            soft_from = o.pop("soft_from_captions", False)
-            soft_after = o.pop("soft_after", False)
-            if kind == "dub" and burn_from and prev.get("cues_json"):
-                o["burn_cues_json"] = prev["cues_json"]
-                o["burn_lang"] = prev.get("lang") or ""
-            elif kind == "dub" and burn_from:
-                o["burn_style"] = ""      # the captions step produced nothing
-            fn = J.run_dub if kind == "dub" else J.run_captions
-            if kind == "dub" and (soft_from or soft_after):
-                srt_src = prev.get("srt") if soft_from else None
-                lang_src = prev.get("lang") if soft_from else o.get("target")
-
-                def fn(oo, report, cancel, _srt=srt_src, _lang=lang_src, _after=soft_after):
-                    res = J.run_dub(oo, report, cancel)
-                    srt = res.get("srt") if _after else _srt
-                    if res.get("video") and srt:
-                        report("Adding the subtitle track", 0.97)
-                        res["video"] = J.add_soft_track(res["video"], srt, _lang or "", report, cancel)
-                    return res
-            res = self._worker(jid, fn, o, ev)
-            if isinstance(res, dict):
-                prev = res
+            fn = J.run_captions
+            self._worker(jid, fn, o, ev)
         self._pipeDone.emit(pid)
 
     def _pipe_step_done(self, pid, jid, state, res, err):
@@ -1173,7 +1116,7 @@ class VoiceStudioVM(QObject):
     _SPEC_STYLES = None
 
     def queue_from_panel(self, video_id, title, spec):
-        """Validate the extension's captions / dub picks and queue them for
+        """Validate the extension's caption picks and queue them for
         this video, exactly like the in-app deck would. Returns the queued
         kinds."""
         return self._queue_spec(_queue_key(video_id), video_id, title, spec)
@@ -1210,24 +1153,10 @@ class VoiceStudioVM(QObject):
                 tgt = str(cap.get("target") or "").lower()
                 o["track"] = ""
                 o["target"] = tgt if tgt in langs else ""
+                reg = str(cap.get("register") or "")
+                if reg in [k for k, _n, _d in T.REGISTERS]:
+                    o["register"] = reg
             clean["captions"] = o
-        dub = spec.get("dub")
-        if isinstance(dub, dict):
-            tgt = str(dub.get("target") or "").lower()
-            if tgt in langs:
-                models = [m["key"] for m in G.TTS_MODELS]
-                clean["dub"] = {
-                    "source": "youtube" if (cap or {}).get("source", "youtube") == "youtube" and video_id else "ai",
-                    "track": "", "sub_path": "", "title": title or "", "video_id": video_id,
-                    "target": tgt,
-                    "voice_mode": "single" if dub.get("voices") == "single" else "auto",
-                    "voice": dub.get("voice") if dub.get("voice") in G.VOICE_NAMES else "Kore",
-                    "acting": True,
-                    "bg_mode": dub.get("bg") if dub.get("bg") in ("duck", "bed", "replace") else "duck",
-                    "tts_model": dub.get("model") if dub.get("model") in models else (models[0] if models else ""),
-                    # v1.6: the panel can pick the voices per dub; "" = Settings' choice
-                    "voice_engine": dub.get("engine") if dub.get("engine") in ("gemini", "elevenlabs") else "",
-                    "keep_original": True, "burn_style": "", "size": "m", "position": "bottom"}
         if into is not None:
             into.update(clean)
             return sorted(clean)
@@ -1237,30 +1166,15 @@ class VoiceStudioVM(QObject):
             self._bump_queue()
         return sorted(clean)
 
-    @staticmethod
-    def dubReadiness():
-        """v1.6: which voices can speak a dub right now. Read fresh on every
-        call (the panel asks again whenever its dub box is open), so turning
-        ElevenLabs on in the app shows in the panel at once."""
-        from app.core.captions import elevenlabs as E
-        try:
-            gem = bool(G.has_gemini())
-        except Exception:                # noqa: BLE001
-            gem = False
-        return {"engine": E.engine(), "eleven": bool(E.ready()), "geminiVoices": gem,
-                "elevenVoice": E.voice_name(E.default_voice()) if E.ready() else ""}
-
     @Slot(result="QVariantMap")
     def panelOptions(self):
-        """What the YouTube panel needs to draw its Captions & dub section."""
+        """What the YouTube panel needs to draw its Captions section."""
         return {"styles": [{"key": s["key"], "name": tr(s["name"])} for s in ST.STYLES],
                 "languages": [{"code": l["code"], "label": l["native"] if l["native"] == l["name"]
                                else f"{l['native']} · {l['name']}",
                                "native": l["native"], "name": l["name"]} for l in L.LANGUAGES],
-                "voices": [n for n, _g, _c in G.VOICES],
-                "models": [{"key": m["key"], "label": tr(m["name"])} for m in G.TTS_MODELS],
-                "gemini": bool(D.can_dub()), "ai": bool(T.ai_ready()),
-                **self.dubReadiness(),
+                "gemini": bool(G.has_gemini()), "ai": bool(T.ai_ready()),
+                "registers": [{"key": k, "label": tr(n)} for k, n, _d in T.REGISTERS],
                 # v1.4.9: "AI listens" follows the Captions pick, not Gemini
                 "listen": bool(G.can_listen("captions")),
                 "listenLabel": G.listen_label("captions"),

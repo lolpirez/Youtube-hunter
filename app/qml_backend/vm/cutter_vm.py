@@ -1141,7 +1141,7 @@ class CutterVM(QObject):
             if not entry:
                 return False
             title = ((self._title or "") if link else (os.path.basename(self._file_path) or ""))
-            self._post = {"pct": 0.0, "stage": tr("Starting captions & dub…"), "steps": [],
+            self._post = {"pct": 0.0, "stage": tr("Starting captions…"), "steps": [],
                           "raw": filepath, "entry": dict(entry)}
             pid = st.start_pipeline("cut", filepath, vid, title, self._cut_start, self._cut_end,
                                     entry, on_update=self._on_post_update,
@@ -1150,11 +1150,11 @@ class CutterVM(QObject):
                 self._post = {}
                 return False
             self._post_pid = pid
-            self._set_status(tr("Cut. Now adding captions & dub…"), "muted")
-            self.toast.emit(tr("Clip cut. Now adding captions & dub…"), "info")
+            self._set_status(tr("Cut. Now adding captions…"), "muted")
+            self.toast.emit(tr("Clip cut. Now adding captions…"), "info")
             live = notifier()
             if live is not None:
-                live.live_update("cut", stage=tr("Captions & dub"), pct=0, indeterminate=False)
+                live.live_update("cut", stage=tr("Captions"), pct=0, indeterminate=False)
             return True
         except Exception:                 # noqa: BLE001 — the clip is safe
             log_crash("CutterVM post-production failed:\n" + traceback.format_exc())
@@ -1168,7 +1168,7 @@ class CutterVM(QObject):
         self.progressChanged.emit()
         live = notifier()
         if live is not None:
-            live.live_update("cut", stage=summary.get("stage") or tr("Captions & dub"),
+            live.live_update("cut", stage=summary.get("stage") or tr("Captions"),
                              pct=int(round(float(summary.get("pct") or 0) * 100)),
                              indeterminate=False)
 
@@ -1181,8 +1181,8 @@ class CutterVM(QObject):
         state = summary.get("state")
         self._post_pid = ""
         self._post = {"steps": summary.get("steps") or [], "pct": 1.0,
-                      "doneNote": (tr("with captions & dub") if state == "done"
-                                   else tr("plain clip: captions & dub stopped") if state == "cancelled"
+                      "doneNote": (tr("with captions") if state == "done"
+                                   else tr("plain clip: captions stopped") if state == "cancelled"
                                    else (summary.get("error") or ""))}
         self._result_path = final or ""
         self._set_status(tr("Saved."), "ok")

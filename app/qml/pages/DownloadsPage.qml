@@ -97,7 +97,7 @@ Item {
              : Theme.on_surface_var
     }
     function _kindLabel(k, live) {
-        if (k === "merging" && live && live.post) return I18n.tr("Captions & dub")
+        if (k === "merging" && live && live.post) return I18n.tr("Captions")
         return k === "active" ? I18n.tr("Downloading")
              : k === "merging" ? I18n.tr("Merging")
              : k === "done" ? I18n.tr("Completed")
@@ -1407,7 +1407,7 @@ Item {
             width: 36; height: 36
             iconName: "translate"
             accent: Theme.primary
-            tip: I18n.tr("Captions & AI dub")
+            tip: I18n.tr("Captions")
             onClicked: page.openVoiceStudio(ra.row)
         }
         C.IconButton {
@@ -1832,7 +1832,7 @@ Item {
                         glyphSize: 15
                         iconName: "translate"
                         accent: Theme.primary
-                        tip: I18n.tr("Captions & AI dub")
+                        tip: I18n.tr("Captions")
                         anchors.verticalCenter: parent.verticalCenter
                         onClicked: page.openVoiceStudio(lib.row)
                     }
@@ -1857,7 +1857,7 @@ Item {
                         width: 38; height: 38
                         iconName: "translate"
                         accent: Theme.primary
-                        tip: I18n.tr("Captions & AI dub")
+                        tip: I18n.tr("Captions")
                         onClicked: page.openVoiceStudio(lib.row)
                     }
                     C.IconButton {

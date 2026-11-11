@@ -44,10 +44,7 @@ def _owner(media, video_id):
 
 
 def _new_kinds(kind, opts):
-    kinds = {kind}
-    if kind == "dub" and (opts.get("burn_style") or opts.get("soft_after")):
-        kinds.add("captions")
-    return kinds
+    return {kind}
 
 
 def prepare(kind, opts):
@@ -70,10 +67,6 @@ def prepare(kind, opts):
             base = original
     o["media"] = base
     o["_adopt_base"] = base
-    if kind == "dub" and original and os.path.isfile(original) and not FX.same_path(base, original):
-        # a dub on top of captions hears the same audio as the original:
-        # reuse its transcript / script / recorded lines (no second bill)
-        o["cache_media"] = original
     return o
 
 

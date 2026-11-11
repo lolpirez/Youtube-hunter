@@ -7,122 +7,383 @@ Version numbering restarted at **1.0.0** for the public release.
 
 ---
 
-## 1.3.0 (bundle v1.7 Scorecard): Greenlight scorecard
+## Unreleased: v2.0 "Natural captions", AI dub removed
 
-- **Blueprint score card redesigned** ("Scorecard"): a 270° gauge with the
+- **Fix: random "Cannot find member data" / "is not a function" / "QFont
+  weight 0" warnings at start-up** (`main_qml.py`): `engine.load()` could run
+  while the v3.54 background precompile of Main.qml was still compiling the
+  same files on Qt's loader thread, and the race left some types half-built
+  (children not attached, functions missing, weights 0). It only hit some
+  launches, depending on timing. The load now waits for the precompile to
+  finish first (`_wait_for_precompile`, events pumped, no user input, 20 s
+  cap); on a normal start it has already finished, so it costs nothing.
+
+- **Ad blocker removed** (extension v1.7.0): `adblock.js`, `rules/ads.json`,
+  the `declarativeNetRequest` permission, the shield button in the panel
+  header and the popup switch are gone. Leftover `yth.adblock` /
+  `yth.adStats` settings and the "off" badge are cleared on first wake. The
+  popup is now a small brand card with the version and a hint.
+- **Video Dossier export is Excel, same vertical layout** (v2.4,
+  `VideoDossierCard.qml`, `dossier_vm.py` `exportXlsx`, `dossier.py`
+  `write_single_dossier_xlsx`): the card's "Export CSV" button is now
+  "Export Excel" (Ctrl+E) and writes the same workbook as the Archive export
+  (Index, Videos (Vertical), videos) for the one video.
+
+- **Search Archive Excel export is vertical now** (v2.4, `dossier.py`
+  `write_wide_dossier` / `_write_vertical_xlsx`): the .xlsx no longer needs
+  sideways scrolling. Sheet **Index** is one compact row per video (title
+  links to its block, filters on), sheet **Videos (Vertical)** is one block
+  per video with `field | value` rows top to bottom in sections (Video,
+  Channel, Performance, Content details, Tags & Description, Thumbnails,
+  Transcript, Top comments, Latest comments, Export info), empty fields left
+  out, long description / transcript split over rows, and sheet **videos**
+  keeps the old one-row-per-video table for filters and pivots. The CSV
+  export is unchanged.
+
+- **Search Archive full export is a real table** (v2.3, `dossier.py`
+  `write_wide_dossier`, `archive_vm.py`, `ArchivePage.qml`): ONE ROW PER
+  VIDEO in the section's on-screen order, every fact in its own fixed column
+  (title, url, channel, stats, rates, outlier, tags, description, each
+  thumbnail size, transcript, then `top_1_comment / author / likes / replies
+  / date` ... and the same for the newest comments). Every row has every
+  column, so nothing slides sideways. Long text continues in
+  `<column>_part2`. New default **Full data, Excel (*.xlsx)**: bold frozen
+  header, filters, sized columns, clickable links; **Full data, CSV** stays.
+  Replaces v2.2's stacked "section / field / value" rows.
+
+- **AI dub removed from the browser extension too** (v1.5.0): the hidden
+  "AI dub" tile, its settings box (language, voices, original audio, Gemini /
+  ElevenLabs), the `/v1/dubready` polling and every dub string are gone. Fixes
+  a real leak: a `dub: true` saved by an older panel was still sent with every
+  download and Play request even though the tile was hidden; old picks are now
+  stripped on load. The captions tile spans the full row. YouTube's own
+  multi-language audio tracks stay.
+- **Video Dossier** (`VideoDossier.qml`, `dossier_vm.py`, `app/core/dossier.py`):
+  a new button on every video card (Niche Finder, Archive, Scraper results)
+  opens a glass card with the video's thumbnail(s), links, full stats,
+  engagement, outlier score (views/subs + vs channel average), tags,
+  description, the WHOLE transcript, and the top 30 + newest 30 comments
+  (fewer if the video has fewer). One-click **Export CSV** (unlocks when all
+  three parts are in, Ctrl+E) writes everything to
+  `<save folder>/Video dossiers/<title> [id] dossier.csv`, UTF-8 BOM, long
+  text split over rows, never cut. YouTube API (4 units) with yt-dlp fallback
+  when there is no key / no quota.
+- **Transcripts never cut**: the library / legacy fallback paths trimmed to
+  3,000 characters (now whole), and every scrape (not only Thorough) also
+  saves each transcript as a full `.txt` next to the export, since Excel
+  splits cells past 32,767 characters into `transcript_part2…`.
+- **Search Archive: full export, like the Video Dossier** (v2.2,
+  `archive_vm.py`, `ArchivePage.qml`, `app/core/dossier.py`): the section's
+  Export dialog now opens on **"Full data, like the Video Dossier (*.csv)"**.
+  Every video of the section (as filtered / sorted on screen) is read the way
+  the dossier card reads it: full stats, engagement, outlier score, tags,
+  description, thumbnails, the WHOLE transcript, the 30 most-liked comments
+  and the 30 newest. All of it lands in ONE CSV in the dossier's own row
+  format, with `video_no`, `video_id`, `video_title` in front so you can
+  filter or pivot per video. Runs in the background, three videos at a time,
+  ~4 API units per video (yt-dlp when there is no key / quota). A progress
+  pill next to Export shows `12/60` with a stop button (stopping keeps what
+  was read), then "Show file". The old quick, offline table is still there
+  ("Quick table, CSV", Excel, JSON Lines).
+- **Top comments are most-liked first** (v2.2, `app/core/dossier.py`): the
+  dossier reads a pool of 100 top comments (same 1 API unit as 30) and ranks
+  them by likes, so the 30 kept really are the most liked, highest first.
+  Same for the yt-dlp path. The card tab is now called "Most liked".
+- **Browser extension 1.6: ad blocker** (`adblock.js`, `rules/ads.json`,
+  `popup.html`): blocks ad servers and YouTube's ad endpoints (network rules,
+  YouTube's own requests only), hides promoted cards / feed ad slots /
+  banners / overlay ads, and skips video ads (muted, 16x to the end, Skip
+  pressed the moment it shows; your sound and speed come back after). On by
+  default. Switch it off or on from the new toolbar popup or the shield
+  button in the Hunter panel header; it applies live, no reload. The badge
+  says "off" while it is off. Adds the `declarativeNetRequest` permission
+  (reload the unpacked extension once).
+- **fix: Video Dossier never opened** (v2.1.1): the card file was
+  `components/VideoDossier.qml`, the same name as the backend context
+  property. Every file in `components/` implicitly imports its own folder, and
+  a QML type beats a context property, so on the Archive / Niche / Scraper
+  cards `VideoDossier.open(...)` hit the type ("Property 'open' ... is not a
+  function") and the card read all its data off the type too. Renamed to
+  `VideoDossierCard.qml`; Main.qml loads the new name. No Python changes.
+- **fix: two startup warnings**: the "Release on GitHub" link in
+  `UpdateDialog.qml` had a `MouseArea { anchors.fill }` inside a `Row` (moved
+  beside it), and `SettingsPage.qml` listened for `VoiceEngine.onToast`, which
+  the inert v2.0 stand-in never declared (`toast` signal added, never emitted).
+- **launch screen v26 "Liquid"** (`BrandSplash.qml`): the intro breathes
+  in (16 motes of light pulled into the orbit as the ring draws), lock-in
+  lands on the lens like liquid glass (squash + elastic wobble), the
+  wordmark's tracking opens up as it leaves like end titles, and a new
+  fastest cold start earns a `NEW BEST` tag next to the launch clock (record
+  kept as `"best_launch_ms"` in config.json, `AppController.bestLaunchMs` /
+  `recordLaunch`). Finite only: no layers, no shaders, no new infinite
+  animators. Notes: `docs/CHANGES-splash-v26-liquid.md`.
+- **launch screen v25 "Velocity"** (`BrandSplash.qml`): the window powers
+  on (a hot hairline draws out on the lens axis and opens into a flat bloom),
+  lock-in sends a sonar ping out through the dot grid ahead of the iris, and
+  the mark streaks home to the title bar with a three-light comet trail.
+  Finite only: no layers, no shaders, no new infinite animators; the ping
+  field is built async during the intro, never at the hit.
+- **launch screen v24 "Pulse"** (`BrandSplash.qml`): a torch that lights
+  the dot grid under the pointer, a personal hello ("Good evening, Sara",
+  from the Windows display name), a scan light running along the status
+  island's rim, and a sonic logo: a soft two-note glass chime with a felt
+  thump on lock-in (`SplashChime.qml` + `splash_chime.wav`, async Loader,
+  silent if QtMultimedia is missing, never plays while minimised). New
+  config keys: `"splash_sound": false` mutes it, `"display_name"`
+  overrides the name (`""` hides it). No layers, no shaders, no new
+  infinite animators.
+- **launch screen v23 "Apex"** (`BrandSplash.qml`): rolling odometer
+  percent, the live dot turns into a self-drawing check on lock-in, a
+  dynamic-island bounce on the status capsule, a spotlight edge that lights
+  the window rim under the pointer, and a small "thud" as the target locks.
+  No layers, no shaders, no new infinite animators.
+
+- **AI dub removed completely**: the dub pipeline (`dubbing.py`), ElevenLabs,
+  Gemini TTS voices, pitch/speaker detection, the voice-engine settings, the
+  "AI dub" card in Voice Studio, the inline deck lane, the "Dub script" /
+  "Listening & Gemini voices" AI rows, the panel's dub tile and its
+  `/v1/dubready` data. An inert `VoiceEngine` stand-in keeps old bindings
+  quiet. YouTube's own multi-language audio tracks (download picker) stay.
+- **natural translation** (`translate.py`): new tone setting
+  Natural (default) / Casual / Formal. Spoken register, anti-translationese
+  rules, sentence-level translation split back across lines, and a detailed
+  Persian guide (محاوره‌ای روان, no «می‌باشد/گردید/نمودن/جهت/لذا»).
+- **native polish pass** (on by default): a second call rewrites only the
+  lines that still read translated; returns changed lines only, cached.
+- **Persian typography** (`polish.py`, free): ی/ک, «؟ ، ؛», no space before
+  punctuation, نیم‌فاصله in می‌/نمی‌/‌ها/‌تر, Persian digits.
+- **reading time + no flicker**: short lines stay up long enough to read,
+  tiny gaps between lines are closed.
+- **grammar-aware line breaks**: line 1 never ends on a glue word (از، به،
+  که، the, of ...).
+- Transcription no longer asks for the dub's performance read: fewer tokens.
+- Config: `caption_register` (natural|casual|formal), `caption_refine` (bool).
+
+## Unreleased: launch splash v22 "Nova"
+
+- **the island** (`BrandSplash.qml`): the status readout sits in a glass
+  capsule that morphs its width to each line (soft overshoot) and tints
+  accent-hot on lock-in, like a live-activity pill.
+- **spatial tilt**: the lens and the mark lean in real 3D (perspective) toward
+  the pointer, max 7 deg, on the smoothed v18 lean. Flat again before the dock.
+- **sparks**: lock-in throws 18 streaks of light off the orbit, radially.
+- **heartbeat**: the mark beats once (1 -> 1.08 -> 1) as the target locks.
+- **prism iris**: the iris rim gets a cool and a warm fringe either side of the
+  hot core, drifting apart as the aperture opens.
+- **launch clock**: on lock-in the percent turns into the real cold-start time
+  ("2.41s"). `main_qml.py` stamps `_LAUNCH_T0` before any heavy import and
+  `AppController.launchEpochMs` exposes it; falls back to splash time.
+- Same public API; no layers, no ShaderEffect, no new infinite animators.
+
+## Unreleased: captions without a closing full stop
+
+- **no "." at the end of a caption** (`cues.drop_end_period`, applied in
+  `jobs.run_captions` before anything is written): .srt, burned-in and soft
+  tracks, from YouTube, a subtitle file or the AI. "?", "!", "…", "..." and
+  abbreviations (U.S., etc., Dr.) are kept; Persian/Urdu "۔" and CJK "。" too.
+  Bold Pop's last word and bilingual originals are cleaned the same way.
+
+## Unreleased: launch splash v21 "Iris"
+
+- **the iris** (`BrandSplash.qml`): the app is no longer revealed by a flat
+  cross-fade. The lens opens: a circular aperture grows from the lens out past
+  the window corners (backdrop cut with an even-odd hole), a hot rim light
+  riding its edge. The mark lifts off as the iris opens behind it. Both exits
+  (title-bar dock and plain fade) use it.
+- **kinetic bezel**: ticks near the progress head lift 3 px and heat toward the
+  hot accent, a 5-tick wavefront riding the arc (it crawls with the slow-start
+  creep, so the ring never looks frozen).
+- **live glass**: a soft specular highlight inside the lens follows the pointer,
+  resting at 12 o'clock, on the same smoothed lean as the v18 depth.
+- Same public API; no layers, no ShaderEffect, no new infinite animators. The
+  iris path is only rebuilt during the ~0.65 s outro.
+
+## Unreleased: v1.8 "Clean Persian dub, lean ElevenLabs, Play = what was made"
+
+- **One person, one voice** (`dubbing.stable_speakers`): speakers are resolved per
+  listening slice (id + gender + age band), a line whose heard gender contradicts
+  its id is moved to the right person, renumbered ids are merged back. Ages are
+  cast (kid / senior voices + an age line in the Gemini style; ElevenLabs uses
+  your own "young"/"old" voices first). The dub note lists the cast.
+- **No more random "[WinError 5] Access is denied"** (`app/core/fs_safe.py`): every
+  cache rename retries short Windows locks; shared clips are written under a lock;
+  the error now reads "A file was busy" with a real hint.
+- **Update dialog "Launch Bay 2"**: aura edge, logo orbit = download ring, parsed
+  changelog rows, state pill, size on the main button, reassurance line.
+- **Launch screen v20 "Aura"** (`BrandSplash.qml`): an iridescent edge light
+  lines the window (fades up with the intro, flares on lock-in, breathes on a
+  slow start), the progress arc gets a soft neon underglow, and a light
+  shimmers through the status copy (right to left in Persian). Same API, no
+  layers or shaders.
+- **Persian dub script written for the voice** (`translate._FA_DUB`): Persian
+  punctuation that carries intonation (، . ؟ ! …), نیم‌فاصله everywhere it
+  belongs, اعراب only where a word would be misread (کُشت / کِشت، دستِ راست،
+  واقعاً), numbers and symbols written as said. The dub's captions / .srt drop
+  the short vowels again (`translate.caption_text`), the voice keeps them.
+- **ElevenLabs text prep** (`elevenlabs.tidy` / `fa_script`): invisible bidi
+  marks, emoji and doubled punctuation removed before sending ("..." → "…",
+  "!!!" → "!"); Persian: ي/ك → ی/ک, "می خوام" → "می‌خوام", Latin ? , ; →
+  ؟ ، ؛, diacritics and ZWNJ always kept.
+- **ElevenLabs credits**:
+  - clips keyed by the exact request (`elevenlabs.request_key`): identical
+    lines recorded once; a style word an older model never hears no longer
+    re-records; clips recorded by earlier versions are still found
+  - two workers never record the same clip at once (repeated short lines were
+    paid twice)
+  - line length measured without diacritics / ZWNJ / tags
+    (`translate.spoken_len`): no paid "tightening" call for lines that only
+    look long
+  - with ElevenLabs voices, a long line is rewritten + re-recorded only when
+    even the 1.5× speed-up can't fit it (each re-take bills the line again)
+  - a model that refuses `language_code` is remembered (one 400, not one per
+    line); the job note shows the ElevenLabs characters it used
+- **extension Play opens what was made** (extension 1.4.3):
+  - when no copy of the selected quality has everything picked (dub +
+    captions), the copy that does wins (another quality, or the app's own row
+    file) instead of "the closest copy of this quality", which played the
+    captions-only file (`web_bridge._open_target` / `_all_copies`)
+  - the panel remembers per video what its last download was made with and
+    uses it for Play / Show in folder after a reload or a later visit, until
+    the captions / dub switches are touched
+
+## Unreleased: launch splash v19 "Prism"
+
+- **prism**: an iridescent light circles the lens's glass edge (the accent
+  split into its two neighbours), turning slowly against the beam, so the
+  lens reads as cut glass
+- **motes**: seven specks of dust rise through the key light on their own
+  slow beats, at a middle depth of the pointer lean
+- **flare**: lock-in fires an anamorphic streak through the lens along the HUD
+  axis (soft band + hot core + centre pinpoint), stretched out from the
+  centre, ~0.55 s, under the docking mark
+- **glass capsule**: the version pill gets a specular top edge and a light
+  that crosses it once as it arrives (scissored to the straight run)
+- same public API and perf rules: no layers / shaders, +8 render-thread
+  animators, all paused when the app is not in front; intro length unchanged
+
+## Unreleased: Greenlight scorecard v2
+
+- **blueprint score card redesigned** ("Scorecard"): a 270° gauge with the
   score counting up inside it and a spark riding the arc, a verdict
   (Greenlight / Strong contender / Promising / Needs work), and two chips
-  that say what to keep and what to fix first (strongest / weakest part).
-- The five parts sit one per line: label, a gradient meter notched at
-  5 / 10 / 15, and the points; hovering still opens the reason.
-- The Greenlight check lives in an inset well with one segment per check;
-  failing items show the check in bold and its note beside it.
-- Light by design: one Shape (3 arcs) for the gauge, plain Rectangles
-  elsewhere, no layers / shaders / running loops.
-- Launch splash and loading animations are **unchanged**.
+  that say what to keep and what to fix first (strongest / weakest part)
+- the five parts sit on one line each: label, a gradient meter notched at
+  5 / 10 / 15, and the points; hovering still opens the reason
+- the Greenlight check lives in an inset well with one segment per check;
+  failing items show the check in bold and its note beside it
+- light: one Shape (3 arcs) for the gauge, plain Rectangles elsewhere, no
+  layers / shaders / running loops
 
-## 1.3.0 (bundle v1.7): guided Captions & Dub, ElevenLabs voices, Gemini quota saver
+## Unreleased: v1.7 Captions & Dub, guided
 
-- **Settings → Captions & Dub is a guided 1-2-3.** A live map at the top
+- **Settings → Captions & Dub is a guided 1-2-3**: a live map at the top
   (① Words → ② Script → ③ Voices) shows what runs and what still needs
-  setting up, and clicks through to that step; the groups below carry the
-  same numbers in the order the work happens. AI Providers keeps only
-  providers, the Ideas pick, capabilities and the proxy.
-- **The dub script has its own AI pick.** New `script` route: any provider
-  or model, not just Gemini. Default stays Gemini (the dub's Google Gemini
-  profile and model); with no Gemini key it falls back to the Captions AI,
-  exactly as before. Translate / adapt / tighten of dub lines all use it.
-- **ElevenLabs voices for the AI dub.** Own key, model (v4 default, v3,
-  multilingual v2, flash v2.5), default voice and your own voices after
-  Check, plus credits left. Picked without a key is a clear stop — never a
-  silent switch to Gemini voices. The YouTube panel offers both engines and
-  re-reads readiness live (`GET /v1/dubready`), and Gemini still listens /
-  adapts when it is set up. Plain REST, no new dependency.
-- **Gemini quota saver** (on by default). One TTS take per voice (up to 18
-  lines / 75 s) cut back into lines at the pauses; the listening
-  transcription also returns speaker, delivery and vocal events, so the
-  separate performance read is skipped; long lines are fitted by the timing
-  planner instead of rewritten and re-recorded; the TTS request shape is
-  remembered on disk and probed by one worker; every request is counted per
-  day and the job's note says how many it used.
-- **Speakers and gender from the voice itself** (`captions/pitch.py`,
-  stdlib, no quota): per-cue pitch decides the speaker's gender, and an
-  unlabeled dialogue with two clear pitch groups gets two voices.
-- Launch splash and loading animations are **unchanged**.
+  setting up, and clicks through to that step. The groups below carry the
+  same numbers, in the order the work happens.
+- **the dub script has its own pick** (② Script): any provider / model,
+  not just Gemini. Default stays Gemini (the dub's Google Gemini profile and
+  model); with no Gemini key it falls back to the Captions AI, exactly as
+  before. New route `script` (`profiles.script_gemini`, `resolve("script")`);
+  translate / adapt / tighten of dub lines all use it.
+- ElevenLabs key, model and voice only show while ElevenLabs is picked (or
+  its card was clicked to add a key; a valid key then picks it). The Gemini
+  listening model is folded away with ElevenLabs voices.
+- Gemini voices without a key: one clear callout + "Add a Gemini key".
+- shorter copy everywhere; the routing row "Dub: listening & script" is now
+  "Listening & Gemini voices".
 
-## 1.3.0 (bundle v1.4.13): captions & AI dub each get their own AI, fluent YouTube captions
+## Unreleased: launch splash v18 "Glint"
 
-- **Settings → AI Providers → Which AI does what now has three rows.** Ideas,
-  Captions and AI dub each keep their own provider + model, with a Test button
-  that makes a real call before a job depends on it. Captions may use any
-  saved provider; the picked model translates every line. AI dub works with
-  Google Gemini only — routers sell Gemini's chat models, not its voices.
-- **Captions: "Gemini listens to the audio" switch** (on by default). On,
-  Gemini hears the video and writes the lines itself; off, YouTube's captions
-  are fetched and Gemini makes them fluent / translates them. The card draws
-  the flow and the quota trade-off, and is disabled with a note when the pick
-  isn't Google's own Gemini.
-- **Listening follows the model that can hear.** A text-only pick (DeepSeek,
-  Claude, Llama…) gets YouTube's captions first — no audio upload, no wasted
-  503s. When audio is needed, the app borrows a hearing Gemini (same provider
-  first), and a listener that fails mid-job hands the same slice to the next.
-- **Fluent auto captions.** Raw speech-recognition lines (no punctuation,
-  misheard words) are detected: kept as-is they get a cheap polish pass;
-  translated / dubbed, the model is told they are raw speech so sentences
-  flow across lines.
-- **Caption looks, one size.** Every look and language renders at the same
-  real text size (Persian was ~35 % smaller), boxes are spaced by the font's
-  own cell so lines never touch, Glass / Spotlight get rounded boxes, and
-  Persian / Arabic / Hebrew get word-by-word Spotlight and Bold Pop.
-  Overlapping word stamps from YouTube's ASR are clamped
-  (`cues.clamp_words`, `styles._no_overlap`).
-- **No wasted tokens.** A quota / bad-key / no-network reply stops the job at
-  once; finished translation batches are cached for Resume. Gemini behind an
-  OpenAI-compatible router gets a minimal reasoning effort instead of thinking
-  at high on every batch; GLM / Qwen3 get thinking turned off for caption
-  work. A reply that isn't JSON (a `<think>` block, prose, a cut-off answer)
-  is read properly and retried once, then named in a sentence instead of
-  "Expecting value: line 1 column 1 (char 0)".
-- **AI dub:** raw-caption hint in the script adaptation and compact JSON in
-  the performance read / line tightening (fewer input tokens).
-- **Extension: Play / Show in folder open the copy you picked.** The panel
-  sends its captions / dub choices and the app opens the matching file
-  (plain, captions, dub, or both); nothing picked means the plain download.
-  Every produced file is remembered (`post_variants.json`) so a later
-  download of the same video can't lose which copy holds what.
-- **Extension: solid dropdowns.** An open Audio-track list no longer paints
-  under the rows below; the entrance fill is backwards-only, the open row
-  lifts, both lists get one opaque surface and a themed scrollbar.
-- **Extension: friendly errors.** Provider replies become a short title /
-  detail / hint card (daily limit, bad key, network) with "Retry in app"; the
-  raw reply stays in the crash log.
-- **Greenlight parts:** hovering a part opens its reason smoothly with a
-  glint on the bar and a turning chevron.
-- **The launch splash is untouched on purpose** — this build keeps the
-  original BrandSplash already in the source; none of the update bundle's
-  splash / loading changes were applied.
+- **depth**: the splash leans toward the pointer (lens, mark and type a few px
+  with it, aurora lights the other way at three depths); eases home before
+  the mark docks in the title bar
+- **glint**: a light band crosses the "YouTube Hunter" wordmark, masked to the
+  letters (clipped copies, no layer / shader), with the intro sheen and again
+  on lock-in
+- **decode**: English status copy resolves out of scrambled glyphs (~300 ms),
+  width pinned so the row never jitters; Persian keeps the crossfade
+- fix: `left` property on the HUD arms clashed with Qt's FINAL `Item.left`
+  ("Cannot override FINAL property"), renamed to `isLeft`
 
----
+## Unreleased: v1.5 "Quota saver" + ElevenLabs voices
 
-## 1.2.0: Voice Studio — captions & AI dub, memory diet, new extension
+- **Quota saver** (Settings → Voices & quota, on by default). A ~40 s dub used
+  8-15 Gemini requests; now about 3:
+  - one TTS take per voice (up to 18 lines / 75 s), cut back into lines at the
+    pauses by dynamic programming and checked against each line's expected
+    length; a take that doesn't split cleanly falls back to per-line for that
+    take only (`dubbing.split_take`, `plan_batches`)
+  - "AI listens" transcription also returns speaker gender/age, delivery and
+    vocal events, so the dub's separate performance read is skipped
+    (`sources.ai_transcribe`, `dubbing.perf_from_cues`)
+  - no rewrite + re-record of long lines; the timing planner fits them
+  - the TTS request shape is remembered on disk and probed by one worker
+  - every Gemini request is counted per Pacific day (`gemini_budget`); the
+    dub's note says how many it used, Settings shows today's total
+- **ElevenLabs voices for the dub**: key (or `ELEVENLABS_API_KEY`), model
+  (v4 default, v3, multilingual v2, flash v2.5), default voice, own voices
+  after Check, credits left. Plain REST, `pcm_24000`, no new dependency
+  (`captions/elevenlabs.py`, `vm/voice_engine_vm.py`). The dub runs with an
+  ElevenLabs key alone; Gemini still listens/adapts when set up.
 
-- **Voice Studio:** inline `CaptionDubDeck` in the download / cut sheet, one
-  job–one progress bar (`PostSteps`), and rows move onto the produced file
-  with a badge (`PostFxBadge` + `downloads_adopt`); the plain original stays
-  on disk.
-- **Captions:** YouTube tracks only by default (no AI needed), the 2026
-  looks, and no overlapping lines (`cues.clamp_words`,
-  `styles._no_overlap`).
-- **AI dub:** tight sync, no ffmpeg process per line, fatal Gemini errors
-  stop the job cleanly (`GeminiFatal`, `listen_json` guard), and the memory
-  diet (`mem_trim.py`) keeps long jobs light.
-- **Extension 1.4.1:** captions / dub picks straight from the YouTube panel,
-  queued when the file isn't ready yet.
-- `tools/check_voice_studio.py` covers styles, dub and quota / sync drills.
-- **The launch splash is untouched on purpose:** the original 1.1.0
-  BrandSplash (no dockTarget, no title-bar mark hand-off).
+## Unreleased: v1.6 "Captions & Dub" settings, real ElevenLabs dubs, voice-matched casting
 
----
+- **Settings → Captions & Dub** (was "Voices & quota"): one section in three
+  groups. *Captions* (provider/model, "Gemini listens"), *AI dub* (two radio
+  cards Gemini voices / ElevenLabs voices, a live "Words → Script → Speakers →
+  Voices" flow, the ElevenLabs key/model/main voice, the listening & script
+  pick) and *Gemini quota* (saver + today's requests explained). AI Providers
+  keeps only providers, the ideas pick, capabilities and the proxy, with a link
+  to the new section (`AiRoutingPanel.features`).
+- **ElevenLabs is never silently swapped for Gemini**: ElevenLabs picked
+  without a key is a clear stop (`dub_media`, `can_dub(engine=)`,
+  `why_cant_dub`). Voice Studio, the inline deck and the YouTube panel can pick
+  the voices per dub and show the right engine everywhere (no more "Uses Gemini").
+- **Panel readiness is live**: `GET /v1/dubready`, re-read every 3 s while the
+  dub box is open, so enabling ElevenLabs in the app shows at once. The panel
+  offers both engines (`dub.engine` → `voice_engine`).
+- **Speakers & gender from the voice itself** (`captions/pitch.py`, stdlib,
+  no quota): per-cue F0 → gender per speaker; cues with no speaker labels are
+  split into two voices when the pitches form two clear groups (a man and a
+  woman). ElevenLabs casting: the speaker who talks most is the lead, gender is
+  always respected (also for "One voice"), every speaker gets a different
+  voice, own voices keep their gender.
+- **Fewer Gemini requests on ElevenLabs dubs**: with the quota saver on,
+  Gemini's performance read is skipped (pitch does the casting). The result
+  note names the voices and what the Gemini requests were for.
+
+## Unreleased: "Radar" launch splash (v17)
+
+- **Launch splash v17** (`components/BrandSplash.qml`), same public API,
+  same intro length, v16 kept whole. Five small additions:
+  - **radar sweep** inside the glass lens (conic wedge, render-thread
+    rotation, 3.2 s) over a dashed range ring
+  - **outlier blips**: three signals light up with a ping during the intro,
+    keep pinging on a slow start, and get pulled into the mark on lock-in
+  - **HUD crosshair arms** grow out of the viewfinder left and right; a light
+    dash runs along each into the lens; they flash accent-hot on lock-in
+  - **focus pull** on the wordmark: two accent-tinted ghosts (chromatic
+    split) converge into the type, and split again for a few frames on lock-in
+  - **double ripple** on lock-in
+  - perf rules unchanged: no layers, no ShaderEffect, +6 render-thread
+    animators, all paused when the app is not in front
+
+## Unreleased: "Reticle" launch splash (v16)
+
+- **Launch splash v16** (`components/BrandSplash.qml`), same public API,
+  same ~900 ms intro, v15 lens + orbit kept:
+  - **bezel**: 60 machined ticks (major every 5th) inside the orbit sweep in
+    with the track and light up as the progress arc passes them
+  - **viewfinder brackets** close in on the lens during the intro, breathe
+    on a slow start, and snap tight (accent-hot) on lock-in
+  - **status copy**: a time-of-day greeting first ("Good evening"), then
+    "Locked on" on exit. Work phases only show on a slow start, one per
+    1.6 s (v15 swapped copy twice in ~400 ms, faster than its own
+    crossfade, which read as flicker)
+  - name sits 8 px lower to clear the brackets
+- **Title-bar logo catches the light**: `BrandMark.shine()` (one sheen
+  sweep on demand). The splash calls it once when the mark docks, and the
+  title bar runs it on hover.
 
 ## Unreleased: v1.4.12 "Fluent from YouTube, one caption size"
 

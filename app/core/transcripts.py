@@ -651,11 +651,11 @@ def _fetch_transcript_legacy(video_id):
 
 
 def _trim(text):
-    """Legacy 3k preview, kept only for the unused pre-turbo path below. The
-    live scraper returns the WHOLE track: a long upload used to stop
-    mid-sentence in the export at 3000 characters."""
-    text = text.strip()
-    return text[:3000] + ("…" if len(text) > 3000 else "")
+    """v2.1: no longer trims. This used to cut the library / legacy fallback
+    paths to a 3,000-character preview, so any video that came back through
+    them stopped mid-sentence in the export. Every path now returns the WHOLE
+    track; the name stays so old call sites keep working."""
+    return str(text or "").strip()
 
 
 # The chat keeps the opening AND the ending of a transcript (hook + payoff),

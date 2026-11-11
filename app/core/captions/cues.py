@@ -1,8 +1,8 @@
 """app.core.captions.cues - YouTube Hunter.
 
-The timed-text model every caption / dub step shares.
+The timed-text model every caption step shares.
 
-A Cue is one on-screen caption (or one spoken line): start / end in seconds,
+A Cue is one on-screen caption: start / end in seconds,
 the text, and, when the source has them, per-word timings. Word timings are
 what the "Bold Pop" style highlights and what the re-segmenter uses to turn
 YouTube's rolling ASR fragments into whole sentences, which is also what makes
@@ -52,6 +52,60 @@ class Cue:
 
     def __repr__(self):
         return f"Cue({self.start:.2f}-{self.end:.2f} {self.text[:30]!r})"
+
+
+# ── v1.9: no full stop at the end of a caption ───────────────────────────
+# Subtitles read cleaner without the dot that closes each line. Only a
+# single period (Latin ".", Urdu "۔", CJK "。" / "．") right at the end of a
+# line goes, even when a closing quote / bracket or an invisible direction
+# mark follows it. "?", "!", "…", "..." and abbreviations ("U.S.", "etc.",
+# "Dr.") stay as they are.
+
+_TAIL = "\u200e\u200f\u200b\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069" \
+        "\"'\u00bb\u201d\u2019)]} \t"
+_DOTS = ".\u06d4\u3002\uff0e"
+_ABBR_RX = re.compile(r"(?:^|[\s(\"'\u201c\u00ab])(?:[A-Za-z]\.){2,}$")
+_ABBR_WORDS = {"etc", "mr", "mrs", "ms", "dr", "st", "vs", "jr", "sr", "inc", "ltd", "co", "no"}
+
+
+def strip_end_period(text):
+    """One line or several ("\n"): drop the full stop that ends each line."""
+    if not text:
+        return text or ""
+    return "\n".join(_strip_line(ln) for ln in str(text).split("\n"))
+
+
+def _strip_line(line):
+    core = line.rstrip(_TAIL)
+    tail = line[len(core):]
+    if not core or core[-1] not in _DOTS:
+        return line
+    if len(core) >= 2 and core[-2] in _DOTS + "\u2026":
+        return line                       # "..." / "…." : an ellipsis, keep
+    if core[-1] == "." and _ABBR_RX.search(core):
+        return line                       # "U.S."
+    word = re.split(r"[\s(\"'\u201c\u00ab]", core[:-1])[-1].lower()
+    if core[-1] == "." and word in _ABBR_WORDS:
+        return line                       # "etc." / "Dr."
+    return core[:-1].rstrip() + tail
+
+
+def drop_end_period(cues):
+    """The same cues without a closing full stop (text and the last timed
+    word, so Bold Pop's word-by-word reveal matches). Bilingual originals
+    kept in meta["src"] are cleaned too. Returns new Cue objects."""
+    out = []
+    for c in cues or []:
+        text = strip_end_period(c.text)
+        words = list(c.words)
+        if words:
+            a, b, w = words[-1]
+            words[-1] = (a, b, strip_end_period(w))
+        meta = c.meta
+        if isinstance(meta, dict) and meta.get("src"):
+            meta = dict(meta, src=strip_end_period(meta["src"]))
+        out.append(c.copy(text=text, words=words, meta=meta))
+    return out
 
 
 # ── time helpers ─────────────────────────────────────────────────────────
@@ -466,6 +520,11 @@ def looks_raw_asr(cues):
     return len(_PUNCT.findall(text)) < words / 25.0
 
 
+_WEAK_END = {"و", "از", "به", "در", "با", "که", "را", "تا", "برای", "این", "اون", "یه", "یک",
+             "the", "a", "an", "of", "to", "and", "in", "on", "for", "with", "at", "my", "your",
+             "de", "la", "el", "le", "les", "der", "die", "das", "и", "в", "на"}
+
+
 def wrap_lines(text, max_line=42, max_lines=2):
     """Balanced line breaks: two lines of similar length instead of a long
     top line and a widow underneath."""
@@ -482,6 +541,10 @@ def wrap_lines(text, max_line=42, max_lines=2):
         # prefer breaking after punctuation
         if _SOFT_END.search(a) or _SENT_END.search(a):
             score -= 6
+        # v2.0: never leave a little glue word hanging at the end of line 1
+        # ("از / به / که / the / of ..."): it reads broken
+        if words[i - 1].lower().strip("،,") in _WEAK_END:
+            score += 14
         if best_score is None or score < best_score:
             best, best_score = (a, b), score
     if max_lines > 2 and len(best[1]) > max_line:

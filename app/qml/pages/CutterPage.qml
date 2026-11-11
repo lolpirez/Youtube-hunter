@@ -3191,14 +3191,14 @@ Item {
 
                         // (v3.27: the Start / End cards moved under the player)
 
-                        // ── captions & AI dub, right here (v1.3.3 deck) ──
+                        // ── captions, right here (v1.3.3 deck) ──
                         // The same inline deck as the download picker: look,
                         // language (Original = no AI), YouTube's own tracks, and
                         // the AI dub. Flip one on, press Cut, it runs on the clip.
                         InspectorCard {
                             id: captionsCard
                             visible: Cutter.hasInfo
-                            label: I18n.tr("Captions & AI dub")
+                            label: I18n.tr("Captions")
                             glyph: "translate"
                             trailing: [
                                 InfoChip {
@@ -3900,7 +3900,7 @@ Item {
                                                 glyphSize: 15
                                                 iconName: "translate"
                                                 accent: Theme.primary
-                                                tip: I18n.tr("Captions & AI dub")
+                                                tip: I18n.tr("Captions")
                                                 enabled: clipCard.modelData.exists && !clipCard.modelData.isAudio
                                                 opacity: enabled ? 1 : 0.4
                                                 onClicked: voiceStudio.openFor({
@@ -4082,7 +4082,7 @@ Item {
                     spacing: 0
                     C.AppText {
                         text: Cutter.cutPaused ? I18n.tr("Paused")
-                              : Cutter.postActive ? I18n.tr("Captions & dub")
+                              : Cutter.postActive ? I18n.tr("Captions")
                               : Cutter.cutting ? I18n.tr("Cutting…")
                               : I18n.tr("Clip length")
                         weight: Tokens.weightDemiBold
@@ -4226,7 +4226,7 @@ Item {
                 text: Cutter.cutPaused
                       ? I18n.tr("Paused")
                       : Cutter.postActive
-                        ? (Cutter.postStage !== "" ? Cutter.postStage : I18n.tr("Captions & dub…"))
+                        ? (Cutter.postStage !== "" ? Cutter.postStage : I18n.tr("Captions…"))
                       : Cutter.cutting
                         ? (Cutter.cutPct > 0 ? I18n.tr("Cutting…") + "  " + Cutter.cutPct + "%" : I18n.tr("Cutting…"))
                         : I18n.tr("Cut & Download")

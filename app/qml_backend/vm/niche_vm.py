@@ -2492,8 +2492,8 @@ class NicheVM(QObject):
                 video_id, filepath,
                 on_update=lambda sm, v=video_id: self._on_post_tick(v, sm),
                 on_finish=lambda st, f, sm, v=video_id: self._on_post_done(v, st, f, sm)):
-            self._on_post_tick(video_id, {"pct": 0, "stage": tr("Starting captions & dub…")})
-            self.toast.emit(tr("Downloaded. Now adding captions & dub…"), "info")
+            self._on_post_tick(video_id, {"pct": 0, "stage": tr("Starting captions…")})
+            self.toast.emit(tr("Downloaded. Now adding captions…"), "info")
             return
         # v1.1: DB first (see the stopped branch above)
         downloads_upsert(video_id, status="done" if ok else "error",

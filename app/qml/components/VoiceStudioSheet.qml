@@ -16,13 +16,15 @@ import "../Utils.js" as U
 //   Header      Voice Studio · file name
 //   Activity    running / finished jobs FIRST (what you came back for),
 //               with Resume when a job stopped (quota, network)
-//   Pick        two big cards: Captions  |  AI dub   (what each one makes)
-//   1 Language  translate to / dub into  (one dropdown, "keep original" is an option)
-//   2 Look      caption style grid + size/position   |  Voices: auto-cast / one voice, acting
-//   3 Output    burn / track / .srt                  |  original audio, captions on top, quality
+//   1 Language  translate to (one dropdown, "keep original" is an option)
+//               + v2.0 tone (Natural / Casual / Formal) and the native polish
+//   2 Look      caption style grid + size/position
+//   3 Output    burn / track / .srt
 //   Transcript  where the words come from, auto-picked, folded into one line
 //               (YouTube = free + exact, file, AI listens) with "Change"
-//   Footer      plain summary + the one action (+ Preview 30 s for a dub)
+//   Footer      plain summary + the one action
+//
+// v2.0: the AI dub is gone, the sheet is captions only.
 //
 // Same public API as before:  openFor({...}), openQueued({...}), and the
 // VoiceStudio view-model is unchanged apart from resume() / queue helpers.
@@ -53,7 +55,7 @@ Popup {
     }
 
     // ── form state (kept between openings, like a real studio) ──
-    property int tab: 0                       // 0 captions, 1 dub
+    property int tab: 0                       // kept for callers; captions only (v2.0)
     property string source: "youtube"         // youtube | file | ai
     property int trackIndex: 0
     property string subPath: ""
@@ -67,31 +69,19 @@ Popup {
     property bool doTranslate: false
     property string targetCode: "fa"
     property string outputMode: "burn"        // burn | soft | srt
-    property string dubTarget: "fa"
-    property string voiceMode: "auto"
-    property int voiceIndex: 3                // Kore
-    property bool acting: true
-    property string bgMode: "duck"
-    property int ttsIndex: 0
-    // v1.6: who speaks this dub. "" follows Settings → Captions & Dub
-    property string voiceEngine: ""
-    property int elVoiceIndex: -1             // -1 = the main voice from Settings
-    readonly property string _engine: voiceEngine !== "" ? voiceEngine : VoiceEngine.engine
-    readonly property bool _eleven: _engine === "elevenlabs"
-    readonly property bool _geminiKey: String((Settings.aiProfileMap["gemini"] || {}).apiKey || "") !== ""
-    readonly property bool _voicesReady: _eleven ? VoiceEngine.hasKey : (_geminiKey || VoiceStudio.geminiReady && VoiceEngine.engine === "gemini")
-    readonly property int _elIdx: elVoiceIndex >= 0 ? elVoiceIndex : VoiceEngine.voiceIndex
-    property bool dubCaptions: false
+    // v2.0: how the translation talks, and the native-editor pass
+    property string registerKey: VoiceStudio.defaultRegister || "natural"
+    property bool refine: VoiceStudio.defaultRefine !== false
     property bool showSource: false
     property bool showAllJobs: false
 
     readonly property var t: VoiceStudio.target
-    readonly property bool _rtlPreview: ["fa", "ar", "ur", "ps", "ku", "he"].indexOf((tab === 1 ? dubTarget : (doTranslate ? targetCode : (VoiceStudio.spokenLang || "en")))) >= 0
+    readonly property bool _rtlPreview: ["fa", "ar", "ur", "ps", "ku", "he"].indexOf((doTranslate ? targetCode : (VoiceStudio.spokenLang || "en"))) >= 0
 
     function openFor(o) {
         _open(o, false)
     }
-    // Pre-action: choose captions/dubbing now; they run automatically when
+    // Pre-action: choose captions now; they run automatically when
     // the download or cut that this page starts has finished.
     function openQueued(o) {
         _open(o, true)
@@ -107,9 +97,6 @@ Popup {
         root.offset = 0
         root.showSource = false
         root.showAllJobs = false
-        root.voiceEngine = ""        // v1.6: each opening starts on the Settings choice
-        root.elVoiceIndex = -1
-        if (o.tab !== undefined) root.tab = o.tab
         root.open()
         flick.contentY = 0
     }
@@ -158,25 +145,9 @@ Popup {
         o.position = root.posKey
         o.bilingual = root.doTranslate && root.bilingual
         o.output = VoiceStudio.hasVideo ? root.outputMode : "srt"
+        o.register = root.registerKey
+        o.refine = root.refine
         if (VoiceStudio.startCaptions(o) !== "queued") root._revealJobs()
-    }
-    function startDub(previewSec) {
-        var o = _baseOpts()
-        o.target = root.dubTarget
-        o.voice_mode = root.voiceMode
-        o.voice = root._eleven
-                  ? (VoiceEngine.voices[root._elIdx] ? VoiceEngine.voices[root._elIdx].id : "")
-                  : (VoiceStudio.voices[root.voiceIndex] ? VoiceStudio.voices[root.voiceIndex].name : "Kore")
-        o.voice_engine = root._engine
-        o.acting = root.acting
-        o.bg_mode = root.bgMode
-        o.tts_model = VoiceStudio.ttsModels[root.ttsIndex] ? VoiceStudio.ttsModels[root.ttsIndex].key : ""
-        o.keep_original = true
-        o.burn_style = root.dubCaptions ? root.styleKey : ""
-        o.size = root.sizeKey
-        o.position = root.posKey
-        o.preview_sec = previewSec || 0
-        if (VoiceStudio.startDub(o) !== "queued") root._revealJobs()
     }
     // jobs live at the top now: after starting one, scroll there
     function _revealJobs() {
@@ -187,28 +158,23 @@ Popup {
                                       ? (t.videoId !== "" &&
                                          (VoiceStudio.queueMode || (!VoiceStudio.ytLoading && VoiceStudio.ytTracks.length > 0)))
                                     : source === "file" ? subPath !== ""
-                                    : (tab === 1 ? (VoiceStudio.geminiReady || root._geminiKey) : VoiceStudio.listenReady)
+                                    : VoiceStudio.listenReady
     readonly property bool _ready: t.exists === true || VoiceStudio.queueMode
     // a queued choice can be re-set: the newest one wins
     readonly property bool _canCaption: _ready && _sourceOk && (!doTranslate || VoiceStudio.aiReady || _ytTargetTrack !== null)
-    readonly property bool _canDub: _ready && _sourceOk && root._voicesReady && VoiceStudio.aiReady
     // Why the main action is dimmed, in words.
     readonly property string _blockReason: {
         if (!root._ready) return ""
-        if (root.tab === 0 ? root._canCaption : root._canDub) return ""
-        if (root.tab === 0 ? root._queued.captions : root._queued.dub) return ""
+        if (root._canCaption) return ""
+        if (root._queued.captions) return ""
         if (root.source === "youtube" && root.t.videoId === "" && !VoiceStudio.queueMode)
             return I18n.tr("This file isn't linked to a YouTube video. Open “Transcript” below and pick “My file” or “AI listens”.")
         if (root.source === "youtube" && !VoiceStudio.ytLoading && VoiceStudio.ytTracks.length === 0 && !VoiceStudio.queueMode)
             return I18n.tr("YouTube has no captions for this video. Open “Transcript” below and pick “AI listens”.")
         if (root.source === "file" && root.subPath === "")
             return I18n.tr("Choose a subtitle file first.")
-        if (root.source === "ai" && root.tab === 0 && !VoiceStudio.listenReady)
-            return I18n.tr("“AI listens” needs a provider that can hear audio. Pick one in Settings → Captions & Dub.")
-        if (root.tab === 1 && !root._voicesReady)
-            return root._eleven
-                   ? I18n.tr("ElevenLabs voices need your ElevenLabs key, added in Settings → Captions & Dub. Or pick Gemini voices in step 2.")
-                   : I18n.tr("Gemini voices need a Google Gemini key (free from Google AI Studio), added in Settings → AI Providers. Or pick ElevenLabs in step 2.")
+        if (root.source === "ai" && !VoiceStudio.listenReady)
+            return I18n.tr("“AI listens” needs a provider that can hear audio. Pick one in Settings → Captions.")
         if (!VoiceStudio.aiReady)
             return I18n.tr("This needs an AI provider. Add one in Settings → AI Providers.")
         return ""
@@ -320,11 +286,8 @@ Popup {
                 Banner {
                     visible: VoiceStudio.queueMode
                     tint: Theme.primary
-                    glyph: root._queued.captions || root._queued.dub ? "check_circle" : "schedule"
-                    text: root._queued.captions && root._queued.dub
-                          ? I18n.tr("Captions and AI dub are set. They start by themselves the moment your video is ready. You can close this.")
-                          : root._queued.captions ? I18n.tr("Captions are set. They start by themselves the moment your video is ready. You can close this.")
-                          : root._queued.dub ? I18n.tr("AI dub is set. It starts by itself the moment your video is ready. You can close this.")
+                    glyph: root._queued.captions ? "check_circle" : "schedule"
+                    text: root._queued.captions ? I18n.tr("Captions are set. They start by themselves the moment your video is ready. You can close this.")
                           : I18n.tr("No need to wait: set it up now and it starts by itself the moment your video is ready.")
                 }
 
@@ -383,56 +346,8 @@ Popup {
                     }
                 }
 
-                // ═══ pick what to make ═══
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: Tokens.space2
-                    C.AppText {
-                        text: I18n.tr("What do you want to make?")
-                        weight: Tokens.weightBold
-                        font.pixelSize: Tokens.fontBody
-                        color: Theme.text_strong
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Tokens.space3
-                        ModeCard {
-                            Layout.fillWidth: true
-                            Layout.preferredWidth: 1
-                            glyph: "subject"
-                            title: I18n.tr("Captions")
-                            desc: I18n.tr("Subtitles on the video, in its language or translated")
-                            badge: root.source === "youtube" ? I18n.tr("Free with YouTube captions") : I18n.tr("Uses AI")
-                            selected: root.tab === 0
-                            done: VoiceStudio.queueMode && root._queued.captions
-                            onPicked: root.tab = 0
-                        }
-                        ModeCard {
-                            Layout.fillWidth: true
-                            Layout.preferredWidth: 1
-                            glyph: "volume_up"
-                            title: I18n.tr("AI dub")
-                            desc: I18n.tr("A new voice in another language, acted like the original")
-                            badge: root._eleven ? I18n.tr("ElevenLabs voices") : I18n.tr("Gemini voices")
-                            selected: root.tab === 1
-                            done: VoiceStudio.queueMode && root._queued.dub
-                            onPicked: root.tab = 1
-                        }
-                    }
-                }
-
-                Banner {
-                    visible: root.tab === 1 && !root._voicesReady
-                    tint: Theme.warn
-                    glyph: "key"
-                    text: root._eleven
-                          ? I18n.tr("ElevenLabs voices are picked, but there is no ElevenLabs key yet. Add it in Settings → Captions & Dub, or pick Gemini voices in step 2.")
-                          : I18n.tr("Gemini voices need a Google Gemini key (free from Google AI Studio) in Settings → AI Providers. Or pick ElevenLabs voices in step 2.")
-                }
-
                 // ═══ CAPTIONS ═══
                 StepCard {
-                    visible: root.tab === 0
                     num: 1
                     title: I18n.tr("Language")
                     summary: root.doTranslate ? VoiceStudio.languageName(root.targetCode) : I18n.tr("Original")
@@ -453,6 +368,37 @@ Popup {
                                                   : I18n.tr("Add an AI provider in Settings to translate.")
                         color: (VoiceStudio.aiReady || root._ytTargetTrack) ? Theme.on_surface_var : Theme.warn
                     }
+                    // v2.0: how the translation talks. Natural = the way a
+                    // native YouTuber says it, never bookish.
+                    FieldLabel {
+                        visible: root.doTranslate && !root._ytTargetTrack
+                        text: I18n.tr("Tone")
+                        Layout.topMargin: Tokens.space1
+                    }
+                    C.SlideSegment {
+                        visible: root.doTranslate && !root._ytTargetTrack
+                        Layout.fillWidth: true
+                        equal: true; solid: false; cellHeight: 32
+                        fontSize: Tokens.fontCaption + 1
+                        model: VoiceStudio.registers.map(function (r) { return r.label })
+                        currentIndex: Math.max(0, VoiceStudio.registers.map(function (r) { return r.key }).indexOf(root.registerKey))
+                        onActivated: (i) => root.registerKey = VoiceStudio.registers[i].key
+                    }
+                    Hint {
+                        visible: root.doTranslate && !root._ytTargetTrack
+                        text: {
+                            var rs = VoiceStudio.registers
+                            for (var i = 0; i < rs.length; i++)
+                                if (rs[i].key === root.registerKey) return rs[i].desc
+                            return ""
+                        }
+                    }
+                    ToggleRow {
+                        visible: root.doTranslate && !root._ytTargetTrack
+                        text: I18n.tr("Native polish: a second pass rewrites lines that still sound translated")
+                        checked: root.refine
+                        onToggled: (on) => root.refine = on
+                    }
                     ToggleRow {
                         visible: root.doTranslate
                         text: I18n.tr("Bilingual: original line small above")
@@ -462,7 +408,6 @@ Popup {
                 }
 
                 StepCard {
-                    visible: root.tab === 0
                     num: 2
                     title: I18n.tr("Look")
                     summary: root._styleName(root.styleKey)
@@ -471,7 +416,7 @@ Popup {
                 }
 
                 StepCard {
-                    visible: root.tab === 0 && VoiceStudio.hasVideo
+                    visible: VoiceStudio.hasVideo
                     num: 3
                     title: I18n.tr("Output")
                     summary: root.outputMode === "burn" ? I18n.tr("Burn in") : root.outputMode === "soft" ? I18n.tr("Subtitle track") : I18n.tr(".srt only")
@@ -489,132 +434,6 @@ Popup {
                         text: root.outputMode === "burn" ? I18n.tr("Drawn into the picture: looks the same everywhere (Instagram, TikTok, Telegram).")
                              : root.outputMode === "soft" ? I18n.tr("A track viewers switch on and off. No re-encode, very fast.")
                              : I18n.tr("Just the .srt files, saved next to the video.")
-                    }
-                }
-
-                // ═══ DUB ═══
-                StepCard {
-                    visible: root.tab === 1
-                    num: 1
-                    title: I18n.tr("Dub into")
-                    summary: VoiceStudio.languageName(root.dubTarget)
-                    C.Dropdown {
-                        Layout.fillWidth: true
-                        popupMaxHeight: 340
-                        model: VoiceStudio.languageLabels
-                        currentIndex: VoiceStudio.languageIndex(root.dubTarget)
-                        onActivated: root.dubTarget = VoiceStudio.languageCode(currentIndex)
-                    }
-                }
-                StepCard {
-                    visible: root.tab === 1
-                    num: 2
-                    title: I18n.tr("Voices")
-                    summary: (root._eleven ? "ElevenLabs" : "Gemini") + " · "
-                             + (root.voiceMode === "auto" ? I18n.tr("Auto-cast")
-                                : root._eleven ? (VoiceEngine.voices[root._elIdx] ? VoiceEngine.voices[root._elIdx].label.split(" · ")[0] : "")
-                                : (VoiceStudio.voices[root.voiceIndex] ? VoiceStudio.voices[root.voiceIndex].name : ""))
-                    // v1.6: who speaks, per dub (starts on the Settings choice)
-                    FieldLabel { text: I18n.tr("Who speaks") }
-                    C.SlideSegment {
-                        Layout.fillWidth: true
-                        equal: true; solid: false; cellHeight: 32
-                        fontSize: Tokens.fontCaption + 1
-                        model: [ { label: I18n.tr("Gemini voices"), icon: "provider_gemini" },
-                                 { label: I18n.tr("ElevenLabs"), icon: "volume_up" } ]
-                        currentIndex: root._eleven ? 1 : 0
-                        onActivated: (i) => root.voiceEngine = i === 1 ? "elevenlabs" : "gemini"
-                    }
-                    Hint {
-                        text: root._eleven
-                              ? (VoiceEngine.hasKey ? I18n.tr("ElevenLabs credits, not Gemini requests. Gemini only listens when YouTube has no captions, and adapts the script.")
-                                                    : I18n.tr("No ElevenLabs key yet: add it in Settings → Captions & Dub."))
-                              : I18n.tr("Uses Gemini requests for every voice take (the quota saver keeps it to about one per speaker).")
-                    }
-                    FieldLabel { text: I18n.tr("Cast"); Layout.topMargin: Tokens.space1 }
-                    C.SlideSegment {
-                        Layout.fillWidth: true
-                        equal: true; solid: false; cellHeight: 32
-                        fontSize: Tokens.fontCaption + 1
-                        model: [ { label: I18n.tr("Auto-cast"), icon: "auto_awesome" },
-                                 { label: I18n.tr("One voice"), icon: "user" } ]
-                        currentIndex: root.voiceMode === "auto" ? 0 : 1
-                        onActivated: (i) => root.voiceMode = i === 0 ? "auto" : "single"
-                    }
-                    Hint {
-                        text: root.voiceMode === "auto" ? I18n.tr("Each speaker gets their own voice: a woman a female voice, a man a male one, heard from the voice itself.")
-                                                        : I18n.tr("One voice reads every line.")
-                    }
-                    C.Dropdown {
-                        visible: root.voiceMode === "single" && !root._eleven
-                        Layout.fillWidth: true
-                        popupMaxHeight: 340
-                        model: VoiceStudio.voiceLabels
-                        currentIndex: root.voiceIndex
-                        onActivated: root.voiceIndex = currentIndex
-                    }
-                    C.Dropdown {
-                        visible: root.voiceMode === "single" && root._eleven
-                        Layout.fillWidth: true
-                        popupMaxHeight: 340
-                        model: VoiceEngine.voices.map(function (v) { return v.label })
-                        currentIndex: root._elIdx
-                        onActivated: root.elVoiceIndex = currentIndex
-                    }
-                    ToggleRow {
-                        text: I18n.tr("Act it out: laughs, sighs, energy and pace from the original")
-                        checked: root.acting
-                        onToggled: (on) => root.acting = on
-                    }
-                }
-                StepCard {
-                    visible: root.tab === 1
-                    num: 3
-                    title: I18n.tr("Sound & finish")
-                    summary: (root.bgMode === "duck" ? I18n.tr("Duck") : root.bgMode === "bed" ? I18n.tr("Low bed") : I18n.tr("Replace"))
-                             + " · " + (root._eleven ? (VoiceEngine.models[VoiceEngine.modelIndex] || {}).label || "ElevenLabs"
-                                        : (VoiceStudio.ttsModels[root.ttsIndex] ? VoiceStudio.ttsModels[root.ttsIndex].label : ""))
-                    FieldLabel { text: I18n.tr("Original audio") }
-                    C.SlideSegment {
-                        Layout.fillWidth: true
-                        equal: true; solid: false; cellHeight: 32
-                        fontSize: Tokens.fontCaption + 1
-                        model: [I18n.tr("Duck under dub"), I18n.tr("Low bed"), I18n.tr("Replace")]
-                        currentIndex: ["duck", "bed", "replace"].indexOf(root.bgMode)
-                        onActivated: (i) => root.bgMode = ["duck", "bed", "replace"][i]
-                    }
-                    Hint {
-                        text: root.bgMode === "duck" ? I18n.tr("Music and room sound stay; the original voice dips under the dub.")
-                             : root.bgMode === "bed" ? I18n.tr("The original stays quietly underneath the whole time.")
-                             : I18n.tr("Only the dub. The original is still kept as a second audio track.")
-                    }
-                    FieldLabel { text: I18n.tr("Voice quality"); Layout.topMargin: Tokens.space1 }
-                    Hint {
-                        visible: root._eleven
-                        text: I18n.tr("ElevenLabs model: {m}. Change it in Settings → Captions & Dub.")
-                              .replace("{m}", (VoiceEngine.models[VoiceEngine.modelIndex] || {}).label || "")
-                    }
-                    C.SlideSegment {
-                        visible: !root._eleven
-                        Layout.fillWidth: true
-                        equal: true; solid: false; cellHeight: 32
-                        fontSize: Tokens.fontCaption + 1
-                        model: VoiceStudio.ttsModels.map(function(m) { return m.label + " · " + m.desc })
-                        currentIndex: root.ttsIndex
-                        onActivated: (i) => root.ttsIndex = i
-                    }
-                    ToggleRow {
-                        visible: VoiceStudio.hasVideo
-                        text: I18n.tr("Also draw captions of the dub")
-                        checked: root.dubCaptions
-                        onToggled: (on) => root.dubCaptions = on
-                    }
-                    C.Dropdown {
-                        visible: VoiceStudio.hasVideo && root.dubCaptions
-                        Layout.fillWidth: true
-                        model: VoiceStudio.styles.map(function(s) { return s.name + " · " + s.desc })
-                        currentIndex: root._styleIndex(root.styleKey)
-                        onActivated: root.styleKey = VoiceStudio.styles[currentIndex].key
                     }
                 }
 
@@ -746,10 +565,10 @@ Popup {
                                 }
                             }
                             Banner {
-                                visible: root.source === "ai" && root.tab === 0 && !VoiceStudio.listenReady
+                                visible: root.source === "ai" && !VoiceStudio.listenReady
                                 tint: Theme.warn
                                 glyph: "key"
-                                text: I18n.tr("“AI listens” needs a provider that can hear audio. Pick one in Settings → Captions & Dub.")
+                                text: I18n.tr("“AI listens” needs a provider that can hear audio. Pick one in Settings → Captions.")
                             }
                             // clip offset (a stream-copy cut starts on a keyframe)
                             RowLayout {
@@ -830,14 +649,9 @@ Popup {
                     weight: Tokens.weightDemiBold
                     font.pixelSize: Tokens.fontCaption + 1
                     color: Theme.text_strong
-                    text: root.tab === 0
-                          ? [root.doTranslate ? VoiceStudio.languageName(root.targetCode) : I18n.tr("Original language"),
-                             root._styleName(root.styleKey),
-                             root.outputMode === "burn" ? I18n.tr("Burn in") : root.outputMode === "soft" ? I18n.tr("Subtitle track") : I18n.tr(".srt only")].join(" · ")
-                          : [VoiceStudio.languageName(root.dubTarget),
-                             root.voiceMode === "auto" ? I18n.tr("Auto-cast") : I18n.tr("One voice"),
-                             root._eleven ? "ElevenLabs"
-                                          : (VoiceStudio.ttsModels[root.ttsIndex] ? VoiceStudio.ttsModels[root.ttsIndex].label : "")].join(" · ")
+                    text: [root.doTranslate ? VoiceStudio.languageName(root.targetCode) : I18n.tr("Original language"),
+                           root._styleName(root.styleKey),
+                           root.outputMode === "burn" ? I18n.tr("Burn in") : root.outputMode === "soft" ? I18n.tr("Subtitle track") : I18n.tr(".srt only")].join(" · ")
                 }
                 C.AppText {
                     Layout.fillWidth: true
@@ -845,28 +659,15 @@ Popup {
                     font.pixelSize: Tokens.fontCaption
                     color: Theme.on_surface_var
                     text: VoiceStudio.queueMode ? I18n.tr("Starts by itself after the download or cut.")
-                          : root.tab === 1 ? I18n.tr("Not sure about the voices? Preview 30 s first, it costs a fraction.")
                           : I18n.tr("Saved next to the video.")
                 }
             }
             C.PrimaryButton {
-                visible: root.tab === 1 && !VoiceStudio.queueMode
-                variant: "ghost"
-                iconName: "play_arrow"
-                text: I18n.tr("Preview 30 s")
-                enabled: root._canDub
-                onClicked: root.startDub(30)
-            }
-            C.PrimaryButton {
-                iconName: (root.tab === 0 ? root._queued.captions : root._queued.dub) && VoiceStudio.queueMode
-                          ? "check" : (root.tab === 0 ? "subject" : "volume_up")
-                text: root.tab === 0
-                      ? (VoiceStudio.queueMode ? (root._queued.captions ? I18n.tr("Update captions") : I18n.tr("Set captions"))
-                                               : I18n.tr("Create captions"))
-                      : (VoiceStudio.queueMode ? (root._queued.dub ? I18n.tr("Update AI dub") : I18n.tr("Set AI dub"))
-                                               : I18n.tr("Dub the video"))
-                enabled: root.tab === 0 ? root._canCaption : root._canDub
-                onClicked: root.tab === 0 ? root.startCaptions() : root.startDub(0)
+                iconName: root._queued.captions && VoiceStudio.queueMode ? "check" : "subject"
+                text: VoiceStudio.queueMode ? (root._queued.captions ? I18n.tr("Update captions") : I18n.tr("Set captions"))
+                                            : I18n.tr("Create captions")
+                enabled: root._canCaption
+                onClicked: root.startCaptions()
             }
         }
     }
@@ -1243,8 +1044,7 @@ Popup {
                     spacing: 0
                     C.AppText {
                         Layout.fillWidth: true
-                        text: (jc.job.kind === "dub" ? (jc.job.preview ? I18n.tr("Dub preview") : I18n.tr("AI dub"))
-                                                     : I18n.tr("Captions"))
+                        text: I18n.tr("Captions")
                               + (jc.job.langName ? " · " + jc.job.langName : "")
                         weight: Tokens.weightBold
                         font.pixelSize: Tokens.fontBody

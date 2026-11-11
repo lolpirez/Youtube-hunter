@@ -142,7 +142,7 @@ def begin(video_id, filepath, title="", on_update=None, on_finish=None):
 
     # the row flips to "finishing" right away, before the first tick
     dlp.publish(video_id, structural=True, running=True, post=True, cancelling=False,
-                pct=0, text=tr("Starting captions & dub…"),
+                pct=0, text=tr("Starting captions…"),
                 steps=[{"kind": "download", "label": tr("Download"), "state": "done", "pct": 1.0}],
                 speed=0.0, eta=0, done=0, total=0, fragDone=0, fragTotal=0)
     pid = st.start_pipeline("dl:" + video_id, filepath, video_id, title, 0, 0, entry,
@@ -159,10 +159,10 @@ def begin(video_id, filepath, title="", on_update=None, on_finish=None):
 def finish_text(state, summary):
     """The one toast line for the end of a download / cut with post steps."""
     if state == "done":
-        return tr("Ready, with captions & dub — {f}"), "success"
+        return tr("Ready, with captions — {f}"), "success"
     if state == "partial":
         return tr("Ready, but a step failed: {e}").replace("{e}", (summary or {}).get("error") or ""), "warn"
     if state == "cancelled":
-        return tr("Captions & dub stopped. The plain video is saved — {f}"), "info"
-    return tr("Captions & dub failed: {e}. The plain video is saved.").replace(
+        return tr("Captions stopped. The plain video is saved — {f}"), "info"
+    return tr("Captions failed: {e}. The plain video is saved.").replace(
         "{e}", (summary or {}).get("error") or tr("unknown error")), "error"

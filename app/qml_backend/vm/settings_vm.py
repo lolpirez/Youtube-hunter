@@ -526,9 +526,7 @@ class SettingsVM(QObject):
         # v1.4.10: any model translates; one that can't hear audio gets a
         # listener borrowed for it (see gemini_media.listen_candidates)
         ("captions", "Captions", "Writes and translates the subtitles. Gemini can listen to the audio too", "subject"),
-        # v1.7: the dub's script has its own pick, any provider (default Gemini)
-        ("script",   "Dub script", "Translates the lines and rewrites them to sound natural and fit the timing", "translate"),
-        ("dub",      "Listening & Gemini voices", "Hears who speaks when there are no captions, and speaks with Gemini voices. Gemini models only", "auto_awesome"),
+        # v2.0: the AI dub (its "script" and "dub" rows) is gone
         # "AI Chat" picks its provider, model and effort in its own composer
         # (every saved provider's models are listed there), and "Reports" is
         # gone — neither has a row here any more.
@@ -1103,25 +1101,7 @@ class SettingsVM(QObject):
                     raise RuntimeError(tr("The model answered, but not in the JSON shape captions need."))
                 msg = tr("Works: {n} · {m} ({s}s)").format(n=r["profile_name"], m=r["model"],
                                                          s=f"{_t.monotonic() - t0:.1f}")
-                if feature == "dub":
-                    # say one word for real, so a key without TTS access is
-                    # caught here and not halfway through a dub
-                    import os as _os
-                    import tempfile as _tf
-                    from app.core.captions import gemini_media as G
-                    probe = _os.path.join(_tf.gettempdir(), "yh_tts_probe.wav")
-                    try:
-                        G.tts(G.credentials(cfg, feature="dub"), "Hi.", probe, timeout=60)
-                        msg += " · " + tr("voices work too")
-                    except Exception as te:          # noqa: BLE001
-                        self.routeTestSig.emit(feature, 3, tr("Text works, voices don't: {e}").format(e=te))
-                        return
-                    finally:
-                        try:
-                            _os.remove(probe)
-                        except OSError:
-                            pass
-                elif feature == "captions":
+                if feature == "captions":
                     from app.core.captions import gemini_media as G
                     ear = G.listen_label("captions", cfg)
                     if ear:

@@ -1428,7 +1428,7 @@ select.track:hover:not(:disabled) { border-color: rgba(var(--acc-rgb), .45); }
 }
 
 
-/* ═══ v1.4 — Captions & AI dub ═══════════════════════════════════════════ */
+/* ═══ v1.4 — Captions ═══════════════════════════════════════════ */
 .post { margin-top: 14px; padding: 12px; border-radius: 14px; background: var(--well);
         border: 1px solid var(--line-soft); display: grid; gap: 10px; }
 .post.on { border-color: color-mix(in srgb, var(--acc) 38%, var(--line-soft)); }
@@ -1442,7 +1442,7 @@ select.track:hover:not(:disabled) { border-color: rgba(var(--acc-rgb), .45); }
 .post .ppill.on { color: var(--acc); border-color: color-mix(in srgb, var(--acc) 40%, transparent);
                   background: color-mix(in srgb, var(--acc) 10%, transparent); }
 .post .ppill.on i { background: var(--acc); }
-.post .plane { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.post .plane { display: grid; grid-template-columns: 1fr; gap: 8px; }   /* v2.0: one tile, the dub is gone */
 .post .ptile { display: flex; align-items: center; gap: 8px; min-width: 0; height: 44px; padding: 0 10px;
                border-radius: 12px; border: 1px solid var(--line); background: var(--raise);
                color: var(--text); font: inherit; cursor: pointer; transition: border-color .15s, background .15s; }
@@ -1495,7 +1495,7 @@ select.track:hover:not(:disabled) { border-color: rgba(var(--acc-rgb), .45); }
 .post .note { margin: 0; }
 .post .note.ok { color: var(--ok); }
 
-/* the capsule's step row: ✓ Download · ◐ Captions 42% · ○ AI dub */
+/* the capsule's step row: ✓ Download · ◐ Captions 42% */
 .psteps { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 2px 0; }
 .psteps[hidden] { display: none; }
 .pstep { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
@@ -1513,7 +1513,7 @@ select.track:hover:not(:disabled) { border-color: rgba(var(--acc-rgb), .45); }
 @media (prefers-reduced-motion: reduce) { .pstep[data-s="running"] i { animation: none; } }
 
 /* ═════════════════════════════════════════════════════════════════════
-   v1.4.1 — the language picker (Captions & AI dub)
+   v1.4.1 — the language picker (Captions)
    Replaces the native <select>. A floating glass sheet: sections, a code
    glyph per language, native + English name, YouTube kind badges, type to
    search. Shares .dd / .ddbtn / .ddm / .ddo with the audio-track dropdown.
@@ -1764,7 +1764,7 @@ select.track:hover:not(:disabled) { border-color: rgba(var(--acc-rgb), .45); }
   .hb.nudge, .panel[data-min]::after { animation: none !important; transition: none !important; }
 }
 
-/* v1.4.3: the Saved screen says when captions / dub didn't finish */
+/* v1.4.3: the Saved screen says when captions didn't finish */
 .postfail { margin: 10px 0 0; line-height: 1.45; overflow-wrap: anywhere; }
 .postfail b { font-weight: 700; }
 .postfail small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
@@ -1820,7 +1820,7 @@ select.track:hover:not(:disabled) { border-color: rgba(var(--acc-rgb), .45); }
   .body.land > * { animation: none !important; }
 }
 
-/* v1.4.8: Play found no copy with the picked captions / dub */
+/* v1.4.8: Play found no copy with the picked captions */
 .pnote {
   position: absolute; left: 12px; right: 12px; bottom: 72px; z-index: 7;
   padding: 10px 12px; border-radius: 12px;

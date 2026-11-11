@@ -14,6 +14,11 @@ Python side exposes:
 Run:  python main_qml.py
 """
 
+# v22 splash launch clock: stamped before any heavy import, so the splash can
+# show the real cold-start time (AppController.launchEpochMs reads it).
+import time as _time
+_LAUNCH_T0 = _time.time()
+
 
 def _install_crash_guard(notify=None):
     """Keep a Python exception raised inside a Qt-invoked callback from taking
@@ -116,6 +121,7 @@ from app.qml_backend.vm.cutter_vm import CutterVM
 from app.qml_backend.vm.dashboard_vm import DashboardVM
 from app.qml_backend.vm.deno_vm import DenoVM
 from app.qml_backend.vm.downloads_vm import DownloadsVM
+from app.qml_backend.vm.dossier_vm import DossierVM
 from app.qml_backend.vm.geo_vm import GeoVM
 from app.qml_backend.vm.history_vm import HistoryVM
 from app.qml_backend.vm.ideas_vm import IdeasVM
@@ -144,6 +150,29 @@ from app.qml_backend.vm.extension_setup_vm import ExtensionSetupVM
 # override in the environment still wins.
 os.environ.setdefault("QML_DISK_CACHE", "qmlc")
 
+
+
+def _wait_for_precompile(comp, timeout_ms=20000):
+    """Block (pumping events, no user input) until the asynchronous Main.qml
+    precompile has finished, so engine.load() never compiles the same files
+    at the same time as Qt's loader thread. Returns at once when there is no
+    precompile or it is already done; gives up after `timeout_ms`."""
+    if comp is None:
+        return
+    try:
+        from PySide6.QtCore import QEventLoop, QTimer
+        loading = QQmlComponent.Status.Loading
+        if comp.status() != loading:
+            return
+        loop = QEventLoop()
+        comp.statusChanged.connect(lambda _s: loop.quit())
+        QTimer.singleShot(timeout_ms, loop.quit)
+        if comp.status() == loading:          # it may have finished meanwhile
+            loop.exec(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+        if comp.status() == QQmlComponent.Status.Error:
+            log_crash("QML precompile: " + "; ".join(e.toString() for e in comp.errors()))
+    except Exception as exc:                  # noqa: BLE001 — speed-up only
+        log_crash("QML precompile wait: " + str(exc))
 
 def main():
     # v1.1.2: keep the UI responsive while a worker thread does heavy Python
@@ -345,9 +374,9 @@ def main():
     # Video Cutter: cut a segment out of a link or a local file. One instance
     # for the whole app, like every other page VM.
     cutter_vm = CutterVM()
-    # v1.3: captions / AI translation / AI dubbing for downloads and clips
+    # v1.3: captions / AI translation for downloads and clips (v2.0: no dub)
     voice_studio_vm = VoiceStudioVM()
-    # v1.4.7: captions / dub finished from the sheet → the row shows the new file
+    # v1.4.7: captions finished from the sheet → the row shows the new file
     voice_studio_vm.adopted.connect(
         lambda who: downloads_vm.refresh() if who == "download" else cutter_vm.refreshClips())
     # Script Studio: reads the blueprints Content Lab / AI Ideas already stored
@@ -386,6 +415,8 @@ def main():
     # "Your IP is in Iran" guard: a launch check plus the scrape gate. The
     # Scraper asks it before every run (see DashboardVM.startScraping).
     geo_vm = GeoVM()
+    # v2.1: the Video Dossier card every video card can open
+    dossier_vm = DossierVM()
     dashboard_vm._geo = geo_vm
     geo_vm.gateBlocked.connect(
         lambda purpose: dashboard_vm.geoBlocked() if purpose == "scrape" else None)
@@ -478,6 +509,7 @@ def main():
     ctx.setContextProperty("QualityProbe", quality_probe)
     ctx.setContextProperty("Deno", deno_vm)
     ctx.setContextProperty("Geo", geo_vm)
+    ctx.setContextProperty("VideoDossier", dossier_vm)
     ctx.setContextProperty("Notifications", notifications_vm)
     ctx.setContextProperty("Updater", updater_vm)
     ctx.setContextProperty("FileDrag", file_drag)
@@ -485,9 +517,9 @@ def main():
     # v3.43: "Add the YouTube button" — guided browser-extension install
     ext_setup = ExtensionSetupVM()
     ctx.setContextProperty("ExtensionSetup", ext_setup)
-    # v1.5: Settings → Captions & Dub (Gemini quota saver, ElevenLabs voices)
-    from app.qml_backend.vm.voice_engine_vm import VoiceEngineVM
-    voice_engine = VoiceEngineVM()
+    # v2.0: the AI dub is gone; an inert stand-in keeps old bindings quiet
+    from app.qml_backend.vm.legacy_voice_engine import LegacyVoiceEngine
+    voice_engine = LegacyVoiceEngine()
     ctx.setContextProperty("VoiceEngine", voice_engine)
 
     # Live language switching: re-assigning these context properties is what
@@ -512,6 +544,15 @@ def main():
     if launch_hidden:
         # Never flash the window up first: Main.qml declares `visible: true`.
         engine.setInitialProperties({"visible": False})
+    # v2.3.1: never load while the background precompile is still running.
+    # engine.load() compiles synchronously on THIS thread; when it raced the
+    # loader thread on the same files, some types came out half-built: every
+    # child assignment failed with "Cannot find member data", functions read
+    # as "is not a function" and font weights as 0. That is why the warnings
+    # showed on some launches and not on others (a timing race). Waiting
+    # here costs nothing on a normal start: the compile had the whole
+    # DB + ViewModel setup above to finish, so it is almost always done.
+    _wait_for_precompile(_precompile)
     engine.load(QUrl.fromLocalFile(os.path.join(qml_dir, "Main.qml")))
     _precompile = None   # type cache is warm now; drop the helper component
 

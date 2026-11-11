@@ -1,9 +1,9 @@
 """app.core.captions.jobs - YouTube Hunter.
 
-One call per job, for the view-model: run_captions() and run_dub(). Both
-take a plain dict of options (straight from QML) and report(stage, fraction).
+One call per job, for the view-model: run_captions(). It takes a plain
+dict of options (straight from QML) and report(stage, fraction).
 
-Options shared by both:
+Options:
     media        local video / audio path (a download or a cut clip)
     title        for the AI brief and notifications
     source       "youtube" | "file" | "ai"
@@ -19,30 +19,47 @@ Captions:   target ("" = keep the language), style, size, position,
             bilingual, output ("burn" | "soft" | "srt"),
             allow_ai (default True; v1.4: False for YouTube's own captions,
             which are used exactly as YouTube serves them),
-            cues_only (v1.4: write the .srt + a cue file and stop: the dub
-            that follows burns them into ITS encode, one encode in total),
             translate_via ("ai" | "youtube"): with a target, YouTube's own
             track in that language is tried first (uploaded: always;
             YouTube's auto-translation: when "youtube"), AI only after that
-Dub:        target, voice_mode ("auto" | "single"), voice, acting, bg_mode
-            ("duck" | "bed" | "replace"), tts_model, keep_original,
-            burn_style ("" = none), preview_sec
+            register ("natural" | "casual" | "formal", v2.0: how the
+            translation talks; default natural = spoken, never bookish),
+            refine (v2.0, default True: a native-editor pass rewrites lines
+            that still read translated)
 
-Every step caches into a per-file work folder, so running a dub after the
-captions (or re-running a failed job) reuses the transcript, the performance
-read, the translation and every recorded line.
+Every step caches into a per-file work folder, so re-running a failed job
+reuses the transcript and every translated batch.
 """
 
+import hashlib
 import json
 import os
 
+from app.core import fs_safe as FS
+
 from app.core.captions import cues as C
-from app.core.captions import dubbing as D
 from app.core.captions import languages as L
+from app.core.captions import polish as P
 from app.core.captions import render as R
 from app.core.captions import sources as S
 from app.core.captions import styles as ST
 from app.core.captions import translate as T
+
+
+def _sha(*parts):
+    h = hashlib.sha1()
+    for p in parts:
+        h.update(str(p).encode("utf-8", "replace"))
+        h.update(b"\x00")
+    return h.hexdigest()[:16]
+
+
+def media_key(path):
+    try:
+        st = os.stat(path)
+        return _sha(os.path.abspath(path), st.st_size, int(st.st_mtime))
+    except OSError:
+        return _sha(path)
 
 
 def work_dir(media):
@@ -52,7 +69,7 @@ def work_dir(media):
     except Exception:                    # noqa: BLE001
         import tempfile
         root = os.path.join(tempfile.gettempdir(), "yh_voice_studio")
-    d = os.path.join(root, D.media_key(media))
+    d = os.path.join(root, media_key(media))
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -72,7 +89,9 @@ def _cache_key(opts):
     # v1.4.4: "ai2" = shorter slices + snapped to the voice; older AI
     # transcripts were cached with the drifting timestamps
     extra = {"youtube": opts.get("track", ""), "file": opts.get("sub_path", ""), "ai": "ai2"}.get(src, "")
-    return f"source_{src}_{D._sha(extra, opts.get('clip_start', 0), opts.get('clip_end', 0))}.json"
+    # v1.9 "spk2": speakers are read per slice (gender / age / slice index on
+    # every cue). Rebuilt from the cached slices, so nothing is paid again.
+    return f"source_{src}_{_sha(extra, opts.get('clip_start', 0), opts.get('clip_end', 0), 'spk2')}.json"
 
 
 def acquire_cues(opts, work, report, cancel):
@@ -88,8 +107,7 @@ def acquire_cues(opts, work, report, cancel):
     switched_off = False
     if src == "ai" and (opts.get("video_id") or ""):
         from app.core.captions import gemini_media as G
-        # the switch is a Captions setting: a dub keeps its v1.4.11 rule
-        yt_first = not G.pick_hears("captions", honor_switch=not opts.get("_dub"))
+        yt_first = not G.pick_hears("captions")
         # v1.4.13: the Settings switch, not the model, made that call
         switched_off = yt_first and G.pick_hears("captions", honor_switch=False)
     cache = os.path.join(work, _cache_key(dict(opts, source="ai_yt") if yt_first else opts))
@@ -118,17 +136,7 @@ def acquire_cues(opts, work, report, cancel):
                 if a > 0 or b > 0:
                     cues = C.window(cues, a, b)
             except Exception:            # noqa: BLE001
-                # v1.4.3: a dub needs Gemini anyway, so when YouTube has no
-                # captions (most Shorts) the AI listens to the file instead
-                # of the whole dub failing quietly after the download
-                if not opts.get("ai_fallback"):
-                    raise
-                cues = None
-            if not cues and opts.get("ai_fallback"):
-                via = "ears"
-                report("AI is listening", 0.02)
-                cues, lang = S.ai_transcribe(media, on_progress=lambda p: report("AI is listening", 0.02 + 0.28 * p),
-                                             should_cancel=cancel, workdir=work)
+                raise
         elif src == "file":
             report("Reading the subtitle file", 0.02)
             cues, lang = S.file_cues(opts.get("sub_path") or "")
@@ -210,7 +218,7 @@ def youtube_native(opts, work, tgt, report):
         return None
     machine = (opts.get("translate_via") or "ai") == "youtube"
     a, b = float(opts.get("clip_start") or 0), float(opts.get("clip_end") or 0)
-    cache = os.path.join(work, f"ytnative_{tgt}_{int(machine)}_{D._sha(a, b)}.json")
+    cache = os.path.join(work, f"ytnative_{tgt}_{int(machine)}_{_sha(a, b)}.json")
     data = None
     if os.path.isfile(cache):
         try:
@@ -279,7 +287,7 @@ def run_captions(opts, report, cancel):
     if (raw_asr and not translating and allow_ai and opts.get("source") == "ai"
             and T.ai_ready()):
         report("Making YouTube's captions fluent", 0.30)
-        pl_cache = os.path.join(work, f"polish_{D._sha(len(cues), cues[0].start, cues[-1].text, src_lang)}.json")
+        pl_cache = os.path.join(work, f"polish_{_sha(len(cues), cues[0].start, cues[-1].text, src_lang)}.json")
         if os.path.isfile(pl_cache):
             with open(pl_cache, encoding="utf-8") as f:
                 shown = C.load_json(f.read())
@@ -299,9 +307,17 @@ def run_captions(opts, report, cancel):
                     raise
                 shown = cues
                 via_note = " · ".join(x for x in (via_note, "Couldn't polish YouTube's captions, kept them as they are") if x)
+    # v2.0: how the translation talks + the native-editor pass
+    try:
+        from app.config import load_app_config
+        _cfg = load_app_config() or {}
+    except Exception:                    # noqa: BLE001
+        _cfg = {}
+    register = str(opts.get("register") or _cfg.get("caption_register") or "natural")
+    refine = bool(opts.get("refine", _cfg.get("caption_refine", True)))
     if translating:
         report("Translating", 0.30)
-        tr_cache = os.path.join(work, f"subs_{tgt}_{int(raw_asr)}_{D._sha(len(cues), cues[0].start, cues[-1].text)}.json")
+        tr_cache = os.path.join(work, f"subs_{tgt}_{int(raw_asr)}_{_sha(len(cues), cues[0].start, cues[-1].text, 'nat2', register, refine)}.json")
         if os.path.isfile(tr_cache):
             with open(tr_cache, encoding="utf-8") as f:
                 shown = C.load_json(f.read())
@@ -309,7 +325,8 @@ def run_captions(opts, report, cancel):
             try:
                 shown, brief = T.translate_cues(cues, tgt, src_lang, opts.get("title", ""), "subtitle",
                                                 lambda p: report("Translating", 0.30 + 0.4 * p), cancel,
-                                                cache_dir=work, raw_asr=raw_asr)
+                                                cache_dir=work, raw_asr=raw_asr,
+                                                register=register, refine=refine)
             except R.Cancelled:
                 raise
             except Exception as e:       # noqa: BLE001
@@ -328,6 +345,17 @@ def run_captions(opts, report, cancel):
     if cancel():
         raise R.Cancelled()
 
+    # v1.9: no full stop closing a caption line (cues.drop_end_period)
+    keep_src = shown is cues
+    shown = C.drop_end_period(shown)
+    cues = shown if keep_src else C.drop_end_period(cues)
+    # v2.0: Persian typography + reading time + no flicker (free, no AI)
+    shown = P.finish(shown, out_lang)
+    if keep_src:
+        cues = shown
+    if secondary is not None:
+        secondary = [c.meta.get("src", "") for c in shown]
+
     stem = _stem(media)
     srt_main = unique_path(f"{stem}.{out_lang}.srt")
     with open(srt_main, "w", encoding="utf-8") as f:
@@ -339,18 +367,6 @@ def run_captions(opts, report, cancel):
         with open(srt_orig, "w", encoding="utf-8") as f:
             f.write(C.to_srt(cues, L.line_limit(src_lang)))
         files.append(srt_orig)
-
-    if opts.get("cues_only"):
-        # v1.4: the dub that runs next burns these lines in its own encode
-        cue_file = os.path.join(work, f"burn_{out_lang}_{D._sha(len(shown), shown[0].start if shown else 0, opts.get('style', ''))}.json")
-        with open(cue_file, "w", encoding="utf-8") as f:
-            f.write(C.dump_json(shown))
-        report("Done", 1.0)
-        note = " · ".join(x for x in (via_note,) if x)
-        return {"video": "", "files": files, "srt": srt_main, "cues_json": cue_file,
-                "lang": out_lang, "src_lang": src_lang, "lines": len(shown), "note": note,
-                "untranslated": sum(1 for c in shown if c.meta.get("untranslated")),
-                "via": ("youtube-" + native[1]) if native else ("ai" if shown is not cues else "")}
 
     mode = opts.get("output", "burn")
     note = ""
@@ -408,41 +424,7 @@ def add_soft_track(video, srt, lang, report=None, cancel=None):
             pass
         return video
     try:
-        os.replace(tmp, video)
+        FS.replace(tmp, video, keep_existing=False)
     except OSError:
         return tmp
     return video
-
-
-def run_dub(opts, report, cancel):
-    media = opts["media"]
-    if not os.path.isfile(media):
-        raise RuntimeError("The video file is missing.")
-    tgt = (opts.get("target") or "").split("|")[0]
-    if not tgt:
-        raise RuntimeError("Pick the language to dub into.")
-    # v1.4.7: a dub stacked on a captioned version hears the same audio as
-    # the plain file, so it shares that file's cache (transcript, script,
-    # recorded lines): nothing is paid for twice
-    cache_media = opts.get("cache_media") or ""
-    work = work_dir(cache_media if cache_media and os.path.isfile(cache_media) else media)
-    # v1.4.3: YouTube's words when it has them, the AI's ears when it doesn't
-    opts = dict(opts, ai_fallback=True) if opts.get("source", "youtube") == "youtube" else dict(opts)
-    opts["_dub"] = True
-    cues, src_lang = acquire_cues(opts, work, lambda s, p: report(s, p * 0.3), cancel)
-    info = R.probe(media)
-    ext = R.out_container(media) if info["has_video"] else "m4a"
-    preview = float(opts.get("preview_sec") or 0)
-    suffix = "dub-preview" if preview > 0 else "dub"
-    out = unique_path(f"{_stem(media)}.{tgt}.{suffix}.{ext}")
-    # v1.5: the voice engine (Gemini / ElevenLabs) is a dub setting too
-    from app.core.captions import elevenlabs as E
-    opts["voice_engine"] = opts.get("voice_engine") or E.engine()
-    eng = opts["voice_engine"]
-    eng_key = "" if eng == "gemini" else f"{eng}:{E.model()}:{E.default_voice()}"
-    dwork = os.path.join(work, f"dub_{tgt}_{D._sha(opts.get('voice_mode'), opts.get('voice'), opts.get('acting', True), opts.get('tts_model'), eng_key)}")
-    res = D.dub_media(media, cues, src_lang, tgt, out, dwork, opts, report, cancel,
-                      opts.get("title", ""))
-    res["lang"] = tgt
-    res["src_lang"] = src_lang
-    return res

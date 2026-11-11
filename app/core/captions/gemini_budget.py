@@ -171,7 +171,7 @@ def since(snap):
 
 
 def saver_on(cfg=None):
-    """Settings → Captions & Dub → "Quota saver" (default ON)."""
+    """Settings → Captions → "Quota saver" (default ON)."""
     try:
         if cfg is None:
             from app.config import load_app_config
