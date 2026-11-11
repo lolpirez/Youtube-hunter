@@ -7,7 +7,7 @@ Version numbering restarted at **1.0.0** for the public release.
 
 ---
 
-## Unreleased: v2.0 "Natural captions", AI dub removed
+## 1.3.1 (bundle v2.3.1 vertical-xlsx): Video Dossier, vertical Excel export, AI dub removed
 
 - **Fix: random "Cannot find member data" / "is not a function" / "QFont
   weight 0" warnings at start-up** (`main_qml.py`): `engine.load()` could run
