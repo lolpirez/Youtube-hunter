@@ -287,7 +287,7 @@ def run_captions(opts, report, cancel):
     if (raw_asr and not translating and allow_ai and opts.get("source") == "ai"
             and T.ai_ready()):
         report("Making YouTube's captions fluent", 0.30)
-        pl_cache = os.path.join(work, f"polish_{_sha(len(cues), cues[0].start, cues[-1].text, src_lang)}.json")
+        pl_cache = os.path.join(work, f"polish_{_sha(len(cues), cues[0].start, cues[-1].text, src_lang, 'p2')}.json")
         if os.path.isfile(pl_cache):
             with open(pl_cache, encoding="utf-8") as f:
                 shown = C.load_json(f.read())
@@ -317,7 +317,7 @@ def run_captions(opts, report, cancel):
     refine = bool(opts.get("refine", _cfg.get("caption_refine", True)))
     if translating:
         report("Translating", 0.30)
-        tr_cache = os.path.join(work, f"subs_{tgt}_{int(raw_asr)}_{_sha(len(cues), cues[0].start, cues[-1].text, 'nat2', register, refine)}.json")
+        tr_cache = os.path.join(work, f"subs_{tgt}_{int(raw_asr)}_{_sha(len(cues), cues[0].start, cues[-1].text, 'nat3', register, refine)}.json")
         if os.path.isfile(tr_cache):
             with open(tr_cache, encoding="utf-8") as f:
                 shown = C.load_json(f.read())
@@ -349,10 +349,9 @@ def run_captions(opts, report, cancel):
     keep_src = shown is cues
     shown = C.drop_speaker_marks(C.drop_end_period(shown))
     cues = shown if keep_src else C.drop_speaker_marks(C.drop_end_period(cues))
-    # v2.0: Persian typography + reading time + no flicker (free, no AI)
+    # v2.1: typography + tidy punctuation + reading time for EVERY language
     shown = P.finish(shown, out_lang)
-    if keep_src:
-        cues = shown
+    cues = shown if keep_src else P.finish(cues, src_lang)
     if secondary is not None:
         secondary = [c.meta.get("src", "") for c in shown]
 

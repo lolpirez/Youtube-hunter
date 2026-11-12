@@ -200,6 +200,149 @@ def _lang_label(code):
     return f"{l['name']} ({l['native']})" if l["native"] != l["name"] else l["name"]
 
 
+# ── v2.1: no stray foreign / garbled words ───────────────────────────────
+# A model can drop a token from another language into a line ("حالا می‌istem",
+# "این écran اصلی است") or half-transliterate a word. On any script that is
+# not Latin the intruder is visible at a glance, so such tokens are found
+# deterministically and only the affected lines are rewritten once. On
+# Latin-script targets the guard looks for non-Latin intruders instead.
+_FOREIGN_OK = frozenset("""youtube google instagram telegram whatsapp twitter tiktok facebook
+iphone ipad android windows linux macos ios app apple microsoft amazon netflix spotify chatgpt
+openai gpt ai api apis gpu cpu ram ssd usb hdmi wifi bluetooth fps hd uhd oled pdf url html css
+vpn ok okay vs tv pc email online offline studio pro max plus ultra lite mini claude gemini
+anthropic fable premiere photoshop davinci resolve figma notion obs linkedin reddit snapchat
+capcut fiverr upwork""".split())
+_URL_RE = re.compile(r"(?:https?://|www\.)\S+|\S+\.(?:com|org|net|io|dev|app|co|tv|me)\b", re.I)
+_ANY_TAG_RE = re.compile(r"<[^>]{1,60}>")
+_LATIN_TOKEN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z][A-Za-z'’\-]*(?![A-Za-z0-9])")
+# a run of non-Latin letters inside a Latin-script line is an intruder
+_NON_LATIN_RUN = re.compile(
+    "[Ͱ-ϿЀ-ӿ֐-׿؀-ۿ܀-ݏ"
+    "ऀ-ൿ฀-๿ሀ-፿-ヿ-鿿"
+    "가-힯]{2,}")
+
+
+def _word_in(needle, haystack):
+    if not needle or not haystack:
+        return False
+    if _LATIN_TOKEN.fullmatch(needle):
+        return re.search(r"(?<![A-Za-z])" + re.escape(needle) + r"(?![A-Za-z])",
+                         haystack, re.I) is not None
+    return needle.casefold() in haystack.casefold()
+
+
+def foreign_tokens(text, src_text="", brief_txt="", tgt=""):
+    """Tokens that cannot belong to `tgt`: Latin words inside a non-Latin
+    line (or non-Latin words inside a Latin line) that the source and the
+    brief do not contain and that are not a known brand / technical term.
+    Uppercase acronyms and URLs are left alone."""
+    rec = L.get(tgt)
+    if not rec:
+        return []
+    line = _URL_RE.sub(" ", _ANY_TAG_RE.sub(" ", str(text or "")))
+    src, brief = str(src_text or ""), str(brief_txt or "")
+    out = []
+    if rec["script"] == "latn":
+        for m in _NON_LATIN_RUN.finditer(line):
+            tok = m.group(0)
+            if _word_in(tok, src) or _word_in(tok, brief):
+                continue
+            out.append(tok)
+        return out
+    for m in _LATIN_TOKEN.finditer(line):
+        tok = m.group(0)
+        core = re.sub(r"['’]s$", "", tok)
+        low = core.lower()
+        if len(core) < 2 or core.isupper() or low in _FOREIGN_OK:
+            continue
+        if _word_in(low, src) or _word_in(low, brief):
+            continue
+        out.append(tok)
+    return out
+
+
+_SYS_REPAIR = ("You are a meticulous {tgt} subtitle editor. You remove words that are not "
+               "{tgt} and keep every line natural, faithful and about the same length.")
+
+_REPAIR_PROMPT = """These {tgt} subtitle lines contain a word that is not {tgt}: an untranslated, half-translated or garbled token (like "istem" inside a Persian sentence). Rewrite ONLY these lines the way a native {tgt} speaker would say them: replace or drop the stray token, keep the meaning, keep names and numbers, keep the line about the same length. A real name or brand that the SOURCE line itself writes in Latin letters stays in Latin letters.
+
+SOURCE → CURRENT ("id", "src", "x"):
+{lines}
+
+Return JSON only: {{"t": [{{"id": <id>, "x": "<fixed line>"}}, …]}}"""
+
+
+def _repair_foreign(out, tgt, client, src="", brief_txt="", cache_dir="", should_cancel=None):
+    """One targeted AI pass over ONLY the lines that carry a foreign /
+    garbled token. Returns (cues, n_fixed). Never fails the job."""
+    if not L.get(tgt) or not out:
+        return out, 0
+    flagged = []
+    for i, c in enumerate(out):
+        toks = foreign_tokens(c.text, c.meta.get("src", ""), brief_txt, tgt)
+        if toks:
+            flagged.append((i, toks))
+    if not flagged:
+        return out, 0
+    res = [c.copy() for c in out]
+    fixed = 0
+    for k in range(0, len(flagged), 20):
+        if should_cancel and should_cancel():
+            break
+        chunk = flagged[k:k + 20]
+        listing = "\n".join(json.dumps({"id": i, "src": C.flat(res[i].meta.get("src", "")),
+                                        "x": C.flat(res[i].text)},
+                                       ensure_ascii=False, separators=_COMPACT)
+                            for i, _t in chunk)
+        path = ""
+        if cache_dir:
+            h = hashlib.sha1((listing + "|" + tgt + "|" + brief_txt).encode("utf-8", "replace")).hexdigest()[:16]
+            path = os.path.join(cache_dir, f"fx_{(tgt or 'x').split('-')[0]}_{h}.json")
+        got = None
+        if path and os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    got = {int(a): b for a, b in json.load(f).items()}
+            except Exception:            # noqa: BLE001
+                got = None
+        if got is None:
+            prompt = _REPAIR_PROMPT.format(tgt=_lang_label(tgt), lines=listing)
+            try:
+                data = _json(client.generate(prompt, _SYS_REPAIR.format(tgt=_lang_label(tgt)),
+                                             timeout=120,
+                                             max_output_tokens=min(6000, 200 + 120 * len(chunk))))
+            except Exception:            # noqa: BLE001 — keep the lines as they are
+                break
+            got = {}
+            for item in (data.get("t") if isinstance(data, dict) else data) or []:
+                try:
+                    i = int(item.get("id"))
+                except (TypeError, ValueError, AttributeError):
+                    continue
+                x = C.clean_text(str(item.get("x") or "")).replace("\n", " ")
+                if x:
+                    got[i] = x
+            if path:
+                try:
+                    with open(path, "w", encoding="utf-8") as f:
+                        json.dump({str(a): b for a, b in got.items()}, f, ensure_ascii=False)
+                except OSError:
+                    pass
+        for i, toks in chunk:
+            x = got.get(i)
+            if not x or not (0 <= i < len(res)):
+                continue
+            old = res[i].text
+            if len(foreign_tokens(x, res[i].meta.get("src", ""), brief_txt, tgt)) >= len(toks):
+                continue
+            if len(C.flat(x)) > max(12, int(len(C.flat(old)) * 1.5)):
+                continue
+            if x != old:
+                res[i] = res[i].copy(text=x, meta=dict(res[i].meta, repaired=True))
+                fixed += 1
+    return res, fixed
+
+
 # ── brief ────────────────────────────────────────────────────────────────
 
 _BRIEF_SYS = "You are a senior audiovisual translator preparing a translation brief."
@@ -339,34 +482,65 @@ Rules:
 - Same meaning, same speaker intent. Keep names, numbers and brand names exactly.
 - About the same length (never more than ~15% longer): these are subtitles.
 - A sentence that runs across several ids stays split across the same ids.
+- Never introduce a word that is not {tgt}: no foreign, half-translated or garbled token, no transliteration in the wrong script.
+- Never cut a line down to a fragment or drop its words; leave short lines (a word or two) exactly as they are.
+- No full stop at the end of a line; when the sentence continues in the next id, end with no punctuation or a comma.
 
 LINES ("src" = original, "x" = current subtitle):
 {lines}
 
 Return JSON only, with the changed lines only (empty list when all are fine): {{"t": [{{"id": <id>, "x": "<better line>"}}, …]}}"""
 
+# v2.1: a rewrite is only accepted when it cannot have damaged the line.
+_REFINE_MIN_CHARS = 12
+
+
+def _refine_ok(old, new, src, brief_txt, tgt):
+    if foreign_tokens(new, src, brief_txt, tgt):
+        return False
+    if len(C.flat(new)) < max(6, int(len(C.flat(old)) * 0.55)):
+        return False
+    if set(re.findall(r"\d+", old)) - set(re.findall(r"\d+", new)):
+        return False
+    old_lat = {t.lower() for t in _LATIN_TOKEN.findall(old)
+               if len(t) > 1 and (t.lower() in _FOREIGN_OK or _word_in(t, src))}
+    new_lat = {t.lower() for t in _LATIN_TOKEN.findall(new)}
+    if old_lat - new_lat:
+        return False
+    return True
+
 
 def refine_cues(out, src, tgt, register="natural", title="", client=None, brief_txt="",
                 cache_dir="", should_cancel=None, on_progress=None):
     """v2.0 native-editor pass. Returns (cues, n_changed). Never fails the
-    job: any error keeps the first-pass lines."""
+    job: any error keeps the first-pass lines. v2.1: batches run in parallel
+    and a rewrite that adds a foreign token, guts the line or drops a
+    number / brand is rejected."""
     client = client or _client("captions")
     reg = register_rules(tgt, register)
-    changed = 0
     res = [c.copy() for c in out]
+    texts = [C.flat(c.text) for c in res]
+    srcs = [C.flat(c.meta.get("src", "")) for c in res]
+    untr = [bool(c.meta.get("untranslated")) for c in res]
     batches = [list(range(i, min(len(res), i + _BATCH))) for i in range(0, len(res), _BATCH)]
-    for n, ids in enumerate(batches):
+    lock = threading.Lock()
+    changed = [0]
+    done = [0]
+
+    def work(ids):
         if should_cancel and should_cancel():
-            break
-        listing = "\n".join(json.dumps({"id": i, "src": C.flat(res[i].meta.get("src", "")),
-                                         "x": C.flat(res[i].text)}, ensure_ascii=False, separators=_COMPACT)
-                            for i in ids if not res[i].meta.get("untranslated"))
+            return
+        listing = "\n".join(json.dumps({"id": i, "src": srcs[i], "x": texts[i]},
+                                       ensure_ascii=False, separators=_COMPACT)
+                            for i in ids if not untr[i] and len(texts[i]) >= _REFINE_MIN_CHARS)
         if not listing:
-            continue
+            with lock:
+                done[0] += 1
+            return
         path = ""
         if cache_dir:
             h = hashlib.sha1((listing + "|" + str(register) + "|" + brief_txt).encode("utf-8", "replace")).hexdigest()[:16]
-            path = os.path.join(cache_dir, f"rf_{(tgt or 'x').split('-')[0]}_{h}.json")
+            path = os.path.join(cache_dir, f"rf2_{(tgt or 'x').split('-')[0]}_{h}.json")
         got = None
         if path and os.path.isfile(path):
             try:
@@ -382,7 +556,7 @@ def refine_cues(out, src, tgt, register="natural", title="", client=None, brief_
                 data = _json(client.generate(prompt, _SYS_REFINE.format(tgt=_lang_label(tgt)), timeout=180,
                                              max_output_tokens=min(8000, 300 + 120 * len(ids))))
             except Exception:            # noqa: BLE001 - the first pass stands
-                break
+                return
             got = {}
             for item in (data.get("t") if isinstance(data, dict) else data) or []:
                 try:
@@ -390,7 +564,8 @@ def refine_cues(out, src, tgt, register="natural", title="", client=None, brief_
                 except (TypeError, ValueError, AttributeError):
                     continue
                 x = C.clean_text(str(item.get("x") or "")).replace("\n", " ")
-                if i in ids and x and len(x) <= max(12, int(len(C.flat(res[i].text)) * 1.35)):
+                if (i in ids and x and len(x) <= max(12, int(len(texts[i]) * 1.35))
+                        and _refine_ok(texts[i], x, srcs[i], brief_txt, tgt)):
                     got[i] = x
             if path:
                 try:
@@ -398,13 +573,18 @@ def refine_cues(out, src, tgt, register="natural", title="", client=None, brief_
                         json.dump({str(k): v for k, v in got.items()}, f, ensure_ascii=False)
                 except OSError:
                     pass
-        for i, x in got.items():
-            if 0 <= i < len(res) and x != res[i].text:
-                res[i] = res[i].copy(text=x, meta=dict(res[i].meta, refined=True))
-                changed += 1
-        if on_progress:
-            on_progress((n + 1) / len(batches))
-    return res, changed
+        with lock:
+            for i, x in got.items():
+                if 0 <= i < len(res) and x != res[i].text:
+                    res[i] = res[i].copy(text=x, meta=dict(res[i].meta, refined=True))
+                    changed[0] += 1
+            done[0] += 1
+            if on_progress:
+                on_progress(done[0] / len(batches))
+
+    with cf.ThreadPoolExecutor(max_workers=3) as ex:
+        list(ex.map(work, batches))
+    return res, changed[0]
 
 _SYS_DUB = """You are a dubbing adapter for film and YouTube. You rewrite lines in the target language so a voice actor can SAY them naturally in the time the original line takes. Spoken register, natural rhythm, the same emotion and intent. You keep meaning faithful and keep names and numbers correct."""
 
@@ -440,9 +620,19 @@ def _script_hint(tgt):
     return _FA_SHORT if str(tgt or "").split("-")[0].lower() == "fa" else ""
 
 
+def _script_rule(tgt):
+    """v2.1: applies to EVERY target language, not only RTL ones."""
+    return ("\n- Write ONLY {tgt}. Never leave a word from another language, a half-translated or "
+            "garbled token, or a transliteration in the wrong script; a name/brand the source writes "
+            "in Latin letters stays exactly as the source writes it."
+            "\n- No full stop at the end of a line; when the sentence continues in the next id, end "
+            "with no punctuation or a comma.").format(tgt=_lang_label(tgt))
+
+
 # v1.4.12: YouTube's auto captions as the source
 _RAW_ASR = """
-- The source lines are AUTOMATIC captions from speech recognition: no punctuation, some misheard words, and one spoken sentence is often cut across 2-3 lines. Read the lines (and the context) as continuous speech. Fix obvious mishearings from context (names, terms in the brief). Write each id as a fluent part of the sentence it belongs to, in natural {tgt} word order, with proper punctuation, so the lines read as clean subtitles one after another. A word may move to a neighbouring id when {tgt} grammar needs it; never leave an id empty."""
+- The source lines are AUTOMATIC captions from speech recognition: no punctuation, some misheard words, and one spoken sentence is often cut across 2-3 lines. Read the lines (and the context) as continuous speech. Fix obvious mishearings from context (names, terms in the brief). Write each id as a fluent part of the sentence it belongs to, in natural {tgt} word order, with proper punctuation, so the lines read as clean subtitles one after another. A word may move to a neighbouring id when {tgt} grammar needs it; never leave an id empty.
+- Never invent or leave a foreign, half-translated or garbled token; every word is a real {tgt} word (or a name/brand the source itself writes)."""
 
 _SYS_POLISH = """You are a meticulous subtitle editor. You turn raw automatic captions into clean, fluent subtitles in the SAME language: correct punctuation and casing, obvious mishearings fixed from context. You never translate, summarise or add anything."""
 
@@ -450,7 +640,9 @@ _RULES_POLISH = """Rules:
 - Same language ({tgt}). Do NOT translate and do not reword what was said.
 - Add punctuation and casing; fix words that were clearly misheard (use the context and the brief); drop stutters and doubled words.
 - The lines are automatic captions: one sentence often runs across 2-3 ids. Keep each id's words in that id (a word may move to a neighbouring id only to finish a sentence cleanly); never leave an id empty.
-- One line per id. Do not merge or split ids. Do not edit the CONTEXT lines.{rtl_rule}"""
+- One line per id. Do not merge or split ids. Do not edit the CONTEXT lines.
+- Never invent or leave a foreign, half-translated or garbled token; keep every word a real {tgt} word.
+- No full stop at the end of a line; when the sentence continues in the next id, end with no punctuation or a comma.{rtl_rule}"""
 
 _PROMPT = """Translate from {src} to {tgt}.
 
@@ -522,8 +714,7 @@ def _translate_batch(client, cues, ids, src, tgt, brief_txt, tone, dub, title=""
     before = range(max(0, lo - _CTX_BEFORE), lo)
     after = range(hi + 1, min(len(cues), hi + 1 + _CTX_AFTER))
     cps = 12 if L.is_cjk(tgt) else 17
-    rtl_rule = ("\n- Use the target script only; keep Latin brand names as they are."
-                if L.is_rtl(tgt) else "")
+    rtl_rule = _script_rule(tgt)
     if polish:
         rules = _RULES_POLISH.format(tgt=_lang_label(tgt), rtl_rule=rtl_rule)
     else:
@@ -600,7 +791,7 @@ def translate_cues(cues, tgt, src="", title="", mode="subtitle", on_progress=Non
     if polish:
         tgt = tgt or src
     register = register if register in _REGISTER_KEYS else "natural"
-    flavour = "polish" if polish else (("asr-" if raw_asr else "") + "nat2-" + register)
+    flavour = "polish2" if polish else (("asr-" if raw_asr else "") + "nat3-" + register)
     brief = (make_brief(cues, src, tgt, title, client, cache_dir)
              if len(cues) >= _BRIEF_MIN_LINES else {})
     brief_txt = _brief_text(brief)
@@ -688,6 +879,12 @@ def translate_cues(cues, tgt, src="", title="", mode="subtitle", on_progress=Non
                               should_cancel)
         if brief is not None and isinstance(brief, dict):
             brief = dict(brief, refined=_n)
+    # v2.1: one targeted pass over any line that still carries a foreign /
+    # garbled token (first pass, refine or polish). No call when none do.
+    if out:
+        out, _fx = _repair_foreign(out, tgt, client, src, brief_txt, cache_dir, should_cancel)
+        if _fx and isinstance(brief, dict):
+            brief = dict(brief, repaired=_fx)
     if on_progress:
         on_progress(1.0)
     return out, brief

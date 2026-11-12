@@ -9,6 +9,35 @@ Version numbering restarted at **1.0.0** for the public release.
 
 ## 1.3.1 (bundle v2.3.1 vertical-xlsx): Video Dossier, vertical Excel export, AI dub removed
 
+- **Fix: stray foreign / garbled words inside translated captions**
+  (`captions/translate.py`): the native-editor refine pass could corrupt a
+  good line — a Persian caption suddenly carried a half-Latin token like
+  "می‌istem" or "beginnings". Every refined line is now checked against the
+  source and the brief: a token that is not the target language (and not a
+  real name/brand the source itself writes in Latin, an acronym or a URL)
+  makes the refinement rejected, keeping the clean first-pass line. Any
+  line that still carries a foreign token gets one targeted repair pass
+  (only the flagged lines, cached), for **every** language — Latin lines
+  are guarded against non-Latin intruders too. The translate / polish /
+  refine prompts now state the rule explicitly.
+
+- **Fix: pointless full stops in captions, every language**
+  (`captions/cues.py`, `captions/polish.py`): the AI wrote " . " after each
+  fragment mid-line. `tidy_punctuation` removes the space before any mark,
+  collapses stray double stops and bad combos, turns an internal full stop
+  into a comma for Arabic-script languages (Persian, Arabic, Urdu, Pashto,
+  Kurdish), and drops the closing stop — while keeping ellipses ("...",
+  "…"), abbreviations ("U.S.", "etc.", "Dr.") and question/exclamation
+  marks. It runs in `finish()` for all languages, and the word stamps are
+  re-timed so Bold Pop's word-by-word reveal matches the cleaned text.
+
+- **Faster captions** (`captions/translate.py`, `captions/jobs.py`): the
+  refine pass now runs 3 lines-batches in parallel and skips very short
+  lines; the foreign-token repair only touches flagged lines. Translation,
+  polish and refine cache keys were bumped (`nat3` / `p2` / `rf2` / `fx`)
+  so jobs cached by older versions are rebuilt clean instead of reusing a
+  corrupted line.
+
 - **Fix: stray ">>" marks beside burned caption lines** (`captions/cues.py`,
   `captions/jobs.py`): YouTube's auto-captions mark a new speaker with ">>"
   (sometimes "<<"); the marks are now stripped from the cue text, the timed

@@ -52,8 +52,36 @@ def reading_hold(cues, lang, min_dur=0.9, max_extra=1.2, gap=0.3):
     return out
 
 
+def _retimed_words(c, text):
+    """Word stamps that match the finished text, so Bold Pop's word-by-word
+    reveal shows exactly what is on screen after the typography pass."""
+    old = list(c.words or [])
+    toks = text.split()
+    if not old or not toks:
+        return []
+    if len(toks) == len(old):
+        return [(a, b, t) for (a, b, _), t in zip(old, toks)]
+    s, e = old[0][0], old[-1][1]
+    total = sum(len(t) for t in toks) or 1
+    out, cur = [], s
+    for t in toks:
+        d = (e - s) * len(t) / total
+        out.append((cur, min(e, cur + d), t))
+        cur += d
+    out[-1] = (out[-1][0], e, out[-1][2])
+    return out
+
+
 def finish(cues, lang):
-    """Every caption job's last touch before the .srt is written."""
-    if str(lang or "").split("-")[0].lower() == "fa":
-        cues = [c.copy(text=fa_typography(c.text)) for c in cues]
-    return reading_hold(cues, lang)
+    """Every caption job's last touch before the .srt is written: Persian
+    typography where it applies, tidy punctuation for EVERY language (no
+    space before marks, no stray dots, no closing full stop), word stamps
+    kept in step, then reading time."""
+    fa = str(lang or "").split("-")[0].lower() == "fa"
+    out = []
+    for c in cues:
+        t = fa_typography(c.text) if fa else c.text
+        t = C.tidy_punctuation(t, lang)
+        words = _retimed_words(c, t) if c.words else []
+        out.append(c.copy(text=t, words=words))
+    return reading_hold(out, lang)

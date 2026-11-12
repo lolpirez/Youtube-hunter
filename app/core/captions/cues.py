@@ -14,6 +14,8 @@ import html
 import json
 import re
 
+from app.core.captions import languages as L
+
 # ── model ────────────────────────────────────────────────────────────────
 
 
@@ -80,14 +82,54 @@ def _strip_line(line):
     tail = line[len(core):]
     if not core or core[-1] not in _DOTS:
         return line
-    if len(core) >= 2 and core[-2] in _DOTS + "\u2026":
-        return line                       # "..." / "…." : an ellipsis, keep
-    if core[-1] == "." and _ABBR_RX.search(core):
-        return line                       # "U.S."
-    word = re.split(r"[\s(\"'\u201c\u00ab]", core[:-1])[-1].lower()
-    if core[-1] == "." and word in _ABBR_WORDS:
-        return line                       # "etc." / "Dr."
+    if core[-1] == ".":
+        n = len(core) - len(core.rstrip("."))
+        if n >= 3 or (len(core) >= 2 and core[-2] == "…"):
+            return line                       # "..." / "…." : an ellipsis, keep
+        if _ABBR_RX.search(core):
+            return line                       # "U.S."
+        word = re.split(r"[\s(\"'“«]", core[:-1])[-1].lower()
+        if word in _ABBR_WORDS:
+            return line                       # "etc." / "Dr."
+        if n == 2:
+            return core[:-2].rstrip() + tail   # ".." : accidental double stop
+        return core[:-1].rstrip() + tail
+    if len(core) >= 2 and core[-2] in _DOTS + "…":
+        return line                       # ellipsis in another script, keep
     return core[:-1].rstrip() + tail
+
+
+# ── v2.1: tidy punctuation for every language ────────────────────────────
+_PUNCT_SPACE = re.compile(r"[ \t]+([,.;:!?،؛؟…])")
+_BAD_COMBO = re.compile(r"([،؛!?؟])\s*\.+|\.+\s*([،؛])|([،])\s*,+")
+_DOT_JOIN = re.compile(r"(\S+?)(?<!\.)\.\s+(?=\S)")
+
+
+def _internal_dot_to_comma(t):
+    def repl(m):
+        word = m.group(1)
+        if word.endswith(".") or _ABBR_RX.search(word + "."):
+            return m.group(0)
+        if word.lower().rstrip(".") in _ABBR_WORDS or re.search(r"\d$", word):
+            return m.group(0)
+        return word + "، "
+    return _DOT_JOIN.sub(repl, t)
+
+
+def tidy_punctuation(text, lang):
+    """v2.1: no space before punctuation, no stray double stops, and (for
+    Arabic-script languages) an internal full stop becomes a comma so a
+    caption never reads as a chain of pointless dots. Ends without a stop."""
+    rec = L.get(lang)
+    arab = bool(rec and rec["script"] == "arab")
+    out = []
+    for ln in str(text or "").split("\n"):
+        t = _PUNCT_SPACE.sub(r"\1", ln)
+        t = _BAD_COMBO.sub(lambda m: m.group(1) or m.group(2) or m.group(3), t)
+        if arab:
+            t = _internal_dot_to_comma(t)
+        out.append(strip_end_period(t))
+    return "\n".join(out)
 
 
 def drop_end_period(cues):
