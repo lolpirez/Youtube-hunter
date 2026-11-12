@@ -1889,18 +1889,25 @@ def _run_ffmpeg_cut(args, seg_len, out_path, on_progress, should_cancel,
 # YouTube stream: a 1080p clip came out at ~12 Mbit/s against the source's 2-5
 # (a 2.5-minute cut = 223 MB). The level is now a setting, `"cut_quality"` in
 # config.json:
-#     "high"      the old behaviour (editing / archiving; biggest files)
-#     "balanced"  DEFAULT — visually the same for sharing and most edits,
-#                 roughly half the size of "high"
+#     "high"      DEFAULT — near-transparent, the clip looks like the source
+#                 it was cut from (editing / archiving; biggest files)
+#     "balanced"  visually very close to the source at a much smaller size,
+#                 for sharing and most edits
 #     "small"     smallest, a little softer on fine detail and fast motion
-# One number per encoder family: x264 CRF, NVENC CQ, QSV global_quality,
-# AMF QP (I, P). Lower = better quality = bigger file.
+# The old values (18 / 23 / 27) were chosen for file size, and a cut at
+# "balanced" was visibly softer than the 1080p source it came from — the
+# "the original looks much better than my cut" report. High now sits at the
+# x264/NVENC near-transparent range (16-18) with a real preset (medium, not
+# veryfast), Balanced moved up to 20-22, and Small to 24-26: every level is
+# a quality guarantee first, a size knob second. One number per encoder
+# family: x264 CRF, NVENC CQ, QSV global_quality, AMF QP (I, P).
+# Lower = better quality = bigger file.
 _QUALITY_LEVELS = {
-    "high":     {"crf": 18, "cq": 19, "qsv": 20, "amf": (18, 20)},
-    "balanced": {"crf": 23, "cq": 25, "qsv": 25, "amf": (23, 25)},
-    "small":    {"crf": 27, "cq": 29, "qsv": 29, "amf": (27, 29)},
+    "high":     {"crf": 16, "cq": 17, "qsv": 18, "amf": (17, 19)},
+    "balanced": {"crf": 20, "cq": 21, "qsv": 22, "amf": (20, 22)},
+    "small":    {"crf": 24, "cq": 26, "qsv": 26, "amf": (24, 26)},
 }
-_DEFAULT_QUALITY = "balanced"
+_DEFAULT_QUALITY = "high"
 _HW_NAMES = ("h264_nvenc", "h264_qsv", "h264_amf")
 
 # v1.0.3 — A SIZE YOU CAN KNOW BEFORE THE CUT. The CRF levels above are
@@ -1918,8 +1925,13 @@ _HW_NAMES = ("h264_nvenc", "h264_qsv", "h264_amf")
 #                 sources are 1.0).
 #   level factor: High keeps generous headroom over the source (re-encoding
 #                 costs a generation), Balanced a little, Small trims.
+# v1.0.4: High was 1.6 — barely above the source, and the x264 `veryfast`
+# preset then left visible compression on a 1080p cut. High is now 1.8 at
+# `medium` (see _LEVEL_PRESETS), which is effectively transparent for an
+# already-compressed source; Balanced went 1.1 → 1.35 so it no longer trades
+# real detail away, and Small 0.75 → 0.85.
 # The CRF table stays as the fallback when the source bitrate is unknown.
-_CUT_LEVEL_RATE = {"high": 1.6, "balanced": 1.1, "small": 0.75}
+_CUT_LEVEL_RATE = {"high": 1.8, "balanced": 1.35, "small": 0.85}
 _CUT_SRC_FACTOR = {"h264": 1.0, "vp9": 1.35, "av1": 1.6, "hevc": 1.3}
 _CUT_MIN_KBPS = 300
 _CUT_AUDIO_KBPS = 192            # every re-encoded cut: AAC 192 kbps
@@ -1981,35 +1993,78 @@ def _video_target_for(formats, cap_h, duration, audio_lang="", v_url=None,
 def cut_size_rates(formats, duration, audio_lang="", level=None):
     """Bytes per second of clip, for every output the Cut panel offers — what
     the panel multiplies by the clip length. {cap_key: {"mp4": Bps,
-    "copy": Bps}, "audio": {"mp3": Bps, ...}}. 0 = unknown."""
+    "copy": Bps}, "audio": {"mp3": Bps, ...}}. 0 = unknown.
+
+    The ranking mirrors the CUT, not the probe's DASH answer: cut-time
+    extraction walks a direct-URL ladder, so the AVC/mp4 copy is what gets cut
+    even when the picker's probe came back DASH-only. Ranking only direct
+    formats here (the old behaviour) found none in such a probe and fell
+    through to `_fallback_video_format`'s VP9 pick — a 1080p minute was
+    promised at ~14 MB and landed at ~27. `mp4` = re-encoded cut (ABR target,
+    see cut_video_kbps); `copy` = the native stream copy behind the mkv/webm
+    chips.
+    """
     out = {}
     try:
         duration = float(duration or 0)
     except (TypeError, ValueError):
         duration = 0.0
-    direct = [f for f in (formats or []) if _is_direct_http(f)]
+    pool = [f for f in (formats or []) if f.get("url")]
+
+    def _rank(f):
+        return (
+            _fmt_short_side(f),
+            1 if (f.get("ext") or "") == "mp4" else 0,
+            1 if (f.get("vcodec") or "").startswith("avc") else 0,
+            f.get("tbr") or 0,
+            str(f.get("format_id") or ""))
+
+    prog = [f for f in pool
+            if (f.get("vcodec") or "none") != "none"
+            and (f.get("acodec") or "none") != "none"]
+    vids = [f for f in pool
+            if (f.get("vcodec") or "none") != "none"
+            and (f.get("acodec") or "none") == "none"]
+    auds = [f for f in pool
+            if (f.get("vcodec") or "none") == "none"
+            and (f.get("acodec") or "none") != "none"]
+    # One language only; a picked dub also rules out progressive files (they
+    # carry the default track) — the same rule the cut applies.
+    if audio_lang and any((a.get("language") or "") == audio_lang for a in auds):
+        prog = []
+    auds = _original_audio_only(auds, audio_lang)
+    best_aud = max(auds, key=lambda f: (f.get("abr") or 0, f.get("tbr") or 0),
+                   default=None)
     for cap in _CUT_CAPS:
         try:
-            v_url, a_url, _ext, px = (_pick_streams(direct, cap, audio_lang)
-                                      if direct else (None, None, "", 0))
-            target, vf = _video_target_for(formats, cap, duration, audio_lang,
-                                           v_url=v_url, level=level)
+            capp = int(cap or 2160) or 2160
+            bprog = [f for f in prog if 0 < (_fmt_short_side(f) or 0) <= capp]
+            bvid = [f for f in vids if 0 < (_fmt_short_side(f) or 0) <= capp]
+            bp = max(bprog, key=_rank) if bprog else None
+            bv = max(bvid, key=_rank) if bvid else None
+            # Progressive wins ties (one file, no mux), exactly like
+            # _pick_stream_candidates.
+            if bp and (not bv
+                       or _fmt_short_side(bp) >= _fmt_short_side(bv)):
+                vf, af = bp, None
+            else:
+                vf, af = bv, best_aud
+            target = (cut_video_kbps(_stream_kbps(vf, duration),
+                                     (vf or {}).get("vcodec"), level)
+                      if vf else 0)
             mp4 = ((target + _CUT_AUDIO_KBPS) * 1000 / 8 * _CUT_MUX_OVERHEAD
                    if target else 0)
             copy = 0
-            if vf is not None and v_url:
-                af = _format_for_url(direct, a_url)
-                kb = _stream_kbps(vf, duration) + (
-                    _stream_kbps(af, duration) if af is not None else 0)
+            if vf is not None:
+                kb = _stream_kbps(vf, duration)
+                if af is not None:
+                    kb += _stream_kbps(af, duration)   # copied, not 192k
                 copy = kb * 1000 / 8 * _CUT_MUX_OVERHEAD if kb > 0 else 0
             out[f"{cap}p"] = {"mp4": int(mp4), "copy": int(copy)}
         except Exception:             # noqa: BLE001 — one tier ≠ no estimate
             out[f"{cap}p"] = {"mp4": 0, "copy": 0}
     # audio-only cuts: fixed-rate encoders, except WAV (arithmetic) and FLAC
-    auds = [f for f in direct if (f.get("vcodec") or "none") == "none"
-            and (f.get("acodec") or "none") != "none" and f.get("url")]
-    auds = _original_audio_only(auds, audio_lang)
-    ac = max(auds, key=lambda f: (f.get("abr") or 0, f.get("tbr") or 0), default=None)
+    ac = best_aud
     asr = int((ac or {}).get("asr") or 48000)
     ch = int((ac or {}).get("audio_channels") or 2)
     pcm = asr * ch * 2
@@ -2027,38 +2082,55 @@ def _cut_quality():
     return q if q in _QUALITY_LEVELS else _DEFAULT_QUALITY
 
 
+# v1.0.4: the encoder effort follows the quality level too. `veryfast` on
+# every cut was a size shortcut that left visible generation loss; High now
+# uses the normal x264 speed (`medium`) — for a clip-length encode this is
+# seconds-to-minutes, not a render job — and the hardware encoders get their
+# matching quality presets. Small keeps the fast presets.
+_LEVEL_PRESETS = {
+    "high":     {"libx264": "medium",   "h264_nvenc": "p6",
+                 "h264_qsv": "medium",  "h264_amf": "quality"},
+    "balanced": {"libx264": "faster",   "h264_nvenc": "p5",
+                 "h264_qsv": "faster",  "h264_amf": "balanced"},
+    "small":    {"libx264": "veryfast", "h264_nvenc": "p4",
+                 "h264_qsv": "veryfast", "h264_amf": "speed"},
+}
+
+
 def _encoder_args(name, level=None, kbps=0):
     """ffmpeg video-encoder arguments for `name`: bitrate-targeted at `kbps`
     when given (predictable size, see cut_video_kbps), else the CRF/CQ value
     of the quality level."""
+    level = level if level in _QUALITY_LEVELS else _cut_quality()
+    presets = _LEVEL_PRESETS.get(level, _LEVEL_PRESETS["high"])
     if kbps and kbps > 0:
         k = int(kbps)
         rate = ["-b:v", f"{k}k", "-maxrate", f"{int(k * 1.5)}k",
                 "-bufsize", f"{k * 2}k"]
         if name == "h264_nvenc":
-            return ["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq",
-                    "-rc", "vbr", *rate, "-pix_fmt", "yuv420p"]
+            return ["-c:v", "h264_nvenc", "-preset", presets["h264_nvenc"],
+                    "-tune", "hq", "-rc", "vbr", *rate, "-pix_fmt", "yuv420p"]
         if name == "h264_qsv":
-            return ["-c:v", "h264_qsv", "-preset", "faster", *rate,
+            return ["-c:v", "h264_qsv", "-preset", presets["h264_qsv"], *rate,
                     "-pix_fmt", "nv12"]
         if name == "h264_amf":
-            return ["-c:v", "h264_amf", "-quality", "balanced",
+            return ["-c:v", "h264_amf", "-quality", presets["h264_amf"],
                     "-rc", "vbr_peak", *rate, "-pix_fmt", "nv12"]
-        return ["-c:v", "libx264", "-preset", "veryfast", *rate,
+        return ["-c:v", "libx264", "-preset", presets["libx264"], *rate,
                 "-pix_fmt", "yuv420p"]
-    q = _QUALITY_LEVELS[level if level in _QUALITY_LEVELS else _cut_quality()]
+    q = _QUALITY_LEVELS[level]
     if name == "h264_nvenc":
-        return ["-c:v", "h264_nvenc", "-preset", "p4", "-tune", "hq",
-                "-rc", "vbr", "-cq", str(q["cq"]), "-b:v", "0",
-                "-pix_fmt", "yuv420p"]
+        return ["-c:v", "h264_nvenc", "-preset", presets["h264_nvenc"],
+                "-tune", "hq", "-rc", "vbr", "-cq", str(q["cq"]),
+                "-b:v", "0", "-pix_fmt", "yuv420p"]
     if name == "h264_qsv":
-        return ["-c:v", "h264_qsv", "-preset", "faster",
+        return ["-c:v", "h264_qsv", "-preset", presets["h264_qsv"],
                 "-global_quality", str(q["qsv"]), "-pix_fmt", "nv12"]
     if name == "h264_amf":
-        return ["-c:v", "h264_amf", "-quality", "balanced", "-rc", "cqp",
-                "-qp_i", str(q["amf"][0]), "-qp_p", str(q["amf"][1]),
-                "-pix_fmt", "nv12"]
-    return ["-c:v", "libx264", "-preset", "veryfast",
+        return ["-c:v", "h264_amf", "-quality", presets["h264_amf"],
+                "-rc", "cqp", "-qp_i", str(q["amf"][0]),
+                "-qp_p", str(q["amf"][1]), "-pix_fmt", "nv12"]
+    return ["-c:v", "libx264", "-preset", presets["libx264"],
             "-crf", str(q["crf"]), "-pix_fmt", "yuv420p"]
 
 
@@ -2201,8 +2273,9 @@ def _cut_args(ffmpeg, v_url, a_url, start, seg_len, ext,
         # Encoder args come from video_encoders(): bitrate-targeted when the
         # source bitrate is known, the CRF level otherwise. `-pix_fmt yuv420p` matters
         # because YouTube can serve 10-bit or odd-chroma sources that editors
-        # refuse. `veryfast` keeps a long 4K cut from feeling like a render
-        # job while still compressing far better than the source bitrate.
+        # refuse. The speed preset follows the quality level (see
+        # _LEVEL_PRESETS) — High is `medium` because this encode is the one
+        # that must not cost visible quality.
         args += list(vcodec_args or _encoder_args("libx264"))
         args += ["-c:a", "aac", "-b:a", "192k"]
     elif audio_reencode:
@@ -2945,10 +3018,12 @@ def cut_link(url, height_cap, start, end, target_dir, on_status=None,
 def cut_file(path, start, end, target_dir, on_status=None, on_progress=None,
              should_cancel=None, output_format="mp4", audio_only=False,
              should_pause=None):
-    """Cut [start, end) out of a LOCAL file (original quality, stream copy).
-    Blocking — call on a worker thread. `should_pause` freezes the running
-    job in place (resume continues from the same frame). Returns
-    (ok, message, filepath)."""
+    """Cut [start, end) out of a LOCAL file. Blocking — call on a worker
+    thread. MP4/MKV output is re-encoded to H.264/AAC at the configured cut
+    quality (High is near-transparent, so the clip looks like the file it
+    came from) and an MP4 opens in Premiere, After Effects and Resolve.
+    `should_pause` freezes the running job in place (resume continues from
+    the same frame). Returns (ok, message, filepath)."""
     def _status(text):
         if on_status:
             on_status(text)

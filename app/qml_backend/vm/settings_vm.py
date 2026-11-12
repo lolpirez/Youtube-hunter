@@ -83,9 +83,10 @@ _COOKIE_LABELS = ["None", "Chrome", "Edge", "Firefox", "Brave", "Chromium", "Ope
 # Re-encode level for clips made by the Cutter (and the extension's Cut panel).
 # Index-aligned; the strings are the `cut_quality` values app.core.cutter reads
 # straight from config.json on every cut, so a change applies to the next cut
-# with no restart. "balanced" is the default there too.
+# with no restart. "high" is the default there too: a cut must look like the
+# source it came from.
 _CUT_QUALITY_VALUES = ["high", "balanced", "small"]
-_CUT_QUALITY_DEFAULT = "balanced"
+_CUT_QUALITY_DEFAULT = "high"
 # NOTE: there is no "watch videos" setting any more. Video watching used to be an
 # opt-in count here (0 / 10 / 15) and defaulted to OFF, which meant almost every
 # CSV report was written from numbers alone — the weaker of the two kinds of

@@ -108,6 +108,22 @@ def drop_end_period(cues):
     return out
 
 
+def drop_speaker_marks(cues):
+    """The same cues without ASR speaker marks (text, timed words and the
+    bilingual original in meta["src"]). Covers cues restored from an old
+    cache that were parsed before the marks were stripped. New Cue objects."""
+    out = []
+    for c in cues or []:
+        text = strip_speaker_marks(c.text)
+        words = [(a, b, strip_speaker_marks(w)) for a, b, w in c.words]
+        words = [w for w in words if w[2]]
+        meta = c.meta
+        if isinstance(meta, dict) and meta.get("src"):
+            meta = dict(meta, src=strip_speaker_marks(meta["src"]))
+        out.append(c.copy(text=text, words=words, meta=meta))
+    return out
+
+
 # ── time helpers ─────────────────────────────────────────────────────────
 
 _TS_RE = re.compile(r"(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})")
@@ -149,12 +165,25 @@ def fmt_ass_ts(t):
 _TAG_RE = re.compile(r"<[^>]+>")
 _ASS_OVERRIDE_RE = re.compile(r"\{[^}]*\}")
 _WS_RE = re.compile(r"[ \t\u00a0]+")
+# YouTube ASR marks a new speaker with ">>" / "<<"; burned into a caption it
+# reads as a stray glyph beside the sentence, so it never reaches the screen.
+_SPEAKER_RE = re.compile(r"<{2,}|>{2,}")
 # YouTube ASR noise worth keeping out of a translation
 _NOISE_RE = re.compile(r"^\s*\[(?:music|applause|laughter|موسیقی|музыка|musique|música|musik)\]\s*$", re.I)
 
 
+def strip_speaker_marks(text):
+    """One line or several: drop the ASR speaker marks (">>" / "<<")."""
+    if not text:
+        return text or ""
+    return "\n".join(_WS_RE.sub(" ", _SPEAKER_RE.sub(" ", ln)).strip()
+                     for ln in str(text).split("\n"))
+
+
 def clean_text(s):
-    s = html.unescape(_TAG_RE.sub("", s or ""))
+    s = _SPEAKER_RE.sub(" ", s or "")
+    s = html.unescape(_TAG_RE.sub("", s))
+    s = _SPEAKER_RE.sub(" ", s)
     s = s.replace("\r", "")
     lines = [_WS_RE.sub(" ", ln).strip() for ln in s.split("\n")]
     return "\n".join(ln for ln in lines if ln)

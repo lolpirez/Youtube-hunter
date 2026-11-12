@@ -980,7 +980,7 @@ class DownloadsVM(QObject):
             if studio is None:
                 return
             title = (downloads_get(video_id) or {}).get("title") or ""
-            studio.runQueued(video_id, filepath, title=title)
+            studio.runQueued(video_id, filepath, title=title, scope="dl")
         except Exception:                 # noqa: BLE001 — never break a download
             log_crash("DownloadsVM queued Voice Studio failed:\n"
                       + traceback.format_exc())

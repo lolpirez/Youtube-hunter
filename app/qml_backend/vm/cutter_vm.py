@@ -1130,14 +1130,14 @@ class CutterVM(QObject):
 
     def _start_post(self, filepath):
         try:
-            from app.qml_backend.vm.voice_studio_vm import VoiceStudioVM
+            from app.qml_backend.vm.voice_studio_vm import VoiceStudioVM, _queue_key
             st = VoiceStudioVM.instance()
             if st is None:
                 return False
             link = self._mode == 0
             vid = self._video_id if link else ""
-            fb = "" if link else "local:" + os.path.normcase(os.path.abspath(self._file_path))
-            entry = st.take_queued(vid, filepath, fallback_key=fb)
+            fb = "" if link else _queue_key("", self._file_path, "cut")
+            entry = st.take_queued(vid, filepath, fallback_key=fb, scope="cut")
             if not entry:
                 return False
             title = ((self._title or "") if link else (os.path.basename(self._file_path) or ""))
@@ -1211,7 +1211,7 @@ class CutterVM(QObject):
     def _run_queued_studio(self, filepath):
         """Captions/dub picked before the cut run against the finished clip."""
         try:
-            from app.qml_backend.vm.voice_studio_vm import VoiceStudioVM
+            from app.qml_backend.vm.voice_studio_vm import VoiceStudioVM, _queue_key
             studio = VoiceStudioVM.instance()
             if studio is None:
                 return
@@ -1221,8 +1221,8 @@ class CutterVM(QObject):
             studio.runQueued(
                 self._video_id if link else "", filepath, title=title,
                 clip_start=self._cut_start, clip_end=self._cut_end,
-                fallback_key="" if link else
-                "local:" + os.path.normcase(os.path.abspath(self._file_path)))
+                fallback_key="" if link else _queue_key("", self._file_path, "cut"),
+                scope="cut")
         except Exception:                 # noqa: BLE001 — the clip is safe
             log_crash("CutterVM queued Voice Studio failed:\n"
                       + traceback.format_exc())

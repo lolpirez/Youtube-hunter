@@ -9,6 +9,26 @@ Version numbering restarted at **1.0.0** for the public release.
 
 ## 1.3.1 (bundle v2.3.1 vertical-xlsx): Video Dossier, vertical Excel export, AI dub removed
 
+- **Fix: stray ">>" marks beside burned caption lines** (`captions/cues.py`,
+  `captions/jobs.py`): YouTube's auto-captions mark a new speaker with ">>"
+  (sometimes "<<"); the marks are now stripped from the cue text, the timed
+  words and the bilingual original — at parse time and again right before
+  the ASS/SRT is built, so jobs cached by older versions also burn clean.
+
+- **Cut quality now matches the source** (`core/cutter.py`, Settings →
+  Clip Cutting): the default **High** re-encodes local cuts at CRF 16 /
+  medium and link cuts at 1.8× the source bitrate (VP9 ×1.35, AV1 ×1.6
+  codec factors), so a 1080p clip keeps the original's detail. Balanced
+  and Small were retuned to match. MP4 output stays H.264/AAC, yuv420p,
+  +faststart — the file Premiere, After Effects and Resolve open. Cutter,
+  Settings and the extension now say which containers are editor-ready
+  (MP4) and which are playback-only stream copies (MKV/WEBM).
+
+- **Real size estimates in Downloads and Cut** (`core/download.py`,
+  `core/cutter.py`, `web_bridge.py`): the picker rows and the cut panel
+  estimate from the actual DASH filesize / bitrate of the chosen format,
+  so the number shown before the download matches the finished file.
+
 - **Fix: random "Cannot find member data" / "is not a function" / "QFont
   weight 0" warnings at start-up** (`main_qml.py`): `engine.load()` could run
   while the v3.54 background precompile of Main.qml was still compiling the

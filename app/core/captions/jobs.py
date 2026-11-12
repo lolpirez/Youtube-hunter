@@ -347,8 +347,8 @@ def run_captions(opts, report, cancel):
 
     # v1.9: no full stop closing a caption line (cues.drop_end_period)
     keep_src = shown is cues
-    shown = C.drop_end_period(shown)
-    cues = shown if keep_src else C.drop_end_period(cues)
+    shown = C.drop_speaker_marks(C.drop_end_period(shown))
+    cues = shown if keep_src else C.drop_speaker_marks(C.drop_end_period(cues))
     # v2.0: Persian typography + reading time + no flicker (free, no AI)
     shown = P.finish(shown, out_lang)
     if keep_src:

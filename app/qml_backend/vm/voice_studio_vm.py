@@ -40,15 +40,20 @@ except Exception:                         # noqa: BLE001
         return False
 
 
-def _queue_key(video_id, path=""):
+def _queue_key(video_id, path="", scope=""):
     """Where a queued caption choice waits: the video id when known,
-    otherwise the local file it was chosen for."""
+    otherwise the local file it was chosen for. `scope` ("dl" / "cut")
+    keeps a clip's choice from overwriting a download's choice for the
+    same video — both used to land on the same "yt:<id>" slot."""
     vid = (video_id or "").strip()
     if vid:
-        return "yt:" + vid
-    if path:
-        return "local:" + os.path.normcase(os.path.abspath(path))
-    return ""
+        key = "yt:" + vid
+    elif path:
+        key = "local:" + os.path.normcase(os.path.abspath(path))
+    else:
+        return ""
+    scope = (scope or "").strip()
+    return key + ("|" + scope if scope else "")
 
 
 class VoiceStudioVM(QObject):
@@ -63,7 +68,7 @@ class VoiceStudioVM(QObject):
     _tracksReady = Signal(str, "QVariant", str)        # (token, data, error)
     _progress = Signal(str, str, float)                # (job, stage, fraction)
     _finished = Signal(str, bool, "QVariant", str)     # (job, ok, result, error)
-    _runQueued = Signal(str, str, str, float, float, str)
+    _runQueued = Signal(str, str, str, float, float, str, str)
     _deckTracks = Signal(str, "QVariant", str)          # (video id, data, error)
     _pipeDone = Signal(str)                             # v1.4: pipeline id
 
@@ -263,25 +268,26 @@ class VoiceStudioVM(QObject):
 
     @Property("QVariantMap", notify=changed)
     def queuedKinds(self):
-        key = _queue_key(self._target.get("videoId", ""), self._target.get("path", ""))
+        key = _queue_key(self._target.get("videoId", ""), self._target.get("path", ""),
+                         self._target.get("scope", ""))
         slot = self._queued.get(key, {}) if key else {}
         return {"captions": bool(slot.get("captions"))}
 
-    @Slot(str, str, str, float, float)
-    def open(self, path, title, video_id, clip_start, clip_end):
+    @Slot(str, str, str, float, float, str)
+    def open(self, path, title, video_id, clip_start, clip_end, scope):
         """Point the sheet at a file (a finished download or clip)."""
-        self._open(path, title, video_id, clip_start, clip_end, queue=False)
+        self._open(path, title, video_id, clip_start, clip_end, queue=False, scope=scope)
 
-    @Slot(str, str, str, float, float)
-    def openQueued(self, path, title, video_id, clip_start, clip_end):
+    @Slot(str, str, str, float, float, str)
+    def openQueued(self, path, title, video_id, clip_start, clip_end, scope):
         """Point the sheet at a future file (a download or a clip being cut)."""
-        self._open(path, title, video_id, clip_start, clip_end, queue=True)
+        self._open(path, title, video_id, clip_start, clip_end, queue=True, scope=scope)
 
-    def _open(self, path, title, video_id, clip_start, clip_end, queue):
+    def _open(self, path, title, video_id, clip_start, clip_end, queue, scope=""):
         path = local_path_from_url(path) if path.startswith("file:") else path
         self._target = {"path": path, "title": title or os.path.basename(path or ""),
                         "videoId": (video_id or "").strip(), "clipStart": float(clip_start or 0),
-                        "clipEnd": float(clip_end or 0),
+                        "clipEnd": float(clip_end or 0), "scope": (scope or "").strip(),
                         "fileName": os.path.basename(path or ""),
                         "exists": bool(path) and os.path.isfile(path)}
         self._queue_mode = bool(queue)
@@ -514,6 +520,14 @@ class VoiceStudioVM(QObject):
             self.toast.emit(tr("Translation needs an AI provider (Settings → AI Providers). "
                                "Pick “Original” to style YouTube's captions without AI."), "error")
             return ""
+        media = os.path.normcase(os.path.abspath(opts.get("media") or ""))
+        for j in self._jobs:
+            if j["state"] != "running" or j["kind"] != kind:
+                continue
+            prev = (self._job_opts.get(j["id"]) or (None, {}))[1] or {}
+            if os.path.normcase(os.path.abspath(prev.get("media") or "")) == media:
+                self.toast.emit(tr("Captions are already running for this file."), "info")
+                return j["id"]
         jid = uuid.uuid4().hex[:10]
         tgt = (opts.get("target") or "").split("|")[0]
         self._jobs.insert(0, {
@@ -547,7 +561,8 @@ class VoiceStudioVM(QObject):
             self.toast.emit(tr("Translation needs an AI provider (Settings → AI Providers). "
                                "Pick “Original” to style YouTube's captions without AI."), "error")
             return ""
-        key = _queue_key(self._target.get("videoId", ""), self._target.get("path", ""))
+        key = _queue_key(self._target.get("videoId", ""), self._target.get("path", ""),
+                         self._target.get("scope", ""))
         if not key:
             self.toast.emit(tr("The file isn't ready yet — open this again once it is."), "error")
             return ""
@@ -557,19 +572,19 @@ class VoiceStudioVM(QObject):
         return "queued"
 
     def runQueued(self, video_id, media, title="", clip_start=None, clip_end=None,
-                  fallback_key=""):
+                  fallback_key="", scope=""):
         """Start whatever was queued for a file that just became ready. Safe
         to call from a worker thread: the signal lands on the GUI thread."""
         self._runQueued.emit(str(video_id or ""), str(media or ""), str(title or ""),
                              float(clip_start or 0), float(clip_end or 0),
-                             str(fallback_key or ""))
+                             str(fallback_key or ""), str(scope or ""))
 
-    @Slot(str, str, str, float, float, str)
-    def _do_run_queued(self, video_id, media, title, clip_start, clip_end, fallback_key):
+    @Slot(str, str, str, float, float, str, str)
+    def _do_run_queued(self, video_id, media, title, clip_start, clip_end, fallback_key, scope):
         if not media or not os.path.isfile(media):
             return
-        keys = [_queue_key("", media)]
-        primary = _queue_key(video_id)
+        keys = [_queue_key("", media, scope)]
+        primary = _queue_key(video_id, "", scope)
         if primary:
             keys.insert(0, primary)
         if fallback_key:
@@ -632,6 +647,9 @@ class VoiceStudioVM(QObject):
         j = self._job(jid)
         if not j or j["state"] != "running":
             return
+        ev = self._cancel.get(jid)
+        if ev is not None and ev.is_set():
+            return                        # a late tick must not overwrite "Stopping…"
         j["stage"], j["pct"] = stage, max(j["pct"], min(1.0, pct))
         el = time.time() - j["startedAt"]
         if j["pct"] > 0.08 and el > 8:
@@ -741,9 +759,9 @@ class VoiceStudioVM(QObject):
         QML bindings that call queuedFor() read this to re-evaluate."""
         return self._queue_rev
 
-    @Slot(str, str, result="QVariantMap")
-    def queuedFor(self, video_id, path):
-        key = _queue_key(video_id, path)
+    @Slot(str, str, str, result="QVariantMap")
+    def queuedFor(self, video_id, path, scope):
+        key = _queue_key(video_id, path, scope)
         slot = self._queued.get(key, {}) if key else {}
         out = {}
         for kind in ("captions",):
@@ -761,13 +779,13 @@ class VoiceStudioVM(QObject):
         side = S.sidecar_for(path) if path else ""
         return "file" if side else "ai"
 
-    @Slot(str, str, str, str, "QVariantMap", result=bool)
-    def setQueued(self, kind, video_id, path, title, raw):
+    @Slot(str, str, str, str, "QVariantMap", str, result=bool)
+    def setQueued(self, kind, video_id, path, title, raw, scope):
         """Queue (or update) captions for a cut that hasn't happened
         yet, straight from the Cutter's inspector: no sheet, no toast."""
         if kind != "captions":
             return False
-        key = _queue_key(video_id, path)
+        key = _queue_key(video_id, path, scope)
         if not key:
             return False
         o = dict(raw or {})
@@ -782,9 +800,9 @@ class VoiceStudioVM(QObject):
         self._bump_queue()
         return True
 
-    @Slot(str, str, str)
-    def clearQueued(self, kind, video_id, path):
-        key = _queue_key(video_id, path)
+    @Slot(str, str, str, str)
+    def clearQueued(self, kind, video_id, path, scope):
+        key = _queue_key(video_id, path, scope)
         slot = self._queued.get(key)
         if not slot:
             return
@@ -846,16 +864,16 @@ class VoiceStudioVM(QObject):
     # honest bar (and Gemini never sees two jobs of the same file racing).
 
 
-    def take_queued(self, video_id, media, fallback_key=""):
+    def take_queued(self, video_id, media, fallback_key="", scope=""):
         """Pop what the user queued for this download / clip (or None)."""
         keys = []
         if fallback_key:
             keys.append(fallback_key)
-        primary = _queue_key(video_id)
+        primary = _queue_key(video_id, "", scope)
         if primary:
             keys.append(primary)
         if media:
-            keys.append(_queue_key("", media))
+            keys.append(_queue_key("", media, scope))
         for key in keys:
             if key and key in self._queued:
                 entry = self._queued.pop(key)
@@ -863,8 +881,9 @@ class VoiceStudioVM(QObject):
                 return entry if entry.get("captions") else None
         return None
 
-    def has_queued(self, video_id, media="", fallback_key=""):
-        keys = [k for k in (fallback_key, _queue_key(video_id), _queue_key("", media) if media else "") if k]
+    def has_queued(self, video_id, media="", fallback_key="", scope=""):
+        keys = [k for k in (fallback_key, _queue_key(video_id, "", scope),
+                            _queue_key("", media, scope) if media else "") if k]
         return any((self._queued.get(k) or {}).get("captions") for k in keys)
 
     @staticmethod
@@ -1118,8 +1137,9 @@ class VoiceStudioVM(QObject):
     def queue_from_panel(self, video_id, title, spec):
         """Validate the extension's caption picks and queue them for
         this video, exactly like the in-app deck would. Returns the queued
-        kinds."""
-        return self._queue_spec(_queue_key(video_id), video_id, title, spec)
+        kinds. Panel downloads finish through _post_production, which
+        consumes the "dl" scope — store it there or the choice is lost."""
+        return self._queue_spec(_queue_key(video_id, "", "dl"), video_id, title, spec)
 
     def entry_from_panel(self, video_id, title, spec):
         """The same validation, returned as a pipeline entry (for a cut,

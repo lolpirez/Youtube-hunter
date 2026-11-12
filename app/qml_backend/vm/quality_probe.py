@@ -171,6 +171,13 @@ def _apply_saved(rows, saved, top_key=""):
         elif hit is None and top_key and key == top_key:
             hit = best_hit
         row.update(_saved_fields(hit))
+        if hit and hit.get("size"):
+            # A finished file's size is a fact. Showing the prediction for a
+            # second download the user is not going to make is what let a
+            # saved row claim a size the file on disk does not have.
+            row["sizeBytes"] = int(hit["size"])
+            row["sizeText"] = _size_text(hit["size"])
+            row["sizeExact"] = True
     return rows
 
 

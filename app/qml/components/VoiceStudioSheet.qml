@@ -87,8 +87,8 @@ Popup {
         _open(o, true)
     }
     function _open(o, queued) {
-        if (queued) VoiceStudio.openQueued(o.path || "", o.title || "", o.videoId || "", o.clipStart || 0, o.clipEnd || 0)
-        else VoiceStudio.open(o.path || "", o.title || "", o.videoId || "", o.clipStart || 0, o.clipEnd || 0)
+        if (queued) VoiceStudio.openQueued(o.path || "", o.title || "", o.videoId || "", o.clipStart || 0, o.clipEnd || 0, o.scope || "")
+        else VoiceStudio.open(o.path || "", o.title || "", o.videoId || "", o.clipStart || 0, o.clipEnd || 0, o.scope || "")
         if (o.videoId) root.source = "youtube"
         else if (VoiceStudio.sidecarPath !== "") { root.source = "file"; root.subPath = VoiceStudio.sidecarPath }
         else root.source = "ai"

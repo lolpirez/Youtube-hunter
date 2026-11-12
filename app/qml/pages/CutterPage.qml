@@ -3008,7 +3008,16 @@ Item {
                                 InfoChip { glyph: "hourglass_empty"; text: page._hasThumb ? "" : Cutter.durationText; mono: true }
                                 InfoChip {
                                     glyph: "hd"
-                                    text: Cutter.mode === 1 ? I18n.tr("Original quality (stream copy)") : ""
+                                    // Local cuts are re-encoded at the Cut
+                                    // Quality level (Settings) — MP4 is the
+                                    // container editors open. v1.0.4: no more
+                                    // "Original quality (stream copy)", which
+                                    // was never true of the re-encode.
+                                    text: Cutter.mode !== 1 ? ""
+                                          : Cutter.audioOnly ? I18n.tr("Audio only")
+                                          : Cutter.videoFormat === "mp4" ? I18n.tr("Editor-ready MP4")
+                                          : Cutter.videoFormat === "mkv" ? I18n.tr("H.264 in MKV")
+                                          : I18n.tr("WebM (playback)")
                                 }
                                 InfoChip {
                                     glyph: "visibility"
@@ -3214,6 +3223,7 @@ Item {
                                 showHeader: false
                                 videoId: Cutter.mode === 0 ? (Cutter.videoId || "") : ""
                                 path: Cutter.mode === 0 ? "" : (Cutter.filePath || "")
+                                scope: "cut"
                                 title: Cutter.title || ""
                                 clipStart: Cutter.startSec || 0
                                 clipEnd: Cutter.endSec || 0
@@ -3226,6 +3236,7 @@ Item {
                                     videoId: capDeck.videoId,
                                     clipStart: Cutter.startSec || 0,
                                     clipEnd: Cutter.endSec || 0,
+                                    scope: "cut",
                                     tab: tab })
                                 onSettingsRequested: App.goto(10)
                             }
@@ -3297,31 +3308,59 @@ Item {
                                 }
                             }
 
-                            // local file: original-quality banner
+                            // local file: frame-accurate, near-original cut
                             Rectangle {
                                 Layout.fillWidth: true
                                 visible: Cutter.mode === 1
                                 radius: Tokens.radiusLg
-                                implicitHeight: 60
+                                implicitHeight: localCutCol.implicitHeight + Tokens.space3 * 2
                                 color: U.withAlpha(Theme.primary, 0.07)
                                 border.width: 1
                                 border.color: U.withAlpha(Theme.primary, 0.30)
-                                RowLayout {
-                                    anchors.fill: parent
+                                ColumnLayout {
+                                    id: localCutCol
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.top: parent.top
                                     anchors.margins: Tokens.space3
-                                    spacing: Tokens.space3
-                                    C.IconTile {
-                                        iconName: "diamond"
-                                        solid: true
-                                        size: 36
-                                        Layout.preferredWidth: 36
-                                        Layout.preferredHeight: 36
+                                    spacing: 2
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: Tokens.space3
+                                        C.IconTile {
+                                            iconName: "diamond"
+                                            solid: true
+                                            size: 36
+                                            Layout.preferredWidth: 36
+                                            Layout.preferredHeight: 36
+                                            Layout.alignment: Qt.AlignTop
+                                        }
+                                        C.AppText {
+                                            Layout.fillWidth: true
+                                            text: Cutter.audioOnly
+                                                  ? I18n.tr("Frame-accurate audio cut")
+                                                  : Cutter.videoFormat === "mp4"
+                                                    ? I18n.tr("Near-original quality · editor-ready MP4")
+                                                    : Cutter.videoFormat === "mkv"
+                                                      ? I18n.tr("Near-original quality · H.264 in MKV")
+                                                      : I18n.tr("WebM (VP9) · for playback, not editors")
+                                            weight: Tokens.weightBold
+                                            color: Theme.text_strong
+                                            wrapMode: Text.Wrap
+                                        }
                                     }
                                     C.AppText {
                                         Layout.fillWidth: true
-                                        text: I18n.tr("Original quality (stream copy)")
-                                        weight: Tokens.weightBold
-                                        color: Theme.text_strong
+                                        Layout.leftMargin: 36 + Tokens.space3
+                                        text: Cutter.audioOnly
+                                              ? I18n.tr("Encoded at the Cut Quality set in Settings → Clip Cutting.")
+                                              : Cutter.videoFormat === "mp4"
+                                                ? I18n.tr("H.264/AAC that starts exactly on your in-point. Premiere, After Effects and DaVinci open it directly. Cut Quality in Settings controls the encode — High keeps it looking like the source.")
+                                                : Cutter.videoFormat === "mkv"
+                                                  ? I18n.tr("Premiere and After Effects may refuse MKV — pick MP4 for editing. Cut Quality in Settings controls the encode.")
+                                                  : I18n.tr("Premiere and After Effects may refuse WebM — pick MP4 for editing. Cut Quality in Settings controls the encode.")
+                                        font.pixelSize: Tokens.fontMicro
+                                        color: Theme.on_surface_var
                                         wrapMode: Text.Wrap
                                     }
                                 }
@@ -3480,6 +3519,21 @@ Item {
                                         }
                                     }
                                 }
+                            }
+
+                            // v1.0.4: where the clip is going decides the
+                            // container — editors open MP4, the copy formats
+                            // are for playback.
+                            C.AppText {
+                                Layout.fillWidth: true
+                                Layout.topMargin: Tokens.space1
+                                visible: Cutter.mode === 0 && !Cutter.audioOnly
+                                text: Cutter.videoFormat === "mp4"
+                                      ? I18n.tr("MP4 (H.264/AAC) — the file Premiere, After Effects and DaVinci open. MKV and WEBM stay stream copies for playback.")
+                                      : I18n.tr("MKV and WEBM are stream copies for playback — switch to MP4 before dragging the clip into an editor.")
+                                font.pixelSize: Tokens.fontMicro
+                                color: Theme.on_surface_var
+                                wrapMode: Text.Wrap
                             }
 
                             C.AppText {

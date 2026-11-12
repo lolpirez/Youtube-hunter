@@ -56,7 +56,7 @@ def running(video_id):
 def has_queued(video_id, filepath=""):
     st = _studio()
     try:
-        return bool(st and st.has_queued(video_id, filepath))
+        return bool(st and st.has_queued(video_id, filepath, scope="dl"))
     except Exception:          # noqa: BLE001
         return False
 
@@ -83,7 +83,7 @@ def begin(video_id, filepath, title="", on_update=None, on_finish=None):
     if st is None or not filepath or not os.path.isfile(filepath):
         return False
     try:
-        entry = st.take_queued(video_id, filepath)
+        entry = st.take_queued(video_id, filepath, scope="dl")
     except Exception:          # noqa: BLE001
         log_crash("post-production take failed:\n" + traceback.format_exc())
         return False

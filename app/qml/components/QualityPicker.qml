@@ -78,8 +78,8 @@ Dialog {
     // v1.3.3: closing without downloading drops the captions / dub picked
     // for it, so they never ride along with a later, unrelated download.
     onRejected: {
-        VoiceStudio.clearQueued("captions", root.videoId, "")
-        VoiceStudio.clearQueued("dub", root.videoId, "")
+        VoiceStudio.clearQueued("captions", root.videoId, "", "dl")
+        VoiceStudio.clearQueued("dub", root.videoId, "", "dl")
     }
 
     function openFor(vid, title, thumb) {
@@ -1010,11 +1010,13 @@ Dialog {
                 Layout.bottomMargin: Tokens.space2
                 visible: !QualityProbe.busy && root.rows.length > 0
                 videoId: root.videoId
+                scope: "dl"
                 title: root.videoTitle
                 audioOnly: root.selectedIsAudio
                 runsAfterText: I18n.tr("runs after the download")
                 onOpenStudio: (tab) => studio.openQueued({ path: "", title: root.videoTitle,
-                                                         videoId: root.videoId, clipStart: 0, clipEnd: 0, tab: tab })
+                                                         videoId: root.videoId, clipStart: 0, clipEnd: 0,
+                                                         scope: "dl", tab: tab })
                 onSettingsRequested: { root.reject(); App.goto(10) }
                 // a lane opening its settings: keep them in view
                 onAnyOnChanged: if (anyOn) Qt.callLater(function() {

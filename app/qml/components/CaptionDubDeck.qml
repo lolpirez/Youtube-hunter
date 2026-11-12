@@ -35,6 +35,9 @@ ColumnLayout {
     // ── what the choices are for ──
     property string videoId: ""          // YouTube id ("" for a local file)
     property string path: ""             // local file (Cutter file mode)
+    // v2.0: "dl" (download picker) or "cut" (Cutter): a clip's choices and a
+    // download's choices for the SAME video no longer share one slot
+    property string scope: ""
     property string title: ""
     property real clipStart: 0
     property real clipEnd: 0
@@ -48,7 +51,7 @@ ColumnLayout {
     signal settingsRequested()
 
     // ── queue state (source of truth) ──
-    readonly property var q: { var _r = VoiceStudio.queueRev; return VoiceStudio.queuedFor(videoId, path) }
+    readonly property var q: { var _r = VoiceStudio.queueRev; return VoiceStudio.queuedFor(videoId, path, scope) }
     readonly property bool capOn: q.captions !== undefined
     readonly property bool dubOn: q.dub !== undefined
     readonly property bool anyOn: capOn || dubOn
@@ -147,7 +150,7 @@ ColumnLayout {
         o.output = audioOnly ? "srt" : capOut
         o.clip_start = clipStart
         o.clip_end = clipEnd
-        VoiceStudio.setQueued("captions", videoId, path, title, o)
+        VoiceStudio.setQueued("captions", videoId, path, title, o, scope)
     }
     function pushDub() {
         var o = _srcOpts()
@@ -166,7 +169,7 @@ ColumnLayout {
         o.position = capPos
         o.clip_start = clipStart
         o.clip_end = clipEnd
-        VoiceStudio.setQueued("dub", videoId, path, title, o)
+        VoiceStudio.setQueued("dub", videoId, path, title, o, scope)
     }
     function _sync() {
         if (capOn) pushCaptions()
@@ -174,11 +177,11 @@ ColumnLayout {
     }
     function setCaptions(on) {
         if (on) { pushCaptions(); lane = 0 }
-        else VoiceStudio.clearQueued("captions", videoId, path)
+        else VoiceStudio.clearQueued("captions", videoId, path, scope)
     }
     function setDub(on) {
         if (on) { pushDub(); lane = 1 }
-        else VoiceStudio.clearQueued("dub", videoId, path)
+        else VoiceStudio.clearQueued("dub", videoId, path, scope)
     }
 
     // new video / file: start from its natural source, read its tracks later

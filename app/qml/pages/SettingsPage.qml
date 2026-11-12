@@ -3195,10 +3195,10 @@ Item {
                                         icon: "movie"
                                         label: I18n.tr("Cut Quality")
                                         description: Settings.cutQualityIndex === 0
-                                                     ? I18n.tr("Most headroom over the source, biggest files. For editing and archiving.")
+                                                     ? I18n.tr("Near-original: the clip keeps the source's quality, biggest files. Best for editing in Premiere or After Effects and for archiving.")
                                                      : Settings.cutQualityIndex === 2
-                                                     ? I18n.tr("About half the size of High, a little softer on fine detail and fast motion.")
-                                                     : I18n.tr("Looks like the source for sharing and most edits, about 30% smaller than High.")
+                                                     ? I18n.tr("Smallest file, a little softer on fine detail and fast motion.")
+                                                     : I18n.tr("Visually very close to the source at a much smaller size, for sharing and most edits.")
                                         Segmented {
                                             current: Settings.cutQualityIndex
                                             minItemWidth: 72

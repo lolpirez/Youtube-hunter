@@ -1247,7 +1247,8 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                                        qualities_from_info,
                                        _PROBE_BEST_PX, _PROBE_LIMITED,
                                        _THIN_PX)
-        from app.qml_backend.vm.quality_probe import _row, default_quality_rows
+        from app.qml_backend.vm.quality_probe import (_row, _size_text,
+                                                      default_quality_rows)
         if not vid:
             return self._send(400, {"ok": False, "error": "bad video id"})
         cfg = load_app_config()
@@ -1310,6 +1311,18 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             r["container"] = c
             r["id"] = _row_id(r.get("key"), c, lang)
             r["saved"] = r["id"] in saved
+            if r["saved"]:
+                # A finished file's size is a fact, not an estimate: show the
+                # bytes actually on disk instead of a prediction for a
+                # download that will not happen again.
+                try:
+                    on_disk = os.path.getsize(saved[r["id"]])
+                except OSError:
+                    on_disk = 0
+                if on_disk > 0:
+                    r["sizeBytes"] = int(on_disk)
+                    r["sizeExact"] = True
+                    r["sizeText"] = _size_text(on_disk)
         self._send(200, {
             "ok": True, "probed": probed, "rows": rows,
             "limited": bool(probed and limited), "bestPx": best_px if probed else 0,

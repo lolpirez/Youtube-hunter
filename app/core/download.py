@@ -1253,8 +1253,16 @@ def _heuristic_pick(info, q):
             pref = {"h264": 2, "vp9": 1}.get(fam, 0)
         else:
             pref = {"vp9": 2, "h264": 1}.get(fam, 0)
+        # Same last tie-break as _format_sort: at equal resolution/fps/codec
+        # prefer the DASH copy. Its `filesize` is real, while the HLS copy only
+        # carries a declared tbr — the difference between a size the picker can
+        # promise and a guess that routinely misses by 1.5-2x. It has to come
+        # BEFORE the bitrate: HLS copies declare a higher tbr, so a bitrate-
+        # first order would keep picking the unmeasurable one.
+        dash = 1 if (f.get("protocol") or "").split("+")[0] == \
+            "http_dash_segments" else 0
         return (_fmt_short_side(f), int(round(f.get("fps") or 0)), pref,
-                float(f.get("vbr") or f.get("tbr") or 0))
+                dash, float(f.get("vbr") or f.get("tbr") or 0))
 
     if vids and best_a is not None:
         return [max(vids, key=v_rank), best_a]
@@ -1288,26 +1296,42 @@ def _resolve_content_length(fmt, timeout=6):
         return 0
     if (fmt.get("protocol") or "https").lower() not in ("https", "http"):
         return 0
+    low = url.lower()
+    if (low.split("?")[0].endswith((".m3u8", ".mpd"))
+            or "manifest.googlevideo.com" in low):
+        return 0        # a playlist, not a byte stream: no single length
     hit = _CONTENT_LENGTH_CACHE.get(url)
     if hit is not None:
         return hit
     n = 0
     try:
-        req = urllib.request.Request(
-            url, headers={"User-Agent": _UA, "Range": "bytes=0-0"})
+        # The per-format headers (auth / PO-token / origin) travel with the
+        # request: a bare UA gets a 403 or a redirect stub from some renditions.
+        headers = {"User-Agent": _UA, "Range": "bytes=0-0"}
+        headers.update(fmt.get("http_headers") or {})
+        req = urllib.request.Request(url, headers=headers)
         with _urlopen(req, timeout, configured_proxy()) as resp:
             cr = (resp.headers.get("Content-Range") or "").strip()
             m = re.search(r"/(\d+)\s*$", cr)
             if m:
                 n = int(m.group(1))
             else:
+                # No Content-Range: only a 200 answer carries the whole body's
+                # length. A tiny Content-Length there is an error/proxy page,
+                # not the stream — never let it pose as an exact size.
                 cl = resp.headers.get("Content-Length")
                 n = int(cl) if cl else 0
+                status = getattr(resp, "status", 200)
+                if n and (status != 200 or n < 65536):
+                    n = 0
     except Exception:                   # noqa: BLE001 — estimate is the fallback
         n = 0
-    if len(_CONTENT_LENGTH_CACHE) > 256:
-        _CONTENT_LENGTH_CACHE.clear()
-    _CONTENT_LENGTH_CACHE[url] = n
+    if n:
+        # A 0 is not cached: that would turn one transient network blip into a
+        # session-long "size unknown" for this stream.
+        if len(_CONTENT_LENGTH_CACHE) > 256:
+            _CONTENT_LENGTH_CACHE.clear()
+        _CONTENT_LENGTH_CACHE[url] = n
     return n
 
 
@@ -1763,10 +1787,16 @@ def _rung_preflight(yt_dlp, url, base_opts, attempt, cached_info=None):
     total_bytes = 0
     total_exact = 0
     exact_known = bool(picked)
+    dur = info.get("duration") or 0
     for p in picked:
-        total_bytes += int(p.get("filesize") or p.get("filesize_approx") or 0)
-        if p.get("filesize"):
-            total_exact += int(p["filesize"])
+        # One sizing rule everywhere (picker, prediction, pre-flight). Exact
+        # means a real reported filesize; a tbr × duration number still counts
+        # toward the fallback denominator (`total_bytes`) but never toward the
+        # exact total the UI is allowed to SHOW.
+        n, exact = _fmt_bytes_info(dict(p, _duration=dur))
+        total_bytes += n
+        if exact:
+            total_exact += n
         else:
             exact_known = False
     if not exact_known:
@@ -2166,9 +2196,9 @@ class _ProgressAggregator:
 # quality dict as `container`. Videos: the container the streams are merged
 # into. Audio: the codec FFmpegExtractAudio converts to.
 VIDEO_CONTAINERS = [
-    {"key": "mp4", "label": "MP4", "sub": "Plays everywhere"},
-    {"key": "mkv", "label": "MKV", "sub": "Any codec, no conversion"},
-    {"key": "webm", "label": "WEBM", "sub": "VP9 / Opus, web-friendly"},
+    {"key": "mp4", "label": "MP4", "sub": "Plays everywhere · editor-ready H.264"},
+    {"key": "mkv", "label": "MKV", "sub": "Any codec, no conversion · playback only"},
+    {"key": "webm", "label": "WEBM", "sub": "VP9 / Opus, web-friendly · playback only"},
 ]
 AUDIO_CODECS = [
     {"key": "mp3", "label": "MP3", "sub": "192 kbps, plays everywhere",

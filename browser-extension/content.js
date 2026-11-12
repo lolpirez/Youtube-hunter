@@ -147,7 +147,8 @@
       adShowing: "An ad is playing. The editor opens as soon as the video starts.",
       liveStream: "Live streams can't be cut while they're still live.",
       noPlayer: "Start the video so the editor can read its length.",
-      keyframe: "Lossless cut: it lands on the nearest keyframe, usually within a second.",
+      exactCut: "Exact cut: MP4 is re-encoded at your Cut Quality — Premiere and After Effects open it.",
+      copyCut: "Lossless copy: lands on the nearest keyframe. Pick MP4 for a frame-exact cut an editor can open.",
       keysHint: "[ and ] mark In / Out at the playhead",
       // v3.44 — live download capsule
       dlDownloading: "Downloading",
@@ -1000,6 +1001,9 @@
       tracks: [],          // [{key, name, native, nameFa, kind, code, rtl}]
       formats: null,       // {video: [{key,label,sub}], audio: [...]}
       refreshing: false,   // re-sizing the ladder for a new format / dub
+      cutRates: {},        // v3.52: bytes/second of clip per cap & output — the
+                           // Cut panel's size chips (see takeQualities)
+      cutQuality: "",      // the app's cut_quality level the rates were built for
       parked: null,        // v3.47: row id of a paused download while another row is picked
     };
     let pollTimer = 0, wakeTimer = 0, runToken = 0;
@@ -1403,7 +1407,8 @@
                limited: false, bestPx: 0, thin: false,
                format: null, key: null, live: null, result: null, message: "",
                saved: [], dlKey: null, vf: state.vf, af: state.af, lang: "",
-               tracks: [], formats: null, refreshing: false, parked: null };
+               tracks: [], formats: null, refreshing: false,
+               cutRates: {}, cutQuality: "", parked: null };
     }
 
     function open(btn, wantMode) {
@@ -1619,6 +1624,12 @@
       state.format = d.format || null;
       if (d.format) { state.vf = d.format.video || state.vf; state.af = d.format.audio || state.af; }
       state.formats = d.formats || null;
+      // The Cut panel's size chips come from the app's own cut estimator
+      // (cut_size_rates): the download size scaled to the clip length is the
+      // wrong number for a cut — a re-encoded clip's size follows the output
+      // bitrate, not the source file's average, and the two diverged ~2x.
+      state.cutRates = (d.cutRates && typeof d.cutRates === "object") ? d.cutRates : {};
+      state.cutQuality = typeof d.cutQuality === "string" ? d.cutQuality : "";
       state.tracks = Array.isArray(d.tracks) ? d.tracks : [];
       state.lang = typeof d.lang === "string" ? d.lang : state.lang;
       // files already on disk (any session) count as saved
@@ -3118,8 +3129,25 @@
       }
       function estimate(r) {
         const d = duration();
-        if (!r || !r.sizeBytes || !(d > 0) || d === Infinity || c.start == null) return "";
-        return "≈ " + bytes(r.sizeBytes * ((c.end - c.start) / d));
+        if (!r || !(d > 0) || d === Infinity || c.start == null) return "";
+        const secs = Math.max(0, c.end - c.start);
+        if (!(secs > 0)) return "";
+        const rates = state.cutRates || {};
+        let bps = 0;
+        if (r.isAudio) {
+          bps = Number((rates.audio || {})[c.afmt || "mp3"]) || 0;
+        } else {
+          const per = rates[r.key] || {};
+          // mp4 = the re-encoded cut; mkv/webm = a stream copy of the picked
+          // pair (mkv holds any codec, webm falls back to the copy rate).
+          bps = Number((c.vfmt || "mp4") === "mp4" ? per.mp4 : per.copy) || 0;
+          if (!(bps > 0)) bps = Number(per.mp4) || 0;
+        }
+        if (bps > 0) return "≈ " + bytes(bps * secs);
+        // No rate for this output (an older app, or a stream with no bitrate):
+        // scale the full-download size rather than inventing a number.
+        if (!r.sizeBytes) return "";
+        return "≈ " + bytes(r.sizeBytes * (secs / d));
       }
 
       // ── preview: play exactly the range, once ───────────────────────────
@@ -3306,7 +3334,7 @@
             </div>`}
             ${trackHTML()}
             ${Post.html(locked, !!c.audioOnly)}
-            <p class="note kf"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 7.2v4M8 4.9v.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><span>${esc(c.audioOnly ? t("audioCutNote") : t("keyframe"))}</span></p>
+            <p class="note kf"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 7.2v4M8 4.9v.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg><span>${esc(c.audioOnly ? t("audioCutNote") : (String(c.vfmt || "mp4") === "mp4" ? t("exactCut") : t("copyCut")))}</span></p>
             ${c.phase === "error" ? `<div class="off err"><b>${esc(t("cutFailed"))}</b><p>${esc(c.message)}</p></div>` : ""}
           </div>`;
       }
