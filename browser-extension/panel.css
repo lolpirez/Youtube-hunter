@@ -472,6 +472,7 @@
 .rung.got:not(.on) .dot { border-color: var(--ok); }
 .note.again { color: var(--muted); }
 .primary[disabled] { opacity: .5; cursor: default; filter: none; }
+.ghost[disabled] { opacity: .5; cursor: default; pointer-events: none; }
 
 /* timecodes */
 .cut { display: flex; flex-direction: column; gap: 10px; padding: 2px 2px 4px; }

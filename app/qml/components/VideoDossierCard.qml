@@ -944,9 +944,21 @@ Popup {
                     }
                 }
 
-                // 1 · TRANSCRIPT: the whole track
+                // 1 · TRANSCRIPT: the whole track, plain or with timestamps (v1.4)
                 ColumnLayout {
+                    id: txPane
                     spacing: Tokens.space3
+                    property bool stamped: false            // false plain · true with timestamps
+                    readonly property bool timedReady: VideoDossier.timedState === "ready"
+                    readonly property bool timedBusy: VideoDossier.timedState === "loading"
+                    readonly property string vidId: root.seed.videoId || ""
+                    function setStamped(v) {
+                        stamped = v
+                        if (v) VideoDossier.loadTimed()
+                    }
+                    // another video opened in the same card: read ITS timing
+                    onVidIdChanged: if (stamped) VideoDossier.loadTimed()
+
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: Tokens.space3
@@ -964,9 +976,74 @@ Popup {
                             color: Theme.outline
                             font.pixelSize: Tokens.fontCaption
                         }
+
+                        // Plain text | With timestamps
+                        Rectangle {
+                            id: txSeg
+                            visible: root.tx.available === true
+                            implicitWidth: segRow.implicitWidth + 8
+                            implicitHeight: 34
+                            radius: 17
+                            color: U.withAlpha(Theme.on_surface, Theme.isDark ? 0.05 : 0.04)
+                            border.width: 1
+                            border.color: U.withAlpha(Theme.on_surface, Theme.isDark ? 0.08 : 0.07)
+                            Row {
+                                id: segRow
+                                x: 4; y: 3
+                                spacing: 2
+                                Repeater {
+                                    model: [
+                                        { t: I18n.tr("Plain text"), i: "subject", st: false },
+                                        { t: I18n.tr("With timestamps"), i: "schedule", st: true }
+                                    ]
+                                    Rectangle {
+                                        required property var modelData
+                                        readonly property bool on: txPane.stamped === modelData.st
+                                        implicitWidth: segItem.implicitWidth + 24
+                                        implicitHeight: 28
+                                        radius: 14
+                                        color: on ? U.withAlpha(root._accent, Theme.isDark ? 0.26 : 0.16) : "transparent"
+                                        border.width: on ? 1 : 0
+                                        border.color: U.withAlpha(root._hot, 0.45)
+                                        Behavior on color { ColorAnimation { duration: 160 } }
+                                        Row {
+                                            id: segItem
+                                            anchors.centerIn: parent
+                                            spacing: 6
+                                            C.IconGlyph { anchors.verticalCenter: parent.verticalCenter; name: modelData.i; size: 14; glyphColor: parent.parent.on ? root._hot : Theme.on_surface_var }
+                                            C.AppText {
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                text: modelData.t
+                                                weight: Tokens.weightDemiBold
+                                                font.pixelSize: Tokens.fontCaption + 1
+                                                color: parent.parent.on ? Theme.text_strong : Theme.on_surface_var
+                                            }
+                                        }
+                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: txPane.setStamped(modelData.st) }
+                                    }
+                                }
+                            }
+                        }
+
                         Item { Layout.fillWidth: true }
                         C.PrimaryButton {
-                            visible: root.tx.available === true
+                            visible: root.tx.available === true && txPane.stamped && txPane.timedReady
+                            variant: "ghost"
+                            implicitHeight: 34
+                            iconName: "download"
+                            text: I18n.tr("Save .srt")
+                            onClicked: VideoDossier.saveTimedFile("srt")
+                        }
+                        C.PrimaryButton {
+                            visible: root.tx.available === true && txPane.stamped && txPane.timedReady
+                            variant: "ghost"
+                            implicitHeight: 34
+                            iconName: "content_copy"
+                            text: I18n.tr("Copy with timestamps")
+                            onClicked: VideoDossier.copyTimed("timed")
+                        }
+                        C.PrimaryButton {
+                            visible: root.tx.available === true && !txPane.stamped
                             variant: "ghost"
                             implicitHeight: 34
                             iconName: "content_copy"
@@ -981,8 +1058,11 @@ Popup {
                         color: U.withAlpha(Theme.on_surface, Theme.isDark ? 0.03 : 0.02)
                         border.width: 1
                         border.color: U.withAlpha(Theme.on_surface, 0.06)
+
+                        // ── plain: the opening, one block of text ──
                         C.SmoothScrollView {
                             id: txScroll
+                            visible: !txPane.stamped
                             anchors.fill: parent
                             anchors.margins: Tokens.space5
                             ColumnLayout {
@@ -1026,6 +1106,146 @@ Popup {
                                             color: Theme.on_surface
                                         }
                                     }
+                                }
+                            }
+                        }
+
+                        // ── with timestamps: one row per caption, click a time to open the video there ──
+                        Item {
+                            id: stampView
+                            visible: txPane.stamped
+                            anchors.fill: parent
+
+                            // reading the timing
+                            Column {
+                                visible: txPane.timedBusy || VideoDossier.timedState === ""
+                                anchors.fill: parent
+                                anchors.margins: Tokens.space5
+                                spacing: Tokens.space3
+                                Repeater {
+                                    model: 9
+                                    Row {
+                                        width: parent.width
+                                        spacing: Tokens.space3
+                                        Skeleton { width: 54; height: 22; radius: 11 }
+                                        Skeleton { width: Math.max(120, (parent.width - 80) * (0.55 + (index % 4) * 0.12)) }
+                                    }
+                                }
+                            }
+
+                            // no timing available
+                            Column {
+                                visible: VideoDossier.timedState === "error"
+                                anchors.centerIn: parent
+                                width: Math.min(parent.width - 48, 460)
+                                spacing: Tokens.space3
+                                C.IconGlyph { anchors.horizontalCenter: parent.horizontalCenter; name: "info"; size: 22; glyphColor: Theme.outline }
+                                C.AppText {
+                                    width: parent.width
+                                    horizontalAlignment: Text.AlignHCenter
+                                    wrapMode: Text.WordWrap
+                                    text: VideoDossier.timedError
+                                    color: Theme.on_surface_var
+                                    font.pixelSize: Tokens.fontBody
+                                }
+                                C.PrimaryButton {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    variant: "ghost"
+                                    implicitHeight: 34
+                                    iconName: "refresh"
+                                    text: I18n.tr("Try again")
+                                    onClicked: VideoDossier.loadTimed()
+                                }
+                            }
+
+                            ListView {
+                                id: cueList
+                                visible: txPane.timedReady
+                                anchors.fill: parent
+                                anchors.topMargin: Tokens.space3
+                                anchors.leftMargin: Tokens.space3
+                                anchors.rightMargin: Tokens.space2
+                                anchors.bottomMargin: 38
+                                clip: true
+                                spacing: 2
+                                boundsBehavior: Flickable.StopAtBounds
+                                cacheBuffer: 600
+                                model: txPane.timedReady ? VideoDossier.timedCues : []
+                                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                                C.SmoothWheel { flick: cueList }
+
+                                delegate: Rectangle {
+                                    id: cueRow
+                                    required property var modelData
+                                    width: cueList.width - 12
+                                    implicitHeight: Math.max(cueText.implicitHeight, 24) + 14
+                                    radius: Tokens.radiusMd
+                                    color: cueHover.hovered ? U.withAlpha(Theme.on_surface, Theme.isDark ? 0.055 : 0.04) : "transparent"
+                                    Behavior on color { ColorAnimation { duration: 120 } }
+                                    HoverHandler { id: cueHover }
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: Tokens.space2
+                                        anchors.rightMargin: Tokens.space3
+                                        spacing: Tokens.space3
+
+                                        Rectangle {
+                                            id: tsPill
+                                            Layout.alignment: Qt.AlignTop
+                                            Layout.topMargin: 1
+                                            implicitWidth: Math.max(56, tsText.implicitWidth + 18)
+                                            implicitHeight: 24
+                                            radius: 12
+                                            color: tsHover.hovered ? U.withAlpha(root._accent, Theme.isDark ? 0.3 : 0.2)
+                                                                   : U.withAlpha(root._accent, Theme.isDark ? 0.15 : 0.1)
+                                            border.width: 1
+                                            border.color: U.withAlpha(root._hot, tsHover.hovered ? 0.6 : 0.28)
+                                            Behavior on color { ColorAnimation { duration: 120 } }
+                                            C.AppText {
+                                                id: tsText
+                                                anchors.centerIn: parent
+                                                text: cueRow.modelData.ts
+                                                mono: true
+                                                font.pixelSize: Tokens.fontCaption
+                                                weight: Tokens.weightDemiBold
+                                                color: root._hot
+                                            }
+                                            HoverHandler { id: tsHover; cursorShape: Qt.PointingHandCursor }
+                                            TapHandler { onTapped: VideoDossier.openAt(cueRow.modelData.s) }
+                                        }
+                                        C.AppText {
+                                            id: cueText
+                                            Layout.fillWidth: true
+                                            text: cueRow.modelData.t
+                                            selectable: true
+                                            wrapMode: Text.Wrap
+                                            font.pixelSize: Tokens.fontBody + 1
+                                            lineHeight: 1.4
+                                            color: Theme.on_surface
+                                        }
+                                    }
+                                }
+                            }
+
+                            // footer: how many lines, which language, where the file went
+                            Row {
+                                visible: txPane.timedReady
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.bottom: parent.bottom
+                                anchors.margins: Tokens.space3
+                                spacing: Tokens.space3
+                                C.IconGlyph { anchors.verticalCenter: parent.verticalCenter; name: "info"; size: 14; glyphColor: Theme.outline }
+                                C.AppText {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: parent.width - 30
+                                    elide: Text.ElideRight
+                                    font.pixelSize: Tokens.fontCaption
+                                    color: Theme.outline
+                                    text: VideoDossier.timedCues.length + " " + I18n.tr("lines")
+                                          + (VideoDossier.timedLang !== "" ? "  ·  " + VideoDossier.timedLang.toUpperCase() : "")
+                                          + "  ·  " + I18n.tr("Click a time to open the video at that moment")
                                 }
                             }
                         }

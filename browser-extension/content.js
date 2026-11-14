@@ -122,6 +122,8 @@
       videoCutNote: "Video cut keeps audio. Choose the output container above.",
       tabDownload: "Download",
       tabCut: "Cut",
+      subsTip: "Live subtitles with timestamps (and export .srt)",
+      subsLabel: "Subs",
       cutTip: "Cut a clip with YouTube Hunter",
       cutLabel: "Cut",
       markIn: "In",
@@ -143,6 +145,13 @@
       cutFailed: "Cut failed",
       cutStopped: "Cut stopped.",
       cutNeedsUpdate: "Update YouTube Hunter on your PC to cut from YouTube.",
+      cutSrt: "Clip subtitles (.srt)",
+      cutSrtTip: "Save the YouTube captions of exactly this In–Out range as an .srt file",
+      cutSrtReading: "Reading the captions…",
+      cutSrtSaved: "Subtitles saved",
+      cutSrtNone: "No captions in this clip.",
+      cutSrtFail: "Couldn't read the captions.",
+      cutSrtOld: "Update YouTube Hunter on your PC to export subtitles.",
       cutLost: "Lost track of this cut. It may still finish — check the Clips list in the app.",
       adShowing: "An ad is playing. The editor opens as soon as the video starts.",
       liveStream: "Live streams can't be cut while they're still live.",
@@ -642,6 +651,14 @@
     @keyframes dash { to { background-position: -8px 0; } }
 
     :host(:not([data-cut]):not([round])) .cut .lbls { display: none; }
+    .cc { padding: 0 12px 0 10px; gap: 6px; }
+    .cc::before {
+      content: ""; position: absolute; inset-inline-start: 0; top: 7px; bottom: 7px; width: 1px;
+      background: linear-gradient(180deg, transparent, var(--sep) 25%, var(--sep) 75%, transparent);
+    }
+    :host([round]) .cc::before { display: none; }
+    .cc[aria-expanded="true"] .sc { color: var(--acc); }
+    .cc:hover .cci { transform: scale(1.08); }
 
     /* ── Shorts: the round rail button ──────────────────────────────── */
     :host([round]) .pill {
@@ -707,7 +724,15 @@
       <g class="bl2"><circle cx="6" cy="6.5" r="2.6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8.2 8.1L19.5 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></g>
     </svg>`;
 
-  // One host, two halves: [ crown Hunter | scissors Cut ]. A single host keeps
+  // v1.8: closed-caption glyph for the Subtitles button
+  function ccSVG(size) {
+    return `<svg class="sc cci" width="${size}" height="${size}" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="2.8" y="5" width="18.4" height="14" rx="3.6" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M10.4 10.1a2.3 2.3 0 1 0 0 3.8M16.6 10.1a2.3 2.3 0 1 0 0 3.8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+    </svg>`;
+  }
+
+  // One host, three parts (v1.8): [ crown Hunter | scissors Cut ]. A single host keeps
   // the insertion logic below unchanged (one element to find / re-insert).
   function makeButton(round) {
     const host = document.createElement("yth-hunter-button");
@@ -731,13 +756,23 @@
           <span class="${round ? "disc" : "ico"}">${scissorsSVG(round ? 22 : 18)}${ringSVG("r-cut")}${ICON_SNIP}${ICON_TICK_S}${ICON_FAIL_S}</span>
           <span class="lbls">${round ? `<span class="lbl lbl2">${esc(t("cutLabel"))}</span>` : ""}<span class="st" aria-live="polite"></span></span>
         </button>
+        <button class="cc" type="button" data-mode="subs" aria-haspopup="dialog" aria-expanded="false" title="${esc(t("subsTip"))}" aria-label="${esc(t("subsTip"))}">
+          <span class="${round ? "disc" : "ico"}">${ccSVG(round ? 22 : 18)}</span>
+          ${round ? `<span class="lbls"><span class="lbl lbl2">${esc(t("subsLabel"))}</span></span>` : ""}
+        </button>
       </span>`;
     themeButton(host);
     Live.paint(host);
     root.querySelectorAll("button").forEach((b) => b.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      Panel.toggle(host, b.getAttribute("data-mode"));
+      const m = b.getAttribute("data-mode");
+      if (m === "subs") {
+        try { Panel.close(); } catch (_) {}
+        window.__ythSubs && window.__ythSubs.toggle(host);
+        return;
+      }
+      Panel.toggle(host, m);
     }));
     return host;
   }
@@ -746,6 +781,8 @@
     document.querySelectorAll("yth-hunter-button").forEach((h) => {
       const r = h.shadowRoot;
       if (!r) return;
+      const cc = r.querySelector("button.cc");
+      if (cc) { cc.title = t("subsTip"); cc.setAttribute("aria-label", t("subsTip")); }
       const dl = r.querySelector("button.dl"), ct = r.querySelector("button.cut");
       if (dl) { dl.title = t("buttonTip"); r.querySelector(".lbl").textContent = t("button"); }
       if (ct) {
@@ -1413,6 +1450,7 @@
 
     function open(btn, wantMode) {
       const vid = currentVideo();
+      try { window.__ythSubs && window.__ythSubs.close(); } catch (_) {}
       if (!host) build();
       anchorBtn = btn || anchorBtn || null;
       if (wantMode) setMode(wantMode, true);
@@ -3371,6 +3409,9 @@
             return `<button class="primary cutgo" type="button" data-act="cut"${c.start == null ? " disabled" : ""}>
                 ${scissors}<span>${esc(t("cutBtn"))}</span>
                 <span class="pill"><span class="pq">${esc(cutPill())}</span> · <span class="pl"></span></span>
+              </button>
+              <button class="ghost cutsrt" type="button" data-act="cutsrt" title="${esc(t("cutSrtTip"))}"${c.start == null ? " disabled" : ""}>
+                ${ccSVG(17)}<span>${esc(t("cutSrt"))}</span>
               </button>`;
           case "sending":
           case "running":
@@ -3400,6 +3441,7 @@
                 <button class="primary" type="button" data-act="cutreveal"><span>${esc(t("showFolder"))}</span></button>
                 <button class="ghost" type="button" data-act="cutnew">${esc(t("newCut"))}</button>
               </div>
+              <button class="link2" type="button" data-act="cutsrt">${esc(t("cutSrt"))}</button>
               <button class="link2" type="button" data-act="cutapp">${esc(t("openCutter"))}</button>`;
           }
           default:
@@ -3779,6 +3821,7 @@
           const b = root.querySelector(`.qchip[data-key="${CSS.escape(c.cap)}"]`);
           b && b.focus({ preventScroll: true });
         } else if (act === "cut") startCut();
+        else if (act === "cutsrt") saveRangeSrt();
         else if (act === "cutstop") {
           if (c.job) call("/v1/cut/cancel", { method: "POST", body: { job: c.job } });
         } else if (act === "cutreveal") {
@@ -3797,6 +3840,88 @@
         el.classList.remove("flash");
         void el.offsetWidth;
         el.classList.add("flash");
+      }
+
+      // ── v1.8.1: the captions of exactly the marked range, as an .srt ────
+      // Reads the video's timed captions through the app (/v1/transcript),
+      // keeps the lines that fall inside [c.start, c.end], shifts them to
+      // start at 0:00 so the file lines up with the saved clip, and downloads
+      // it. Same balanced wrap as the app's SRT writer.
+      let srtBusy = false;
+      const pad2 = (n) => String(n).padStart(2, "0");
+      function srtClock(sec) {
+        let ms = Math.max(0, Math.round((Number(sec) || 0) * 1000));
+        const h = Math.floor(ms / 3600000); ms -= h * 3600000;
+        const m = Math.floor(ms / 60000); ms -= m * 60000;
+        const s = Math.floor(ms / 1000); ms -= s * 1000;
+        return `${pad2(h)}:${pad2(m)}:${pad2(s)},${String(ms).padStart(3, "0")}`;
+      }
+      function wrapSrt(text, max = 42) {
+        const t = String(text || "").replace(/\s+/g, " ").trim();
+        const w = t.split(" ");
+        if (t.length <= max || w.length < 2) return t;
+        let best = 1, bestScore = Infinity;
+        for (let i = 1; i < w.length; i++) {
+          const a = w.slice(0, i).join(" ").length, b = w.slice(i).join(" ").length;
+          const score = Math.abs(a - b) + (Math.max(a, b) > max * 1.25 ? 100 : 0);
+          if (score < bestScore) { best = i; bestScore = score; }
+        }
+        return w.slice(0, best).join(" ") + "\n" + w.slice(best).join(" ");
+      }
+      function rangeSrt(cues, a, b) {
+        const rows = [];
+        for (const c of cues || []) {
+          const s0 = Number(c && c[0]) || 0, e0 = Number(c && c[1]) || 0;
+          if (e0 <= a || s0 >= b) continue;
+          const t = String((c && c[2]) || "").replace(/\s+/g, " ").trim();
+          if (!t) continue;
+          rows.push([Math.max(0, Math.max(s0, a) - a), Math.max(0.2, Math.min(e0, b) - a), t]);
+        }
+        return rows.map((c, i) =>
+          `${i + 1}\n${srtClock(c[0])} --> ${srtClock(Math.max(c[1], c[0] + 0.2))}\n${wrapSrt(c[2])}\n`).join("\n");
+      }
+      function srtFileName(a, b) {
+        const meta = state.meta || pageMeta();
+        const base = String(meta.title || "video").replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ")
+          .replace(/\s+/g, " ").trim().slice(0, 80) || "video";
+        const safe = (x) => x.replace(/[:.]/g, "-");
+        return `${base} [${state.video.id}] ${safe(tc(a))}-${safe(tc(b))}.srt`;
+      }
+      function saveTextFile(text, name, mime) {
+        const blob = new Blob(["\ufeff" + text], { type: mime + ";charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = name;
+        document.body.appendChild(a); a.click();
+        setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 4000);
+      }
+      async function saveRangeSrt() {
+        if (srtBusy || !state.video || c.start == null || !(c.end > c.start)) return;
+        const a = c.start, b = c.end;
+        srtBusy = true;
+        const btn = root && root.querySelector(".cutsrt");
+        const label = btn && btn.querySelector("span");
+        if (btn) btn.disabled = true;
+        if (label) label.textContent = t("cutSrtReading");
+        try {
+          const r = await call("/v1/transcript?v=" + encodeURIComponent(state.video.id), { timeout: 120000 });
+          if (!r.reachable) { flashNote(t("cutSrtFail")); return; }
+          if (r.status === 404) { flashNote(t("cutSrtOld")); return; }
+          const d = r.data || {};
+          if (!d.ok || !Array.isArray(d.cues) || !d.cues.length) { flashNote(d.error || t("cutSrtNone")); return; }
+          const body = rangeSrt(d.cues, a, b);
+          if (!body) { flashNote(t("cutSrtNone")); return; }
+          saveTextFile(body, srtFileName(a, b), "application/x-subrip");
+          flashNote(t("cutSrtSaved"));
+        } catch (_) {
+          flashNote(t("cutSrtFail"));
+        } finally {
+          srtBusy = false;
+          if (btn && btn.isConnected) {
+            btn.disabled = false;
+            if (label) label.textContent = t("cutSrt");
+          }
+        }
       }
 
       async function startCut() {
@@ -3905,6 +4030,24 @@
 
     return { toggle, open, close, onNavigate, retheme, anchoredTo, reanchor, covers, isOpen };
   })();
+
+  // v1.8: what subs.js (the Subtitles panel, same isolated world) borrows
+  window.__ythKit = {
+    call, currentVideo, applyVars, isDark, markSVG, THEME_VARS_LIST: ["bg", "raise", "well", "line", "line-soft", "text", "strong",
+      "muted", "dim", "track", "ok", "bad", "warn", "on-acc"],
+    theme: () => ({ appTheme, accent }),
+    adoptTheme(info) {
+      if (!info) return;
+      if (info.accent && info.accent.a) accent = { a: info.accent.a, b: info.accent.b || info.accent.a };
+      if (info.theme && info.theme.mode) {
+        appTheme = { mode: info.theme.mode, vars: info.theme.vars || {} };
+        try { chrome.storage.local.set({ [THEME_KEY]: Object.assign({ accent }, appTheme) }); } catch (_) {}
+      }
+      relabelButtons();
+      Panel.retheme();
+    },
+    closePanel: () => Panel.close(),
+  };
 
   // first paint
   ensureButton();

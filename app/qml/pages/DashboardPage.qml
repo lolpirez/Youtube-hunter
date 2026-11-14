@@ -1085,6 +1085,34 @@ Item {
                                               ? I18n.tr("Every video gets its transcript: re-checks \"no captions\", re-fetches short ones, waits out IP blocks (resumes by itself on a new IP) and keeps retrying until nothing is missing. Saves .txt copies. Slower.")
                                               : I18n.tr("Quickest. Never stops for an IP block: refused captions are skipped, retried once at the end, and the next run fills them from cache.")
                                     }
+
+                                    // v1.3.2: how the transcript is written to the file
+                                    RowLayout {
+                                        Layout.topMargin: Tokens.space2
+                                        spacing: Tokens.space2
+                                        C.IconGlyph { name: "schedule"; size: 14; glyphColor: Theme.on_surface_var }
+                                        FieldLabel { text: I18n.tr("Transcript format") }
+                                    }
+                                    C.SlideSegment {
+                                        Layout.fillWidth: true
+                                        equal: true
+                                        cellHeight: 36
+                                        enabledCells: !Dashboard.isRunning
+                                        model: [I18n.tr("Plain"), I18n.tr("Timestamps"), I18n.tr("Both")]
+                                        currentIndex: Settings.transcriptFormatIndex
+                                        onActivated: (i) => Settings.applyTranscriptFormat(i)
+                                    }
+                                    C.AppText {
+                                        Layout.fillWidth: true
+                                        wrapMode: Text.WordWrap
+                                        font.pixelSize: Tokens.fontCaption
+                                        color: Theme.outline
+                                        text: Settings.transcriptFormatIndex === 1
+                                              ? I18n.tr("The transcript column holds one line per caption, like \"[01:23] text\". Each video also gets an .srt file. Adds a short step at the end of the run.")
+                                              : Settings.transcriptFormatIndex === 2
+                                                ? I18n.tr("Keeps the plain transcript column and adds a transcript_timestamps column with \"[01:23] text\" lines. Each video also gets an .srt file. Adds a short step at the end of the run.")
+                                                : I18n.tr("One block of text per video, as before.")
+                                    }
                                 }
                             }
                         }

@@ -43,6 +43,10 @@ Transport: a tiny JSON HTTP server on 127.0.0.1:BRIDGE_PORT.
     POST /v1/cut/cancel {job}        → stop it
 
     v1.4 — captions from the panel:
+    GET  /v1/transcript?v=<id>[&key=<track>]
+                                     → v1.8: the video's captions WITH timing,
+                                       [[start, end, text], ...] + the tracks
+                                       YouTube has (the panel's Subtitles tab)
     GET  /v1/captions?v=<id>         → the languages YouTube's OWN captions
                                        come in (no AI), the looks, every
                                        language for AI, readiness
@@ -1107,7 +1111,9 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                     # v3.45: per-row formats + dubs, and ▶ Play for saved files
                     "formats": True, "play": True,
                     # v1.4: captions from the panel
-                    "post": True})
+                    "post": True,
+                    # v1.8: live time-stamped subtitles + .srt in the panel
+                    "transcript": True})
             if url.path == "/v1/qualities":
                 return self._qualities(self._vid(q.get("v")), q.get("vf"),
                                        q.get("af"), q.get("lang"),
@@ -1119,6 +1125,8 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 return self._status(vid)
             if url.path == "/v1/captions":
                 return self._captions(self._vid(q.get("v")))
+            if url.path == "/v1/transcript":
+                return self._transcript(self._vid(q.get("v")), q.get("key"))
             if url.path == "/v1/dubready":
                 # v2.0: the AI dub is gone; an older panel still asks
                 return self._send(200, {"ok": True, "gone": True, "engine": "",
@@ -1540,6 +1548,26 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             err = str(exc)
         self._send(200, dict(opts, ok=True, youtube=langs, spoken=spoken,
                              error="" if langs else (err or tr("No captions on YouTube for this video."))))
+
+    def _transcript(self, vid, key):
+        """v1.8: the Subtitles tab. Blocking (a yt-dlp read, a few seconds),
+        which is fine: the bridge answers each request on its own thread."""
+        if not vid:
+            return self._send(400, {"ok": False, "error": "bad video id"})
+        key = str(key or "")
+        if key and not re.fullmatch(r"(?:sub|auto|tr):[A-Za-z0-9_-]{1,24}", key):
+            key = ""
+        from app.core import transcript_timed as TT
+        res = TT.load(vid, key)
+        if not res.get("ok"):
+            return self._send(200, {"ok": False, "error": res.get("error") or tr("No captions."),
+                                    "tracks": res.get("tracks") or []})
+        self._send(200, {
+            "ok": True, "lang": res.get("lang") or "", "key": res.get("key") or "",
+            "auto": bool(res.get("auto")), "tracks": res.get("tracks") or [],
+            "duration": res.get("duration") or 0,
+            # arrays, not objects: a 40-minute video is ~700 cues
+            "cues": [[c["s"], c["e"], c["t"]] for c in res["cues"]]})
 
     def _cut_status(self, job):
         j = self.owner.cuts.get(job)

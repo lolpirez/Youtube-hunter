@@ -137,6 +137,10 @@ class SettingsVM(QObject):
         self._transcripts_enabled = bool(cfg.get("transcripts_enabled", True))
         self._transcript_mode = ("thorough" if cfg.get("transcript_mode") == "thorough"
                                  else "fast")
+        # v1.3.2: how the Scraper writes a transcript: plain | timestamps | both
+        self._transcript_format = (cfg.get("transcript_format")
+                                   if cfg.get("transcript_format") in ("plain", "timestamps", "both")
+                                   else "plain")
         self._save_folder = cfg.get("save_folder", "") or ""
         # Per-kind destinations (Settings → Save locations). Empty means "use
         # the default": Desktop/YouTube for videos, ask-once for thumbnails.
@@ -432,6 +436,32 @@ class SettingsVM(QObject):
         try:
             cfg = load_app_config()
             cfg["transcript_mode"] = mode
+            save_app_config(cfg)
+        except Exception:          # noqa: BLE001
+            pass
+        self.changed.emit()
+
+    # ── v1.3.2: transcript format (Scraper page) ──
+    # 0 = Plain (as before), 1 = With timestamps ("[mm:ss] text" per line),
+    # 2 = Both (plain `transcript` + a `transcript_timestamps` column).
+    _TX_FORMATS = ("plain", "timestamps", "both")
+
+    @Property(int, notify=changed)
+    def transcriptFormatIndex(self):
+        try:
+            return self._TX_FORMATS.index(self._transcript_format)
+        except ValueError:
+            return 0
+
+    @Slot(int)
+    def applyTranscriptFormat(self, index):
+        fmt = self._TX_FORMATS[max(0, min(2, int(index)))]
+        if fmt == self._transcript_format:
+            return
+        self._transcript_format = fmt
+        try:
+            cfg = load_app_config()
+            cfg["transcript_format"] = fmt
             save_app_config(cfg)
         except Exception:          # noqa: BLE001
             pass

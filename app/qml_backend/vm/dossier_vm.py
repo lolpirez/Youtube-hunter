@@ -26,6 +26,7 @@ from PySide6.QtGui import QGuiApplication
 
 from app.config import load_app_config
 from app.core import dossier as D
+from app.core import transcript_timed as TT
 from app.crash import log_crash
 from app.i18n import tr
 
@@ -77,6 +78,13 @@ class DossierVM(QObject):
         self._busy = set()
         self._export_state = ""              # "" | "saving" | "saved" | "error"
         self._export_path = ""
+        # v1.4: the time-stamped view of the same captions (read on demand,
+        # the first time the card's "With timestamps" switch is used)
+        self._timed = []
+        self._timed_state = ""               # "" | "loading" | "ready" | "error"
+        self._timed_error = ""
+        self._timed_lang = ""
+        self._timed_saved = ""               # last .srt / .txt written
         self._part.connect(self._on_part)
 
     # ── QML surface ───────────────────────────────────────────────────
@@ -99,6 +107,28 @@ class DossierVM(QObject):
     @Property("QVariantMap", notify=changed)
     def transcript(self):
         return dict(self._tx)
+
+    @Property("QVariantList", notify=changed)
+    def timedCues(self):
+        # [{s, e, t, ts}] - ts is the "mm:ss" label the card prints
+        hours = any(r["s"] >= 3600 for r in self._timed)
+        return [dict(r, ts=TT.stamp(r["s"], hours)) for r in self._timed]
+
+    @Property(str, notify=changed)
+    def timedState(self):
+        return self._timed_state
+
+    @Property(str, notify=changed)
+    def timedError(self):
+        return self._timed_error
+
+    @Property(str, notify=changed)
+    def timedLang(self):
+        return self._timed_lang
+
+    @Property(str, notify=changed)
+    def timedSaved(self):
+        return self._timed_saved
 
     @Property("QVariantMap", notify=changed)
     def notes(self):
@@ -160,6 +190,8 @@ class DossierVM(QObject):
         self._notes = {}
         self._busy = {"meta", "comments", "transcript"}
         self._export_state, self._export_path = "", ""
+        self._timed, self._timed_state, self._timed_error = [], "", ""
+        self._timed_lang, self._timed_saved = "", ""
         self.changed.emit()
         self.openRequested.emit()
         threading.Thread(target=self._work, args=(run, vid), daemon=True,
@@ -257,11 +289,89 @@ class DossierVM(QObject):
             self._part.emit(run, "transcript", {"status": "Not Available", "text": "",
                                                 "error": _err_text(exc)})
 
+    # ── v1.4: time-stamped transcript ────────────────────────────────
+    @Slot()
+    def loadTimed(self):
+        """Read the captions again WITH their timing (once per opened video)."""
+        vid = self._seed.get("videoId")
+        if not vid or self._timed_state in ("loading", "ready"):
+            return
+        self._timed_state, self._timed_error = "loading", ""
+        self.changed.emit()
+        run = self._run
+        threading.Thread(target=self._work_timed, args=(run, vid), daemon=True,
+                         name="dossier-timed-" + vid).start()
+
+    def _work_timed(self, run, vid):
+        try:
+            res = TT.load(vid)
+        except Exception as exc:             # noqa: BLE001 — TT.load never raises, belt and braces
+            log_crash("dossier timed transcript: " + str(exc))
+            res = {"ok": False, "error": _err_text(exc)}
+        self._part.emit(run, "timed", res)
+
+    @Slot(str)
+    def copyTimed(self, mode):
+        """mode: "timed" ([mm:ss] per line) or "plain"."""
+        if not self._timed:
+            return
+        text = TT.timed_text(self._timed) if mode == "timed" else TT.plain_text(self._timed)
+        self._clip(text, tr("Copied {n} lines with timestamps.").format(n=f"{len(self._timed):,}")
+                   if mode == "timed" else tr("Transcript copied."))
+
+    def _timed_file(self, ext):
+        folder = self._export_dir()
+        os.makedirs(folder, exist_ok=True)
+        return os.path.join(folder, D.dossier_filename(self._meta or self._seed, ext).replace(
+            " dossier." + ext, " subtitles." + ext))
+
+    @Slot(str)
+    def saveTimedFile(self, kind):
+        """kind: "srt" (subtitle file) or "txt" (the [mm:ss] lines)."""
+        if not self._timed:
+            self.toast.emit(tr("The timed transcript is not loaded yet."), "info")
+            return
+        try:
+            path = self._timed_file("srt" if kind == "srt" else "txt")
+            body = TT.srt_text(self._timed) if kind == "srt" else TT.timed_text(self._timed)
+            with open(path, "w", encoding="utf-8-sig", newline="\n") as fh:
+                fh.write(body + "\n")
+            self._timed_saved = path
+            self.toast.emit(tr("Saved → {p}").format(p=path), "success")
+        except Exception as exc:             # noqa: BLE001
+            log_crash("dossier timed save: " + str(exc))
+            self.toast.emit(tr("Could not save the file: {e}").format(e=_err_text(exc)), "error")
+        self.changed.emit()
+
+    @Slot()
+    def revealTimedFile(self):
+        from app.core.utils import reveal_in_file_manager
+        if self._timed_saved:
+            reveal_in_file_manager(self._timed_saved)
+
+    @Slot(float)
+    def openAt(self, seconds):
+        """Open the video on YouTube at that second."""
+        vid = self._seed.get("videoId")
+        if vid:
+            from app.core.utils import open_external_url
+            open_external_url(f"https://www.youtube.com/watch?v={vid}&t={int(max(0, seconds))}s")
+
     @Slot(int, str, object)
     def _on_part(self, run, part, payload):
         if run != self._run:
             return
         payload = payload or {}
+        if part == "timed":
+            if payload.get("ok"):
+                self._timed = list(payload.get("cues") or [])
+                self._timed_lang = str(payload.get("lang") or "")
+                self._timed_state, self._timed_error = "ready", ""
+            else:
+                self._timed, self._timed_state = [], "error"
+                self._timed_error = str(payload.get("error") or tr("No captions found for this video."))
+            self.changed.emit()
+            return
         self._busy.discard(part)
         if part == "meta":
             if payload.get("error"):
@@ -367,4 +477,6 @@ class DossierVM(QObject):
         # stops late parts from landing in a card nobody is looking at
         self._run += 1
         self._busy = set()
+        if self._timed_state == "loading":
+            self._timed_state = ""
         self.changed.emit()

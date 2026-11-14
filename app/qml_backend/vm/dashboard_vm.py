@@ -249,6 +249,8 @@ class DashboardVM(QObject):
         self._transcripts_enabled = bool(cfg.get("transcripts_enabled", True))
         # v1.0.5: "fast" (default) or "thorough", see transcripts.fetch_transcript
         self._tr_thorough = (cfg.get("transcript_mode") or "fast") == "thorough"
+        # v1.3.2: "plain" (default) | "timestamps" | "both", see _timestamp_pass
+        self._tr_format = self._cfg_tr_format(cfg)
         self._tx_secs = {}             # video id -> length in s (thorough check)
 
         self._is_running = False
@@ -916,6 +918,67 @@ class DashboardVM(QObject):
                        "Not stopping: videos keep coming, refused captions are skipped "
                        "and retried at the end. Thorough mode waits a block out."))
 
+    @staticmethod
+    def _cfg_tr_format(cfg):
+        v = (cfg or {}).get("transcript_format")
+        return v if v in ("plain", "timestamps", "both") else "plain"
+
+    def _timestamp_pass(self, data, emit):
+        """v1.3.2: the Scraper's "With timestamps" / "Both" transcript formats.
+
+        Runs once, right before the export: every row that has a transcript
+        has its captions read again WITH timing (app.core.transcript_timed,
+        the same source as the Video Dossier).
+          timestamps  `transcript` becomes "[mm:ss] text", one line per caption
+          both        `transcript` stays plain, `transcript_timestamps` is new
+        A video whose timing can't be read keeps its plain text. Returns
+        {video_id: srt text} so the .txt folder gets matching .srt files."""
+        from concurrent.futures import ThreadPoolExecutor
+        from app.core import transcript_timed as TT
+        mode = self._tr_format
+        srt = {}
+        if mode == "both":
+            for r in data:
+                r.setdefault("transcript_timestamps", "")
+        todo = [r for r in data
+                if str(r.get("transcript_status") or "").startswith("Available")
+                and r.get("transcript") not in ("", "N/A", None) and r.get("video_id")]
+        if not todo:
+            return srt
+        emit.log_signal.emit("🕒  " + tr("Reading timestamps for {n} transcripts…").format(n=len(todo)))
+
+        def work(row):
+            if self._stop_requested:
+                return row, None
+            try:
+                return row, TT.load(str(row.get("video_id")))
+            except Exception as exc:          # noqa: BLE001
+                log_crash("scrape timestamps: " + str(exc))
+                return row, None
+
+        done = miss = 0
+        with ThreadPoolExecutor(max_workers=max(1, min(4, int(self._thread_count or 1)))) as pool:
+            for row, res in pool.map(work, todo):
+                done += 1
+                if res and res.get("ok"):
+                    rows = res["cues"]
+                    text = TT.timed_text(rows)
+                    if mode == "both":
+                        row["transcript_timestamps"] = text
+                    else:
+                        row["transcript"] = text
+                    srt[str(row.get("video_id"))] = TT.srt_text(rows)
+                else:
+                    miss += 1
+                if done % 10 == 0 or done == len(todo):
+                    emit.log_signal.emit("   🕒  " + tr("{d}/{n} timestamps read").format(d=done, n=len(todo)))
+                if self._stop_requested:
+                    break
+        if miss:
+            emit.log_signal.emit("   ℹ️  " + tr(
+                "{m} videos have no readable timing; they keep the plain transcript.").format(m=miss))
+        return srt
+
     def _transcript_of(self, vid, retry=False):
         """fetch_transcript + the gate. Runs on scrape worker threads.
 
@@ -1382,6 +1445,7 @@ class DashboardVM(QObject):
             pass
         self._transcripts_enabled = bool(cfg.get("transcripts_enabled", self._transcripts_enabled))
         self._tr_thorough = (cfg.get("transcript_mode") or "fast") == "thorough"
+        self._tr_format = self._cfg_tr_format(cfg)
         # v3.54: the export format used to be read once at startup, so a
         # format picked in Settings only applied after a restart.
         fmt = cfg.get("export_format", self._export_format) or "csv"
@@ -2181,6 +2245,14 @@ class DashboardVM(QObject):
                                     "the scraper slowed down and retried them.").format(
                             n=tr_stats["throttled"]))
 
+            srt_by_vid = {}
+            if data and transcripts_on and self._tr_format != "plain" and not self._stop_requested:
+                try:
+                    srt_by_vid = self._timestamp_pass(data, emit)
+                except Exception as _exc:     # noqa: BLE001 — the plain export still goes out
+                    log_crash("scrape timestamp pass: " + str(_exc))
+                    emit.log_signal.emit("⚠️  " + tr("Timestamps could not be added; the plain transcripts were saved."))
+
             if data:
                 suffix = SORT_SUFFIX[sort_order]
                 out_path = self._export_path(sort_order)
@@ -2206,7 +2278,7 @@ class DashboardVM(QObject):
                        for d in data):
                     try:
                         tx_dir = os.path.splitext(out_path)[0] + "_transcripts"
-                        n_txt = write_transcript_files(data, tx_dir)
+                        n_txt = write_transcript_files(data, tx_dir, srt_by_vid)
                         if n_txt:
                             emit.log_signal.emit("   📝  " + tr(
                                 "{n} transcripts also saved as .txt files → {p}").format(

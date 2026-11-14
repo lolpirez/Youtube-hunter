@@ -37,7 +37,7 @@ _SPILL_SUFFIX = "_part"
 # transcript that opens with "- Hey guys" (speaker dash, very common in manual
 # subtitles) showed up as #NAME? instead of text. Only these free-text
 # columns are guarded; numbers like a negative value are left alone.
-_TEXT_COLUMNS = ("title", "description", "tags", "transcript")
+_TEXT_COLUMNS = ("title", "description", "tags", "transcript", "transcript_timestamps")
 _FORMULA_LEAD = ("=", "+", "-", "@")
 
 
@@ -133,10 +133,13 @@ def merge_spill_columns(row):
     return row
 
 
-def write_transcript_files(data, folder):
+def write_transcript_files(data, folder, srt_by_vid=None):
     """Thorough mode extra: every transcript as its own UTF-8 .txt file, so the
     full text is always one double-click away, whatever the spreadsheet app
-    does with long cells. Returns how many files were written."""
+    does with long cells. Returns how many files were written.
+
+    v1.3.2: `srt_by_vid` ({video_id: srt text}) also writes a matching .srt
+    next to each .txt (the Scraper's "with timestamps" formats)."""
     import unicodedata
     os.makedirs(folder, exist_ok=True)
     n = 0
@@ -157,6 +160,14 @@ def write_transcript_files(data, folder):
             n += 1
         except OSError:
             continue
+        srt = (srt_by_vid or {}).get(vid)
+        if srt:
+            try:
+                with open(os.path.join(folder, name[:-4] + ".srt"), "w",
+                          encoding="utf-8-sig", newline="\n") as f:
+                    f.write(srt + "\n")
+            except OSError:
+                pass
     return n
 
 

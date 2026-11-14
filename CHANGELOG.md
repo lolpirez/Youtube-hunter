@@ -7,6 +7,42 @@ Version numbering restarted at **1.0.0** for the public release.
 
 ---
 
+## 1.3.3 (bundle v2.4.0 timed transcripts): in-browser subtitles, timed transcript view, clip-range .srt
+
+- **Subtitles inside the browser** (`browser-extension/subs.js`, new
+  `app/core/transcript_timed.py`, `web_bridge.py`): the extension's CC
+  button opens a Subtitles panel on the YouTube page: the video's captions
+  with timestamps, the spoken line highlighted and kept in view, click a
+  line to jump there, search the transcript, switch caption tracks, copy
+  (with or without timestamps) and export .srt / .txt. The captions are
+  read by the desktop app over the local bridge (`GET /v1/transcript`),
+  which already handles YouTube's PO-token / proxy / cookie hurdles.
+  An outdated app answers 404 and the panel says to update.
+- **The subtitles panel is yours to place** (extension v1.8.2): drag the
+  header to move it (it docks to the edges and double-click sends it home);
+  drag the left/right/bottom edge or a corner to resize, double-click a
+  corner to reset. The panel hugs its content while loading, and the load
+  is a skeleton of the real caption list with a live status line.
+- **Closed app? The subtitles click wakes it** (extension v1.8.3): instead
+  of a dead "Try again" card, the CC click plays the same orb-and-steps
+  wake animation as the download/cut panel, opens YouTube Hunter minimised
+  through the `youtubehunter://` link, and loads the captions the moment
+  the bridge answers. The guiding prompt replica shows non-repeating users
+  exactly what to click in the browser's "Open YouTube Hunter?" dialog.
+- **Clip subtitles (.srt)**: after marking In/Out in the Cut panel, one
+  click saves the YouTube captions of exactly that range — clipped to the
+  range and rebased to 0:00 so the .srt lines up with the exported clip.
+- **Video Dossier: timed transcript view** (`VideoDossierCard.qml`,
+  `dossier_vm.py`): Plain / With-timestamps switch over the transcript
+  pane; each line shows a clickable timecode that seeks the video, plus
+  Save .srt and Copy with timestamps.
+- **Scraper: transcript format** (`DashboardPage.qml`, `dashboard_vm.py`,
+  `settings_vm.py`, `core/exports.py`): Plain / Timestamps / Both for the
+  transcript files a run writes (plain .txt, timestamped .txt, one .srt
+  per video in `transcripts/`).
+- **Captions quality fixes from 1.3.1** are included (stray foreign words,
+  pointless full stops, ">>" speaker marks, faster refine pass).
+
 ## 1.3.1 (bundle v2.3.1 vertical-xlsx): Video Dossier, vertical Excel export, AI dub removed
 
 - **Fix: stray foreign / garbled words inside translated captions**
