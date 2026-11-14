@@ -72,6 +72,9 @@ ColumnLayout {
     property string capSize: "m"
     property string capPos: "bottom"
     property string capOut: "burn"       // burn | soft | srt
+    // v1.3.4: a bare .srt has no look or size to pick — the language chooser
+    // moves right under the .srt button, where the choice is actually made
+    readonly property bool srtOut: !deck.audioOnly && deck.capOut === "srt"
 
     // ── dub choices ──
     property string dubLang: "fa"
@@ -371,69 +374,10 @@ ColumnLayout {
             }
 
             // ── language ──
-            RowLabel { text: I18n.tr("Language") }
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: Tokens.space2
-                // YouTube: only the languages YouTube itself has for this video
-                C.Dropdown {
-                    Layout.fillWidth: true
-                    visible: deck.capSource === "youtube"
-                    enabled: !deck.busy && deck._ytLangs.length > 0
-                    popupMaxHeight: 340
-                    model: deck._ytLangs.length > 0 ? deck.tk.langLabels
-                           : [deck.tk.loading || !deck.tk.known ? I18n.tr("Reading YouTube's captions…")
-                                                                 : I18n.tr("No captions on YouTube")]
-                    currentIndex: deck._ytLangs.length > 0 ? Math.min(deck.capYt, deck._ytLangs.length - 1) : 0
-                    onActivated: { deck.capYt = currentIndex; deck._sync() }
-                }
-                // My file / AI listens: every language (AI translates)
-                C.Dropdown {
-                    Layout.fillWidth: true
-                    visible: deck.capSource !== "youtube"
-                    enabled: !deck.busy
-                    popupMaxHeight: 340
-                    model: [I18n.tr("Original · as spoken")].concat(VoiceStudio.languageLabels)
-                    currentIndex: deck.capLang === "" ? 0 : VoiceStudio.languageIndex(deck.capLang) + 1
-                    onActivated: {
-                        deck.capLang = currentIndex <= 0 ? "" : VoiceStudio.languageCode(currentIndex - 1)
-                        deck._sync()
-                    }
-                }
-                C.SlideSegment {
-                    Layout.fillWidth: true
-                    visible: false            // v1.4: YouTube never asks an AI now
-                    equal: true; solid: false; cellHeight: 30
-                    fontSize: Tokens.fontCaption; iconSize: 12
-                    enabledCells: !deck.busy
-                    model: [ { label: I18n.tr("YouTube · free"), icon: "youtube" },
-                             { label: I18n.tr("AI · natural"), icon: "auto_awesome" } ]
-                    currentIndex: deck.capVia === "youtube" ? 0 : 1
-                    onActivated: (i) => { deck.capVia = i === 0 ? "youtube" : "ai"; deck._sync() }
-                }
-                Hint {
-                    readonly property string lname: VoiceStudio.languageName(deck.capLang)
-                    glyph: deck._capNeedsAi ? (VoiceStudio.aiReady ? "auto_awesome" : "warning") : "check_circle"
-                    tone: deck._capNeedsAi ? (VoiceStudio.aiReady ? "" : "warn") : "ok"
-                    text: deck.capSource === "youtube"
-                          ? (deck._ytPick && deck._ytPick.kind === "translated"
-                             ? I18n.tr("YouTube's own free translation. No AI. Need better wording? Use “AI listens”.")
-                             : I18n.tr("YouTube's captions, exactly as YouTube shows them. No AI, no cost."))
-                          : deck.capLang === ""
-                          ? I18n.tr("Styled exactly as spoken. No AI, no cost.")
-                          : deck._ytUploaded ? I18n.tr("YouTube has {l} captions: used as-is, no AI.").replace("{l}", lname)
-                          : deck._sameLang ? I18n.tr("That's the spoken language: nothing to translate.")
-                          : (deck.capVia === "youtube" && deck._ytCanTranslate) ? I18n.tr("YouTube's free auto-translate, no AI.")
-                          : VoiceStudio.aiReady ? I18n.tr("AI translates it naturally via {p}.").replace("{p}", VoiceStudio.aiLabel)
-                          : I18n.tr("Translating needs an AI provider.")
-                    action: deck.capSource === "youtube" ? I18n.tr("Every language")
-                          : deck._capNeedsAi && !VoiceStudio.aiReady ? I18n.tr("Settings") : ""
-                    onActed: {
-                        if (deck.capSource === "youtube") { deck._setSource("ai"); deck._sync() }
-                        else deck.settingsRequested()
-                    }
-                }
-            }
+            // with .srt this row moves under the Output segment, right where
+            // the file's language is actually decided
+            RowLabel { text: I18n.tr("Language"); visible: !deck.srtOut }
+            LangPick { visible: !deck.srtOut }
 
             // ── look ──
             RowLabel { text: I18n.tr("Look"); visible: lookGrid.visible }
@@ -504,6 +448,13 @@ ColumnLayout {
                              { label: ".srt", icon: "description" } ]
                     currentIndex: ["burn", "soft", "srt"].indexOf(deck.capOut)
                     onActivated: (i) => { deck.capOut = ["burn", "soft", "srt"][i]; deck._sync() }
+                }
+                // v1.3.4: a bare .srt has no look or size to pick — the
+                // subtitle chooser (language / track) appears right under the
+                // button, so .srt is not a dead end
+                LangPick {
+                    Layout.topMargin: Tokens.space1
+                    visible: deck.srtOut
                 }
                 Hint {
                     glyph: "info"
@@ -662,6 +613,63 @@ ColumnLayout {
     }
 
     // ═════════════ parts ═════════════
+    // The subtitle chooser (YouTube's own tracks, or a language for My file /
+    // AI listens). One row normally; with .srt output it moves under the
+    // Output segment, so picking .srt immediately shows WHICH subtitle is
+    // saved. Both copies share deck state, only one is visible at a time.
+    component LangPick: ColumnLayout {
+        objectName: "langPick"
+        Layout.fillWidth: true
+        spacing: Tokens.space2
+        // YouTube: only the languages YouTube itself has for this video
+        C.Dropdown {
+            Layout.fillWidth: true
+            visible: deck.capSource === "youtube"
+            enabled: !deck.busy && deck._ytLangs.length > 0
+            popupMaxHeight: 340
+            model: deck._ytLangs.length > 0 ? deck.tk.langLabels
+                   : [deck.tk.loading || !deck.tk.known ? I18n.tr("Reading YouTube's captions…")
+                                                         : I18n.tr("No captions on YouTube")]
+            currentIndex: deck._ytLangs.length > 0 ? Math.min(deck.capYt, deck._ytLangs.length - 1) : 0
+            onActivated: { deck.capYt = currentIndex; deck._sync() }
+        }
+        // My file / AI listens: every language (AI translates)
+        C.Dropdown {
+            Layout.fillWidth: true
+            visible: deck.capSource !== "youtube"
+            enabled: !deck.busy
+            popupMaxHeight: 340
+            model: [I18n.tr("Original · as spoken")].concat(VoiceStudio.languageLabels)
+            currentIndex: deck.capLang === "" ? 0 : VoiceStudio.languageIndex(deck.capLang) + 1
+            onActivated: {
+                deck.capLang = currentIndex <= 0 ? "" : VoiceStudio.languageCode(currentIndex - 1)
+                deck._sync()
+            }
+        }
+        Hint {
+            readonly property string lname: VoiceStudio.languageName(deck.capLang)
+            glyph: deck._capNeedsAi ? (VoiceStudio.aiReady ? "auto_awesome" : "warning") : "check_circle"
+            tone: deck._capNeedsAi ? (VoiceStudio.aiReady ? "" : "warn") : "ok"
+            text: deck.capSource === "youtube"
+                  ? (deck._ytPick && deck._ytPick.kind === "translated"
+                     ? I18n.tr("YouTube's own free translation. No AI. Need better wording? Use “AI listens”.")
+                     : I18n.tr("YouTube's captions, exactly as YouTube shows them. No AI, no cost."))
+                  : deck.capLang === ""
+                  ? I18n.tr("Styled exactly as spoken. No AI, no cost.")
+                  : deck._ytUploaded ? I18n.tr("YouTube has {l} captions: used as-is, no AI.").replace("{l}", lname)
+                  : deck._sameLang ? I18n.tr("That's the spoken language: nothing to translate.")
+                  : (deck.capVia === "youtube" && deck._ytCanTranslate) ? I18n.tr("YouTube's free auto-translate, no AI.")
+                  : VoiceStudio.aiReady ? I18n.tr("AI translates it naturally via {p}.").replace("{p}", VoiceStudio.aiLabel)
+                  : I18n.tr("Translating needs an AI provider.")
+            action: deck.capSource === "youtube" ? I18n.tr("Every language")
+                  : deck._capNeedsAi && !VoiceStudio.aiReady ? I18n.tr("Settings") : ""
+            onActed: {
+                if (deck.capSource === "youtube") { deck._setSource("ai"); deck._sync() }
+                else deck.settingsRequested()
+            }
+        }
+    }
+
     component RowLabel: C.AppText {
         Layout.alignment: Qt.AlignTop
         Layout.topMargin: 7

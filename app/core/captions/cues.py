@@ -408,6 +408,56 @@ def parse_json3(raw):
     return _dedupe_rolling(out)
 
 
+_YT_TEXT_RE = re.compile(r"<text\b([^>]*)>(.*?)</text>", re.S)
+_YT_P_RE = re.compile(r"<p\b([^>]*)>(.*?)</p>", re.S)
+_YT_ATTR_RE = re.compile(r'(\w+)="([^"]*)"')
+
+
+def _yt_attrs(s):
+    return dict(_YT_ATTR_RE.findall(s or ""))
+
+
+def _yt_text(s):
+    # YouTube's XML double-escapes apostrophes ("&amp;#39;") and writes line
+    # breaks as a literal backslash-n.
+    return html.unescape(html.unescape(s or "")).replace("\\n", "\n")
+
+
+def parse_yt_xml(raw):
+    """YouTube's XML timed text: the legacy `<transcript><text start dur>` form
+    (what a caption track URL returns without fmt=json3) and the srv3
+    `<p t d>` form. The legacy form counts seconds, srv3 milliseconds."""
+    out = []
+    for m in _YT_TEXT_RE.finditer(raw or ""):
+        a = _yt_attrs(m.group(1))
+        if "start" not in a:
+            continue
+        try:
+            s, d = float(a.get("start")), float(a.get("dur") or 0)
+        except ValueError:
+            continue
+        body = clean_text(_yt_text(m.group(2)))
+        if body and not _NOISE_RE.match(body):
+            out.append(Cue(s, s + (d if d > 0 else 2.0), body))
+    if not out:
+        for m in _YT_P_RE.finditer(raw or ""):
+            a = _yt_attrs(m.group(1))
+            if "t" not in a:
+                continue
+            try:
+                s = float(a.get("t")) / 1000.0
+                d = float(a.get("d") or 0) / 1000.0
+            except ValueError:
+                continue
+            body = clean_text(_yt_text(m.group(2)))
+            if body and not _NOISE_RE.match(body):
+                out.append(Cue(s, s + (d if d > 0 else 2.0), body))
+    if not out:
+        return []
+    out.sort(key=lambda c: c.start)
+    return _dedupe_rolling(out)
+
+
 def parse_any(text, ext=""):
     ext = (ext or "").lower().lstrip(".")
     t = text or ""
@@ -419,6 +469,11 @@ def parse_any(text, ext=""):
         return parse_ass(t)
     if ext == "vtt" or t.lstrip().startswith("WEBVTT"):
         return parse_vtt(t)
+    if ext in ("srv3", "ttml", "xml") or t.lstrip().startswith(
+            ("<?xml", "<transcript", "<timedtext")):
+        c = parse_yt_xml(t)
+        if c:
+            return c
     return parse_srt(t)
 
 

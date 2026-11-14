@@ -40,6 +40,23 @@ Version numbering restarted at **1.0.0** for the public release.
   `settings_vm.py`, `core/exports.py`): Plain / Timestamps / Both for the
   transcript files a run writes (plain .txt, timestamped .txt, one .srt
   per video in `transcripts/`).
+- **Scraper timestamps are fast now** (`dashboard_vm.py`,
+  `core/transcripts.py`, `captions/cues.py`): the timestamp pass used to
+  re-read every video through a full yt-dlp extraction (5–25 s each, a
+  whole client ladder on a filtered network) — the reason 10 videos could
+  take minutes after the scrape was already done. The transcript fetch now
+  keeps the timing from the very caption payload it already downloads
+  (InnerTube XML / json3 / VTT cues) and remembers it on disk, so the pass
+  is a lookup for those videos; the rest are read through the same light,
+  paced caption path. yt-dlp is only a bounded last resort (a handful of
+  videos, one minute), never a 30-minute tail.
+- **Pick the subtitle, also for .srt** (`CaptionDubDeck.qml`): choosing
+  `.srt` used to leave the deck with nowhere obvious to say WHICH subtitle
+  is saved — the language/track picker sat in the Language row above while
+  the look/size rows vanished, so `.srt` read as a dead end. The chooser
+  now moves directly under the `.srt` button whenever that output is
+  selected, right where the file's language is decided. Burn in / Track
+  keep the old layout.
 - **Captions quality fixes from 1.3.1** are included (stray foreign words,
   pointless full stops, ">>" speaker marks, faster refine pass).
 

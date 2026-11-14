@@ -983,6 +983,10 @@ def _cache_conn():
                  " text TEXT, kind TEXT, at REAL)")
     # v1.0.7: which cached answers a thorough run already double-checked
     conn.execute("CREATE TABLE IF NOT EXISTS tx_verified (vid TEXT PRIMARY KEY, at REAL)")
+    # v1.3.3: timed rows for the Scraper's timestamp formats, so a re-run
+    # never reads the same captions a second time
+    conn.execute("CREATE TABLE IF NOT EXISTS tx_cues (vid TEXT PRIMARY KEY,"
+                 " rows TEXT, at REAL)")
     _CONN = conn
     return conn
 
@@ -1105,6 +1109,133 @@ def _is_verified(video_id):
     except Exception:          # noqa: BLE001
         return False
     return bool(row) and (_time.time() - float(row[0] or 0)) < _VERIFIED_TTL
+
+
+# ── timed cues (the Scraper's timestamp formats) ─────────────────────────
+# v1.3.3: "With timestamps" / "Both" used to re-read every caption track
+# through a full yt-dlp extraction AFTER the scrape (5-25 s per video, up to
+# a whole client ladder), so 10 videos could take minutes. The transcript
+# fetch itself already downloads the same caption payload over the light
+# InnerTube path; when a timestamp export is coming, that payload is parsed
+# into timed rows on the spot — the timestamp pass is then a dict lookup.
+# Rows are also kept in the transcript cache, so a later run is instant too.
+_CUE_CAPTURE = None           # dict {vid: [{s,e,t}]} while a scrape wants timing
+_CUE_CAP = 1500               # videos per run kept in memory
+_CUE_LOCK = threading.Lock()
+_CUE_ROW_CAP = 20000          # cues per video (a 10-hour stream is ~9k)
+
+
+def cue_capture_start():
+    """Begin keeping timed rows from every caption payload that is fetched."""
+    global _CUE_CAPTURE
+    with _CUE_LOCK:
+        _CUE_CAPTURE = {}
+
+
+def cue_capture_stop():
+    global _CUE_CAPTURE
+    with _CUE_LOCK:
+        _CUE_CAPTURE = None
+
+
+def _capture_cues(video_id, raw, payload):
+    """Parse a caption payload that was JUST fetched into {s,e,t} rows."""
+    try:
+        from app.core.captions import cues as C
+        cues = C.parse_any(raw, payload)
+        if not cues:
+            return
+        cues = C.resegment(cues)
+        rows = [{"s": round(c.start, 2), "e": round(c.end, 2), "t": C.flat(c.text)}
+                for c in cues[:_CUE_ROW_CAP] if C.flat(c.text)]
+        if not rows:
+            return
+        with _CUE_LOCK:
+            cap = _CUE_CAPTURE
+            if cap is None or len(cap) >= _CUE_CAP:
+                return
+            cap[str(video_id)] = rows
+    except Exception:          # noqa: BLE001 — the transcript must survive this
+        pass
+
+
+def _captured_cues(video_id):
+    with _CUE_LOCK:
+        cap = _CUE_CAPTURE
+        return cap.get(str(video_id)) if cap is not None else None
+
+
+def cached_cues(video_id):
+    """Timed rows {s,e,t} remembered from an earlier run, or None."""
+    try:
+        with _cache_lock:
+            conn = _cache_conn()
+            if conn is None:
+                return None
+            row = conn.execute("SELECT rows FROM tx_cues WHERE vid=?",
+                               (str(video_id or ""),)).fetchone()
+    except Exception:          # noqa: BLE001
+        return None
+    if not row or not row[0]:
+        return None
+    try:
+        rows = json.loads(row[0])
+    except Exception:          # noqa: BLE001
+        return None
+    return rows if isinstance(rows, list) and rows else None
+
+
+def cache_cues(video_id, rows):
+    """Remember timed rows for the next run (bounded, best effort)."""
+    if not rows:
+        return
+    try:
+        blob = json.dumps(rows[:_CUE_ROW_CAP], separators=(",", ":"))
+        with _cache_lock:
+            conn = _cache_conn()
+            if conn is None:
+                return
+            conn.execute("INSERT OR REPLACE INTO tx_cues VALUES (?,?,?)",
+                         (str(video_id or ""), blob, _time.time()))
+            conn.commit()
+    except Exception:          # noqa: BLE001
+        pass
+
+
+def captured_cues(video_id):
+    """Timed rows for this video: captured during the scrape, else the disk
+    cache, else None."""
+    return _captured_cues(video_id) or cached_cues(video_id)
+
+
+def fetch_quick_cues(video_id):
+    """Timed rows read through the SAME light InnerTube path the scraper uses
+    (no yt-dlp extraction, paced by the shared caption gate). None when the
+    timing can't be read. Never raises."""
+    vid = str(video_id or "")
+    rows = captured_cues(vid)
+    if rows:
+        return rows
+    own = False
+    try:
+        if _CUE_CAPTURE is None:
+            cue_capture_start()      # capture must be on for the hook to store
+            own = True
+        _status, _text, kind = _library_quick(vid, configured_proxy(), trim=False)
+        rows = _captured_cues(vid)
+        if not rows and kind != "none":
+            # the player endpoint refused (or the text came from the library,
+            # which has no payload to capture): the library's own caption fetch
+            # is still one small request, not a yt-dlp extraction
+            rows = _library_list_cues(vid, configured_proxy())
+    except Exception:          # noqa: BLE001
+        rows = None
+    finally:
+        if own:
+            cue_capture_stop()
+    if rows:
+        cache_cues(vid, rows)
+    return rows
 
 
 # ── InnerTube fast path ─────────────────────────────────────────────────
@@ -1394,7 +1525,7 @@ def _caption_rate_limited(response):
     return "html" in ctype or head[:2] in (b"<!", b"<h")
 
 
-def _innertube_alt_auto(tracks, chosen, proxy, timeout):
+def _innertube_alt_auto(video_id, tracks, chosen, proxy, timeout):
     """Thorough helper: the ASR track from the SAME player answer (same
     language first). Its text, or "" when there is none / it fails. Costs one
     small caption request instead of a 1-1.5 MB watch page."""
@@ -1417,7 +1548,10 @@ def _innertube_alt_auto(tracks, chosen, proxy, timeout):
         return ""
     raw = cr.content.decode("utf-8", "replace")
     head = raw[:200].lstrip()
-    payload = "json3" if head.startswith("{") else ("vtt" if head.startswith("WEBVTT") else "srv3")
+    payload = "json3" if head.startswith("{") else ("vtt" if head.startswith("WEBVTT") else "xml")
+    if _CUE_CAPTURE is not None:
+        # this ASR text replaces the manual one: the timing must match it
+        _capture_cues(video_id, raw, payload)
     return re.sub(r"\s+", " ", html.unescape(_caption_payload_text(raw, payload))).strip()
 
 
@@ -1535,7 +1669,9 @@ def _innertube_quick(video_id, proxy, trim=True, paced=True, rate_retries=None,
         elif head.startswith("WEBVTT"):
             payload = "vtt"
         else:
-            payload = "srv3"
+            payload = "xml"
+        if _CUE_CAPTURE is not None:
+            _capture_cues(video_id, raw, payload)
         text = re.sub(r"\s+", " ", html.unescape(
             _caption_payload_text(raw, payload))).strip()
         if not text:
@@ -1544,7 +1680,7 @@ def _innertube_quick(video_id, proxy, trim=True, paced=True, rate_retries=None,
             continue
         _caption_success()
         if expect_secs and not is_auto and _looks_short(text, expect_secs):
-            alt = _innertube_alt_auto(tracks, track, proxy, timeout)
+            alt = _innertube_alt_auto(video_id, tracks, track, proxy, timeout)
             if alt and len(alt) > len(text):
                 text, is_auto = alt, True
         status = "Available (Auto)" if is_auto else "Available (Manual)"
@@ -1620,6 +1756,55 @@ def _library_list(video_id, proxy, trim=True, prefer_generated=False):
         return ("Not Available", "N/A", "none")
     except Exception:          # noqa: BLE001
         return ("Not Available", "N/A", "error")
+
+
+def _library_list_cues(video_id, proxy):
+    """Timed rows {s,e,t} from the library's own list()+fetch() (the watch-page
+    path — the transcript endpoint as the library sees it). The snippets carry
+    start/duration, so no yt-dlp extraction is needed. None on any failure."""
+    try:
+        api_cls, has_new, _block, _no = _yta()
+    except Exception:          # noqa: BLE001
+        return None
+    try:
+        if not _caption_wait():
+            return None
+        if has_new:
+            tlist = _library_api(api_cls, proxy).list(video_id)
+        else:
+            tlist = api_cls.list_transcripts(video_id)
+        tracks = list(tlist)
+        if not tracks:
+            return None
+        try:
+            track = tlist.find_transcript(_TRANSCRIPT_LANGS)
+        except Exception:      # noqa: BLE001 — take the video's own track
+            track = next((t for t in tracks if not getattr(t, "is_generated", False)),
+                         tracks[0])
+        from app.core.captions import cues as C
+        timed = []
+        for s in track.fetch():
+            if isinstance(s, dict):
+                start, dur, txt = s.get("start"), s.get("duration"), s.get("text")
+            else:
+                start, dur, txt = (getattr(s, "start", None),
+                                   getattr(s, "duration", None),
+                                   getattr(s, "text", None))
+            try:
+                start = float(start or 0)
+                dur = float(dur or 0)
+            except (TypeError, ValueError):
+                continue
+            t = " ".join(str(txt or "").split())
+            if t:
+                timed.append(C.Cue(start, start + (dur if dur > 0 else 2.0), t))
+        if not timed:
+            return None
+        rows = [{"s": round(c.start, 2), "e": round(c.end, 2), "t": C.flat(c.text)}
+                for c in C.resegment(timed) if C.flat(c.text)]
+        return rows or None
+    except Exception:          # noqa: BLE001
+        return None
 
 
 def _library_longest(video_id, proxy):

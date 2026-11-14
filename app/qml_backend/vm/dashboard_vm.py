@@ -38,10 +38,13 @@ from app.core.scrape_pipeline import (ChunkFeed, KeyRing, MetadataAhead,
                                       iter_oldest_pages, iter_search_pages,
                                       iter_upload_pages)
 from app.core.signals import SignalEmitter
-from app.core.transcripts import (fetch_transcript, get_public_ip,
-                                  probe_transcript, reset_breaker,
-                                  set_abort_check, set_throttle_listener,
-                                  set_turbo, transcript_stats, tx_epoch)
+from app.core.transcripts import (cache_cues, captured_cues,
+                                  cue_capture_start, cue_capture_stop,
+                                  fetch_quick_cues, fetch_transcript,
+                                  get_public_ip, probe_transcript,
+                                  reset_breaker, set_abort_check,
+                                  set_throttle_listener, set_turbo,
+                                  transcript_stats, tx_epoch)
 from app.qml_backend.desktop_notifier import announce
 from app.core.utils import local_path_from_url, parse_iso8601_duration
 from app.core.youtube_api import (
@@ -926,13 +929,22 @@ class DashboardVM(QObject):
     def _timestamp_pass(self, data, emit):
         """v1.3.2: the Scraper's "With timestamps" / "Both" transcript formats.
 
-        Runs once, right before the export: every row that has a transcript
-        has its captions read again WITH timing (app.core.transcript_timed,
-        the same source as the Video Dossier).
+        Runs once, right before the export:
           timestamps  `transcript` becomes "[mm:ss] text", one line per caption
           both        `transcript` stays plain, `transcript_timestamps` is new
         A video whose timing can't be read keeps its plain text. Returns
-        {video_id: srt text} so the .txt folder gets matching .srt files."""
+        {video_id: srt text} so the .txt folder gets matching .srt files.
+
+        v1.3.3: this used to re-read every video through a full yt-dlp
+        extraction (5-25 s each, sometimes a whole client ladder) just for the
+        timing — 10 videos could take minutes while the scrape itself was
+        done. The transcript phase now KEEPS the timing from the very caption
+        payload it already downloads (transcripts cue capture) and remembers
+        it on disk, so most rows here are a dict lookup. The rest are read
+        through the same light InnerTube path (paced by the shared caption
+        gate); yt-dlp is only a bounded last resort — a handful of videos,
+        one minute — never a 30-minute tail."""
+        import time as _t
         from concurrent.futures import ThreadPoolExecutor
         from app.core import transcript_timed as TT
         mode = self._tr_format
@@ -947,33 +959,64 @@ class DashboardVM(QObject):
             return srt
         emit.log_signal.emit("🕒  " + tr("Reading timestamps for {n} transcripts…").format(n=len(todo)))
 
+        deadline = _t.monotonic() + 60.0
+        fb_lock = threading.Lock()
+        fb_left = [6]
+
+        def fallback_allowed():
+            with fb_lock:
+                if fb_left[0] <= 0 or _t.monotonic() >= deadline:
+                    return False
+                fb_left[0] -= 1
+                return True
+
         def work(row):
             if self._stop_requested:
-                return row, None
-            try:
-                return row, TT.load(str(row.get("video_id")))
-            except Exception as exc:          # noqa: BLE001
-                log_crash("scrape timestamps: " + str(exc))
-                return row, None
-
-        done = miss = 0
-        with ThreadPoolExecutor(max_workers=max(1, min(4, int(self._thread_count or 1)))) as pool:
-            for row, res in pool.map(work, todo):
-                done += 1
+                return row, None, ""
+            vid = str(row.get("video_id"))
+            rows = captured_cues(vid)
+            via = "scrape"
+            if not rows:
+                rows = fetch_quick_cues(vid)
+                via = "live"
+            if not rows and fallback_allowed():
+                try:
+                    res = TT.load(vid)
+                except Exception as exc:      # noqa: BLE001
+                    log_crash("scrape timestamps: " + str(exc))
+                    res = None
                 if res and res.get("ok"):
                     rows = res["cues"]
+                    via = "slow"
+            if rows:
+                cache_cues(vid, rows)
+            return row, rows, (via if rows else "")
+
+        done = miss = live = slow = 0
+        workers = max(4, min(8, int(self._thread_count or 1)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for row, rows, via in pool.map(work, todo):
+                done += 1
+                if rows:
                     text = TT.timed_text(rows)
                     if mode == "both":
                         row["transcript_timestamps"] = text
                     else:
                         row["transcript"] = text
                     srt[str(row.get("video_id"))] = TT.srt_text(rows)
+                    if via == "live":
+                        live += 1
+                    elif via == "slow":
+                        slow += 1
                 else:
                     miss += 1
                 if done % 10 == 0 or done == len(todo):
                     emit.log_signal.emit("   🕒  " + tr("{d}/{n} timestamps read").format(d=done, n=len(todo)))
                 if self._stop_requested:
                     break
+        if live or slow:
+            emit.log_signal.emit("   ⚡  " + tr("{l} timings read live, {s} through the slow fallback.").format(
+                l=live, s=slow))
         if miss:
             emit.log_signal.emit("   ℹ️  " + tr(
                 "{m} videos have no readable timing; they keep the plain transcript.").format(m=miss))
@@ -1939,6 +1982,11 @@ class DashboardVM(QObject):
             thorough = transcripts_on and self._tr_thorough
             tx_prof = set_turbo(self._thread_count, thorough=thorough)
             reset_breaker()
+            # v1.3.3: a timestamp export is coming — keep the timing from the
+            # caption payload each transcript fetch downloads, so the
+            # timestamp pass does not read everything a second time.
+            if transcripts_on and self._tr_format != "plain":
+                cue_capture_start()
             set_abort_check(lambda: self._stop_requested)
             tx_workers = tx_prof["workers"] if transcripts_on else 0
             if thorough:
@@ -2360,6 +2408,7 @@ class DashboardVM(QObject):
                                    tr("An error occurred:\n{e}\n\nScraped data was saved — you can "
                                       "resume this scrape later.").format(e=exc), "error")
         finally:
+            cue_capture_stop()
             set_throttle_listener(None)
             set_abort_check(None)
             # Leave the shared pacer at its safe start, not on a cool-down left
